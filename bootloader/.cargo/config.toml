@@ -1,0 +1,10 @@
+[build]
+# Do not set a default target here so normal cargo for host continues to work.
+
+[target.x86_64-unknown-uefi]
+linker = "link.exe"
+rustflags = ["-C", "link-arg=/NXCOMPAT:NO"]
+
+[target.aarch64-unknown-uefi]
+# Use LLVM linker for aarch64 - no special flags needed
+

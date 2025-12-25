@@ -1,0 +1,91 @@
+[package]
+name = "rayos-volume"
+version = "0.1.0"
+edition = "2021"
+authors = ["RayOS Team"]
+description = "Phase 3: The Memory - Semantic file system with vector embeddings and HNSW indexing"
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+
+# Vector embeddings and ML
+candle-core = { version = "0.3", optional = true }
+candle-nn = { version = "0.3", optional = true }
+candle-transformers = { version = "0.3", optional = true }
+tokenizers = { version = "0.15", optional = true }
+ndarray = "0.15"
+
+# HNSW (Hierarchical Navigable Small World) indexing
+hnsw = "0.11"
+ordered-float = "4.2"
+
+# Serialization and storage
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3"
+rmp-serde = "1.1"  # MessagePack for compact storage
+
+# Database and persistence
+sled = "0.34"  # Embedded key-value store
+rocksdb = { version = "0.21", optional = true }
+
+# Hashing and crypto
+blake3 = "1.5"
+sha2 = "0.10"
+
+# UUID generation
+uuid = { version = "1.6", features = ["v4"] }
+
+# File watching and monitoring
+notify = "6.1"
+walkdir = "2.4"
+
+# Text processing
+unicode-segmentation = "1.11"
+regex = "1.10"
+
+# Logging and error handling
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Concurrency
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+dashmap = "5.5"
+
+# Configuration
+toml = "0.8"
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# GPU acceleration (optional)
+vulkano = { version = "0.34", optional = true }
+
+[dev-dependencies]
+criterion = "0.5"
+tempfile = "3.8"
+
+[features]
+default = []
+embeddings = ["candle-core", "candle-nn", "candle-transformers", "tokenizers"]
+gpu = ["vulkano"]
+rocksdb-backend = ["rocksdb"]
+full = ["embeddings", "gpu", "rocksdb-backend"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = false
+
+[profile.dev]
+opt-level = 1
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 3

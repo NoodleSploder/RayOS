@@ -1,0 +1,71 @@
+[package]
+name = "rayos-cortex"
+version = "0.1.0"
+edition = "2021"
+authors = ["RayOS Team"]
+description = "Phase 2: The Eyes - Vision pathway and LLM integration for RayOS"
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+
+# Vision processing
+opencv = { version = "0.88", features = ["clang-runtime"], optional = true }
+image = "0.24"
+ndarray = "0.15"
+
+# Machine Learning / AI (optional for now - Phase 3)
+candle-core = { version = "0.3", optional = true }
+candle-nn = { version = "0.3", optional = true }
+candle-transformers = { version = "0.3", optional = true }
+tokenizers = { version = "0.15", optional = true }
+
+# Audio processing (optional, for Phase 3)
+cpal = { version = "0.15", optional = true }
+hound = { version = "3.5", optional = true }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# RayOS Kernel integration
+rayos-kernel = { path = "../kernel" }
+
+# Logging and error handling
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Communication with kernel
+crossbeam-channel = "0.5"
+
+# Graceful shutdown
+ctrlc = "3.4"
+
+# Configuration
+toml = "0.8"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[features]
+default = []
+vision = ["opencv"]
+audio = ["cpal", "hound"]
+llm = ["candle-core", "candle-nn", "candle-transformers", "tokenizers"]
+full = ["vision", "audio", "llm"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = false
+
+[profile.dev]
+opt-level = 1
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 3
