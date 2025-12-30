@@ -1,0 +1,84 @@
+[package]
+name = "rayos-kernel"
+version = "0.1.0"
+edition = "2021"
+authors = ["RayOS Kernel Team"]
+
+[[bin]]
+name = "rayos-kernel"
+path = "src/main.rs"
+required-features = ["std-kernel"]
+
+[[bin]]
+name = "kernel-bare"
+path = "src/bare_metal_entry.rs"
+required-features = ["bare-metal"]
+
+[[bin]]
+name = "rayos-rt-smoke"
+path = "src/rt_smoke.rs"
+required-features = ["rt-vulkan"]
+
+[lib]
+name = "rayos_kernel"
+path = "src/lib.rs"
+required-features = ["std-kernel"]
+
+[features]
+default = ["std-kernel"]
+std-kernel = ["wgpu", "pollster", "tokio", "parking_lot", "crossbeam", "log", "env_logger", "anyhow", "thiserror", "glam", "bytemuck", "async-trait"]
+bare-metal = []
+rt-vulkan = ["std-kernel", "ash", "shaderc"]
+candle-infer = ["std-kernel", "candle-core", "candle-nn"]
+
+[dependencies]
+# Bare-metal synchronization primitives
+spin = "0.9"
+
+# GPU Compute
+wgpu = { version = "0.19", optional = true }
+pollster = { version = "0.3", optional = true }
+
+# Optional Vulkan RT backend (feature-gated)
+ash = { version = "0.38", optional = true }
+shaderc = { version = "0.8", optional = true }
+
+# Optional Candle inference backend (feature-gated)
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+
+# Math and Spatial
+glam = { version = "0.25", features = ["bytemuck"], optional = true }
+bytemuck = { version = "1.14", features = ["derive"], optional = true }
+
+# Async Runtime
+tokio = { version = "1.35", features = ["full"], optional = true }
+async-trait = { version = "0.1", optional = true }
+
+# Memory Management
+crossbeam = { version = "0.8", optional = true }
+parking_lot = { version = "0.12", optional = true }
+
+# Logging
+log = { version = "0.4", optional = true }
+env_logger = { version = "0.11", optional = true }
+
+# Utilities
+anyhow = { version = "1.0", optional = true }
+thiserror = { version = "1.0", optional = true }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = false
+
+[profile.dev]
+opt-level = 1
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[build]
+rustc-wrapper = "sccache"

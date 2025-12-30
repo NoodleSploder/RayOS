@@ -1,0 +1,802 @@
+#!/bin/sh
+
+# Automatic desktop bring-up init (temporary stepping stone toward the real Wayland bridge).
+# - Brings up networking (DHCP)
+# - Installs a minimal Wayland compositor + terminal (weston)
+# - Starts seatd + weston + weston-terminal
+# - Emits a stable marker over serial when ready
+
+set -eu
+
+emit() {
+  # Emit a single-line marker/status message to both serial and VGA consoles.
+  # - Serial is required for host-side log watchers.
+  # - VGA is needed so the QEMU GUI window doesn't look blank during long provisioning.
+  msg="$*"
+
+  # Always try stdout first (we may have redirected it below).
+  printf '%s\n' "$msg" 2>/dev/null || true
+
+  # Mirror to VGA if present.
+  if [ -c /dev/tty0 ]; then
+    printf '%s\n' "$msg" >/dev/tty0 2>/dev/null || true
+  fi
+
+  # Mirror to serial if present.
+  if [ -c /dev/ttyS0 ]; then
+    printf '%s\n' "$msg" >/dev/ttyS0 2>/dev/null || true
+  fi
+}
+
+have_timeout() {
+  command -v timeout >/dev/null 2>&1 && return 0
+  /bin/busybox timeout 1 true >/dev/null 2>&1 && return 0
+  return 1
+}
+
+run_with_timeout() {
+  secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+    return $?
+  fi
+  if [ -x /bin/busybox ]; then
+    /bin/busybox timeout "$secs" "$@"
+    return $?
+  fi
+  "$@"
+}
+
+run_with_heartbeat() {
+  # Usage: run_with_heartbeat <label> <timeout_secs> <log_file> <cmd...>
+  label="$1"
+  tmo="$2"
+  logf="$3"
+  shift 3
+
+  emit "RAYOS_LINUX_DESKTOP_${label}_START"
+  if have_timeout; then
+    (run_with_timeout "$tmo" "$@" >>"$logf" 2>&1) &
+  else
+    ("$@" >>"$logf" 2>&1) &
+  fi
+  cmd_pid=$!
+
+  i=0
+  while /bin/busybox kill -0 "$cmd_pid" 2>/dev/null; do
+    i=$((i + 1))
+    # Every ~5 seconds.
+    if [ $((i % 25)) -eq 0 ]; then
+      emit "RAYOS_LINUX_DESKTOP_${label}_TICK"
+    fi
+    /bin/busybox sleep 0.2
+  done
+  wait "$cmd_pid"
+  rc=$?
+  emit "RAYOS_LINUX_DESKTOP_${label}_RC=$rc"
+  return "$rc"
+}
+
+mkd() {
+  # Alpine initramfs sometimes lacks applet symlinks (e.g. /bin/mkdir).
+  # Prefer a real mkdir if present; otherwise fall back to busybox.
+  if command -v mkdir >/dev/null 2>&1; then
+    mkdir -p "$@"
+    return 0
+  fi
+  if [ -x /bin/busybox ]; then
+    /bin/busybox mkdir -p "$@"
+    return 0
+  fi
+  emit "RAYOS_LINUX_DESKTOP_ERR mkdir_missing"
+  exit 1
+}
+
+mnt() {
+  # Like mkdir, mount may not have a standalone applet symlink in the initramfs.
+  if command -v mount >/dev/null 2>&1; then
+    mount "$@"
+    return $?
+  fi
+  if [ -x /bin/busybox ]; then
+    /bin/busybox mount "$@"
+    return $?
+  fi
+  emit "RAYOS_LINUX_DESKTOP_ERR mount_missing"
+  return 1
+}
+
+bb() {
+  # Run a busybox applet even if /bin/<applet> symlink is missing.
+  if [ -x /bin/busybox ]; then
+    /bin/busybox "$@"
+    return $?
+  fi
+  "$@"
+}
+
+umnt() {
+  if command -v umount >/dev/null 2>&1; then
+    umount "$@"
+    return $?
+  fi
+  if [ -x /bin/busybox ]; then
+    /bin/busybox umount "$@"
+    return $?
+  fi
+  return 1
+}
+
+do_chroot() {
+  root="$1"
+  shift
+  if command -v chroot >/dev/null 2>&1; then
+    chroot "$root" "$@"
+    return $?
+  fi
+  if [ -x /bin/busybox ]; then
+    /bin/busybox chroot "$root" "$@"
+    return $?
+  fi
+  emit "RAYOS_LINUX_DESKTOP_ERR chroot_missing"
+  return 1
+}
+
+mkd /proc /sys /dev /tmp
+
+if ! mnt -t proc proc /proc 2>/dev/null; then
+  emit "RAYOS_LINUX_DESKTOP_ERR mount_proc_failed"
+fi
+if ! mnt -t sysfs sys /sys 2>/dev/null; then
+  emit "RAYOS_LINUX_DESKTOP_ERR mount_sysfs_failed"
+fi
+if ! mnt -t devtmpfs dev /dev 2>/dev/null; then
+  emit "RAYOS_LINUX_DESKTOP_ERR mount_devtmpfs_failed"
+fi
+
+# Some userspace (and job control) expects devpts + shm.
+mkd /dev/pts /dev/shm
+mnt -t devpts devpts /dev/pts 2>/dev/null || true
+mnt -t tmpfs tmpfs /dev/shm 2>/dev/null || true
+
+# Make sure serial console gets logs.
+# If the kernel cmdline includes console=tty0, /dev/console may point at VGA;
+# prefer ttyS0 so host-side log watchers keep working.
+if [ -c /dev/ttyS0 ]; then
+  exec </dev/ttyS0 >/dev/ttyS0 2>/dev/ttyS0
+else
+  exec </dev/console >/dev/console 2>/dev/console
+fi
+
+try_modprobe() {
+  if command -v modprobe >/dev/null 2>&1; then
+    modprobe "$1" 2>/dev/null || true
+  fi
+}
+
+wait_for_path() {
+  # Usage: wait_for_path /path [attempts] [sleep_secs]
+  p="$1"
+  n="${2:-50}"
+  s="${3:-0.1}"
+  i=0
+  while [ "$i" -lt "$n" ]; do
+    [ -e "$p" ] && return 0
+    sleep "$s" 2>/dev/null || true
+    i=$((i + 1))
+  done
+  return 1
+}
+
+load_virtio_drivers() {
+  # Because we use rdinit=/rayos_desktop_init, we bypass Alpine's init logic that
+  # would normally auto-load modules. Best-effort load the essentials.
+  try_modprobe virtio
+  try_modprobe virtio_pci
+  try_modprobe virtio_ring
+  try_modprobe virtio_blk
+  try_modprobe virtio_net
+  try_modprobe squashfs
+  # Graphics: virtio VGA/GPU DRM.
+  try_modprobe drm
+  try_modprobe drm_kms_helper
+  try_modprobe virtio_gpu
+}
+
+mount_modloop_modules() {
+  # Alpine netboot keeps the full kernel modules set in modloop-virt (squashfs).
+  # Because we use rdinit=/rayos_desktop_init, Alpine init never mounts modloop;
+  # mount it ourselves so modprobe can load ext4, etc.
+  MODLOOP_MNT=/mnt/modloop
+  mkd "$MODLOOP_MNT"
+
+  # virtio-blk devices often appear a couple seconds after rdinit starts.
+  wait_for_path /dev/vdb 50 0.1 || true
+  wait_for_path /sys/block/vdb/size 50 0.1 || true
+
+  # With our QEMU args, persistent disk is vda and modloop is vdb.
+  # Still, probe a small range to be robust.
+  LAST_ERR=""
+  for dev in /dev/vdb /dev/vdc /dev/vdd /dev/vde; do
+    [ -b "$dev" ] || continue
+    set +e
+    _out="$(mnt -t squashfs -o ro "$dev" "$MODLOOP_MNT" 2>&1)"
+    _rc=$?
+    set -e
+    if [ "$_rc" -eq 0 ]; then
+      # Alpine modloop exposes kernel modules under /modules.
+      if [ -d "$MODLOOP_MNT/modules" ]; then
+        mkd /lib/modules
+        mnt --bind "$MODLOOP_MNT/modules" /lib/modules 2>/dev/null || true
+        emit "RAYOS_LINUX_DESKTOP_MODLOOP_OK dev=$dev"
+        return 0
+      fi
+      # Not the expected image; unmount and continue.
+      umnt "$MODLOOP_MNT" 2>/dev/null || true
+    else
+      LAST_ERR="$_out"
+    fi
+  done
+
+  if [ -n "$LAST_ERR" ]; then
+    ERR_TRIM="$(printf '%s' "$LAST_ERR" | bb tr '\n' ' ' | bb cut -c1-160)"
+    emit "RAYOS_LINUX_DESKTOP_MODLOOP_FAIL err=$ERR_TRIM"
+  else
+    emit "RAYOS_LINUX_DESKTOP_MODLOOP_MISSING"
+  fi
+  return 1
+}
+
+emit "RAYOS_LINUX_DESKTOP_INIT_V2"
+emit "RAYOS_LINUX_DESKTOP_INIT_START"
+
+load_virtio_drivers
+
+# Try to mount modloop and expose full kernel modules.
+mount_modloop_modules || true
+
+# Now that /lib/modules may be populated, try loading ext4.
+try_modprobe crc16
+try_modprobe mbcache
+try_modprobe jbd2
+try_modprobe ext4
+
+PROVISION_ONLY=0
+for a in $(bb cat /proc/cmdline 2>/dev/null); do
+  case "$a" in
+    rayos_desktop_provision_only=1)
+      PROVISION_ONLY=1
+      ;;
+  esac
+done
+
+# Persistent rootfs provisioning.
+#
+# We attach a virtio disk from the host runner and create a minimal Alpine rootfs on it.
+# Then we install desktop packages into that rootfs exactly once.
+DISK_DEV="${LINUX_DESKTOP_DISK_DEV:-/dev/vda}"
+PERSIST_MNT="/mnt/persist"
+ROOTFS_DIR="$PERSIST_MNT/rootfs"
+READY_FILE="$ROOTFS_DIR/.rayos_desktop_rootfs_ready"
+
+mkd "$PERSIST_MNT"
+
+# Wait for the virtio-blk node to appear.
+wait_for_path "$DISK_DEV" 80 0.1 || true
+
+# Also wait for sysfs block metadata (helps avoid racing early device node creation).
+wait_for_path /sys/block/vda/size 80 0.1 || true
+
+MOUNT_OK=0
+MOUNT_ERR=""
+for _try in 1 2 3 4 5 6 7 8 9 10; do
+  set +e
+  _out="$(mnt -t ext4 "$DISK_DEV" "$PERSIST_MNT" 2>&1)"
+  _rc=$?
+  set -e
+  if [ "$_rc" -eq 0 ]; then
+    MOUNT_OK=1
+    break
+  fi
+  MOUNT_ERR="$_out"
+  sleep 0.2 2>/dev/null || true
+done
+
+if [ "$MOUNT_OK" != "1" ]; then
+  # Truncate error to keep serial output readable.
+  MOUNT_ERR_TRIM="$(printf '%s' "$MOUNT_ERR" | bb tr '\n' ' ' | bb cut -c1-160)"
+  emit "RAYOS_LINUX_DESKTOP_ERR persist_mount_failed dev=$DISK_DEV err=$MOUNT_ERR_TRIM"
+  # Fall back to the old behavior (RAM install) for debugability.
+  PERSIST_MNT=""
+  ROOTFS_DIR=""
+  READY_FILE=""
+fi
+
+NEED_NET=1
+
+ROOTFS_SANE=1
+if [ -n "$READY_FILE" ] && [ -f "$READY_FILE" ] && [ -n "$ROOTFS_DIR" ]; then
+  # Guard against partial provisioning (e.g. if QEMU was killed mid-apk).
+  # An empty /usr/bin/seatd will behave like an empty shell script and exit 0,
+  # causing weston bring-up to fail silently.
+  if [ ! -s "$ROOTFS_DIR/usr/bin/seatd" ] || \
+     [ ! -s "$ROOTFS_DIR/usr/bin/weston" ] || \
+     [ ! -s "$ROOTFS_DIR/usr/bin/weston-terminal" ] || \
+     [ ! -s "$ROOTFS_DIR/usr/lib/libweston-12/drm-backend.so" ] || \
+     [ ! -s "$ROOTFS_DIR/usr/lib/xorg/modules/dri/kms_swrast_dri.so" ] || \
+     [ ! -s "$ROOTFS_DIR/usr/lib/weston/desktop-shell.so" ]; then
+    ROOTFS_SANE=0
+  fi
+fi
+
+if [ -n "$READY_FILE" ] && [ -f "$READY_FILE" ]; then
+  if [ "$ROOTFS_SANE" = "1" ]; then
+    # If the rootfs is already provisioned, we can boot the desktop offline.
+    NEED_NET=0
+    emit "RAYOS_LINUX_DESKTOP_NET_SKIP (rootfs ready)"
+  else
+    emit "RAYOS_LINUX_DESKTOP_ERR rootfs_not_sane_reprovision"
+    bb rm -f "$READY_FILE" 2>/dev/null || true
+    NEED_NET=1
+  fi
+fi
+
+# Network is host-policy controlled. This init assumes virtio-net is attached.
+bb ip link set lo up 2>/dev/null || true
+
+pick_net_if() {
+  # Prefer explicit override.
+  if [ -n "${RAYOS_NET_IF:-}" ]; then
+    echo "$RAYOS_NET_IF"
+    return 0
+  fi
+
+  # Prefer common names.
+  for n in eth0 ens3 enp0s3 enp0s5; do
+    if [ -e "/sys/class/net/$n" ]; then
+      echo "$n"
+      return 0
+    fi
+  done
+
+  # Otherwise pick the first non-loopback.
+  for p in /sys/class/net/*; do
+    n="${p##*/}"
+    [ "$n" = "lo" ] && continue
+    echo "$n"
+    return 0
+  done
+
+  return 1
+}
+
+if [ "$NEED_NET" = "1" ]; then
+  # Try nudging virtio-net into existence (best-effort).
+  load_virtio_drivers
+  # Give the kernel a moment to enumerate after module load.
+  sleep 0.2 2>/dev/null || true
+  # Wait briefly for sysfs net class to show up.
+  wait_for_path /sys/class/net 20 0.1 || true
+
+  emit "RAYOS_LINUX_DESKTOP_NET_DEBUG ifaces=$(bb ls /sys/class/net 2>/dev/null | bb tr '\n' ' ' || true)"
+  bb ip -o link 2>/dev/null || true
+
+  NET_IF=""
+  # Allow a short settle window for virtio-net to register.
+  for _try in 1 2 3 4 5 6 7 8 9 10; do
+    NET_IF="$(pick_net_if 2>/dev/null || true)"
+    if [ -n "$NET_IF" ] && [ "$NET_IF" != "lo" ]; then
+      break
+    fi
+    sleep 0.2 2>/dev/null || true
+  done
+  if [ -z "$NET_IF" ] || [ "$NET_IF" = "lo" ]; then
+    emit "RAYOS_LINUX_DESKTOP_ERR net_no_if"
+    exec /bin/sh
+  fi
+
+  bb ip link set "$NET_IF" up 2>/dev/null || true
+
+# Provide an explicit udhcpc script so we don't depend on distro paths.
+UDHCPC_SCRIPT=/tmp/rayos-udhcpc.sh
+bb cat >"$UDHCPC_SCRIPT" <<'EOF'
+#!/bin/sh
+set -eu
+
+# udhcpc provides: interface, ip, subnet, router, dns, domain, lease
+IFACE="${interface:-}"
+IP="${ip:-}"
+MASK="${subnet:-}"
+ROUTER="${router:-}"
+DNS="${dns:-}"
+
+case "${1:-}" in
+  deconfig)
+    /bin/busybox ip addr flush dev "$IFACE" 2>/dev/null || true
+    ;;
+  bound|renew)
+    /bin/busybox ip addr flush dev "$IFACE" 2>/dev/null || true
+    if [ -n "$IP" ] && [ -n "$MASK" ]; then
+      # NOTE: $subnet from udhcpc is typically a dotted mask (e.g. 255.255.255.0),
+      # but busybox ip expects CIDR prefix length. If DHCP is used, this might need
+      # a conversion; for now, static fallback below is the reliable path.
+      /bin/busybox ip addr add "$IP/$MASK" dev "$IFACE" 2>/dev/null || true
+    fi
+    if [ -n "$ROUTER" ]; then
+      # router can be a space-separated list; pick first.
+      GW="${ROUTER%% *}"
+      /bin/busybox ip route del default 2>/dev/null || true
+      /bin/busybox ip route add default via "$GW" dev "$IFACE" 2>/dev/null || true
+    fi
+    if [ -n "$DNS" ]; then
+      : > /etc/resolv.conf 2>/dev/null || true
+      for d in $DNS; do
+        echo "nameserver $d" >> /etc/resolv.conf 2>/dev/null || true
+      done
+    fi
+    ;;
+esac
+
+exit 0
+EOF
+chmod +x "$UDHCPC_SCRIPT" 2>/dev/null || true
+
+  emit "RAYOS_LINUX_DESKTOP_NET_IF $NET_IF"
+
+  DHCP_OK=0
+  if command -v udhcpc >/dev/null 2>&1; then
+    # -n: exit if lease not obtained
+    # -q: be quiet (we still log our own markers)
+    # -t/-T: bounded retries
+    if udhcpc -i "$NET_IF" -n -q -t 3 -T 2 -s "$UDHCPC_SCRIPT" >/dev/null 2>&1; then
+      DHCP_OK=1
+    fi
+  fi
+
+  if [ "$DHCP_OK" != "1" ]; then
+    # Static fallback for QEMU user networking.
+    # This keeps provisioning working even if DHCP tooling is missing.
+    # Typical values: guest=10.0.2.15 gw=10.0.2.2 dns=10.0.2.3
+    emit "RAYOS_LINUX_DESKTOP_NET_DHCP_FAILED"
+    bb ip addr flush dev "$NET_IF" 2>/dev/null || true
+    bb ip addr add 10.0.2.15/24 dev "$NET_IF" 2>/dev/null || true
+    bb ip route del default 2>/dev/null || true
+    bb ip route add default via 10.0.2.2 dev "$NET_IF" 2>/dev/null || true
+    echo "nameserver 10.0.2.3" > /etc/resolv.conf 2>/dev/null || true
+
+    # Emit a compact state snapshot for debugging guest networking.
+    ADDRS="$(bb ip -o -4 addr show dev "$NET_IF" 2>/dev/null | bb tr '\n' ' ' || true)"
+    ROUTES="$(bb ip -4 route show 2>/dev/null | bb tr '\n' ' ' || true)"
+    RESOLV="$(bb cat /etc/resolv.conf 2>/dev/null | bb tr '\n' ' ' || true)"
+    ADDRS_TRIM="$(printf '%s' "$ADDRS" | bb cut -c1-180)"
+    ROUTES_TRIM="$(printf '%s' "$ROUTES" | bb cut -c1-180)"
+    RESOLV_TRIM="$(printf '%s' "$RESOLV" | bb cut -c1-120)"
+    emit "RAYOS_LINUX_DESKTOP_NET_STATE addrs=$ADDRS_TRIM routes=$ROUTES_TRIM resolv=$RESOLV_TRIM"
+  fi
+
+  emit "RAYOS_LINUX_DESKTOP_NET_OK"
+fi
+
+# Ensure repos exist (pin to v3.20 for now; can be parameterized later).
+# Use http here to avoid needing CA certificates in the initramfs environment.
+if [ ! -f /etc/apk/repositories ] || ! bb grep -q 'alpinelinux.org' /etc/apk/repositories 2>/dev/null; then
+  bb cat > /etc/apk/repositories <<'EOF'
+http://dl-cdn.alpinelinux.org/alpine/v3.20/main
+http://dl-cdn.alpinelinux.org/alpine/v3.20/community
+EOF
+fi
+
+# Install packages into the running root (initramfs). This is not efficient,
+# but it makes the workflow automatic while we build the real bridge.
+
+if [ -n "$PERSIST_MNT" ]; then
+  # Provision the persistent rootfs on first boot.
+  if [ ! -f "$READY_FILE" ]; then
+    emit "RAYOS_LINUX_DESKTOP_PROVISION_START"
+    PROVISION_LOG=/tmp/rayos-desktop-provision.log
+    : >"$PROVISION_LOG" 2>/dev/null || true
+    mkd "$ROOTFS_DIR/etc/apk" "$ROOTFS_DIR/dev" "$ROOTFS_DIR/proc" "$ROOTFS_DIR/sys" "$ROOTFS_DIR/tmp" "$ROOTFS_DIR/run"
+
+    # Ensure DNS works for `apk --root ...` fetches.
+    # Some apk builds read /etc/resolv.conf relative to --root.
+    mkd "$ROOTFS_DIR/etc"
+    if [ -f /etc/resolv.conf ]; then
+      bb cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf" 2>/dev/null || true
+    else
+      echo "nameserver 10.0.2.3" > "$ROOTFS_DIR/etc/resolv.conf" 2>/dev/null || true
+    fi
+
+    # Seed repositories + keys so `apk --root` can work.
+    # Don't rely on `cp` applet symlinks existing in initramfs; use busybox.
+    bb cat > "$ROOTFS_DIR/etc/apk/repositories" <<'EOF'
+http://dl-cdn.alpinelinux.org/alpine/v3.20/main
+http://dl-cdn.alpinelinux.org/alpine/v3.20/community
+EOF
+    if [ -d /etc/apk/keys ]; then
+      mkd "$ROOTFS_DIR/etc/apk/keys"
+      bb cp -a /etc/apk/keys/* "$ROOTFS_DIR/etc/apk/keys/" 2>/dev/null || true
+    fi
+
+    # Step 1: install a minimal base into the persistent rootfs.
+    # Keep scripts off to avoid init/service hooks inside the initramfs.
+    emit "RAYOS_LINUX_DESKTOP_PROVISION_BASE_BEGIN"
+    set +e
+    run_with_heartbeat "PROVISION_BASE" 600 "$PROVISION_LOG" apk \
+      --root "$ROOTFS_DIR" \
+      --repositories-file "$ROOTFS_DIR/etc/apk/repositories" \
+      --keys-dir "$ROOTFS_DIR/etc/apk/keys" \
+      --initdb add --no-cache --no-scripts alpine-base
+    APK_BASE_RC=$?
+    set -e
+    if [ "$APK_BASE_RC" -ne 0 ]; then
+      emit "RAYOS_LINUX_DESKTOP_ERR provision_apk_base_failed rc=$APK_BASE_RC"
+      echo "--- provision log (tail) ---"
+      bb tail -n 120 "$PROVISION_LOG" 2>/dev/null || true
+      exec /bin/sh
+    fi
+    emit "RAYOS_LINUX_DESKTOP_PROVISION_BASE_OK"
+
+    # Step 2: install desktop bits using the rootfs's own apk inside a chroot.
+    # This avoids odd extraction edge-cases that can leave 0-byte /usr/bin tools
+    # when using host apk to populate --root.
+    mnt --bind /dev "$ROOTFS_DIR/dev" 2>/dev/null || true
+    mnt -t proc proc "$ROOTFS_DIR/proc" 2>/dev/null || true
+    mnt -t sysfs sys "$ROOTFS_DIR/sys" 2>/dev/null || true
+
+    emit "RAYOS_LINUX_DESKTOP_PROVISION_DESKTOP_BEGIN"
+    set +e
+    DESK_LOG="$ROOTFS_DIR/tmp/rayos-desktop-apk-desktop.log"
+    : >"$DESK_LOG" 2>/dev/null || true
+    # Run inside the chroot, stream output to a file on the persistent disk.
+    run_with_heartbeat "PROVISION_DESKTOP" 900 "$PROVISION_LOG" do_chroot "$ROOTFS_DIR" /bin/sh -lc \
+      "apk add --no-cache --no-scripts weston weston-terminal weston-backend-drm weston-shell-desktop seatd mesa-dri-gallium >>/tmp/rayos-desktop-apk-desktop.log 2>&1"
+    APK_DESK_RC=$?
+    set -e
+    if [ "$APK_DESK_RC" -ne 0 ]; then
+      emit "RAYOS_LINUX_DESKTOP_ERR provision_apk_desktop_failed rc=$APK_DESK_RC"
+      echo "--- provision log (tail) ---"
+      bb tail -n 120 "$PROVISION_LOG" 2>/dev/null || true
+      echo "--- desktop apk log (tail) ---"
+      bb tail -n 120 "$DESK_LOG" 2>/dev/null || true
+      exec /bin/sh
+    fi
+    emit "RAYOS_LINUX_DESKTOP_PROVISION_DESKTOP_OK"
+
+    # Include the RayOS guest agent script in the persistent rootfs for later steps.
+    mkd "$ROOTFS_DIR/usr/local/bin"
+    if [ -f /rayos_agent.sh ]; then
+      bb cp /rayos_agent.sh "$ROOTFS_DIR/usr/local/bin/rayos_agent.sh" 2>/dev/null || true
+      bb chmod +x "$ROOTFS_DIR/usr/local/bin/rayos_agent.sh" 2>/dev/null || true
+    fi
+
+    # initramfs may lack a standalone `touch` applet symlink.
+    : > "$READY_FILE" 2>/dev/null || bb touch "$READY_FILE" 2>/dev/null || true
+    sync 2>/dev/null || true
+    emit "RAYOS_LINUX_DESKTOP_PROVISION_OK"
+  else
+    emit "RAYOS_LINUX_DESKTOP_PROVISION_SKIP"
+  fi
+
+  emit "RAYOS_LINUX_DESKTOP_PKGS_OK"
+
+  if [ "$PROVISION_ONLY" = "1" ]; then
+    emit "RAYOS_LINUX_DESKTOP_PROVISION_ONLY_DONE"
+    poweroff -f 2>/dev/null || reboot -f 2>/dev/null || true
+    exec /bin/sh
+  fi
+else
+  # RAM-only fallback for debugging (slow).
+  apk update >/dev/null 2>&1 || true
+  if ! apk add --no-cache weston weston-terminal weston-backend-drm weston-shell-desktop seatd mesa-dri-gallium >/dev/null 2>&1; then
+    emit "RAYOS_LINUX_DESKTOP_ERR apk_add_failed"
+    exec /bin/sh
+  fi
+  emit "RAYOS_LINUX_DESKTOP_PKGS_OK"
+fi
+
+if [ -n "$PERSIST_MNT" ]; then
+  # Run the desktop from the persistent rootfs (fast, stable across boots).
+  # Bind-mount host namespaces needed for graphics and process management.
+  mnt --bind /dev "$ROOTFS_DIR/dev" 2>/dev/null || true
+  mnt -t proc proc "$ROOTFS_DIR/proc" 2>/dev/null || true
+  mnt -t sysfs sys "$ROOTFS_DIR/sys" 2>/dev/null || true
+
+  # Provide volatile runtime dirs inside the chroot.
+  # These must not persist across boots (seatd sockets, wayland sockets, logs).
+  mkd "$ROOTFS_DIR/run" "$ROOTFS_DIR/tmp"
+  mnt -t tmpfs tmpfs "$ROOTFS_DIR/run" 2>/dev/null || true
+  mnt -t tmpfs tmpfs "$ROOTFS_DIR/tmp" 2>/dev/null || true
+
+  # Start the desktop inside the persistent rootfs.
+  # IMPORTANT: do not let init exit if this fails.
+  set +e
+  do_chroot "$ROOTFS_DIR" /bin/sh -lc '
+    export XDG_RUNTIME_DIR=/tmp/xdg
+    /bin/busybox mkdir -p "$XDG_RUNTIME_DIR"
+    /bin/busybox chmod 700 "$XDG_RUNTIME_DIR"
+    /bin/busybox mkdir -p /run /var/run
+    # Prefer /run for runtime sockets.
+    if [ ! -e /var/run ]; then
+      /bin/busybox ln -s /run /var/run 2>/dev/null || true
+    fi
+
+    # Clean up any stale state (in case /run or /tmp is not tmpfs on this system).
+    /bin/busybox rm -f /run/seatd.sock /var/run/seatd.sock 2>/dev/null || true
+    /bin/busybox rm -f /tmp/seatd.log /tmp/weston.log /tmp/weston.out /tmp/weston-terminal.log 2>/dev/null || true
+
+    # Make sure virtual filesystems exist inside the chroot.
+    # If proc/sys/devpts are missing, seatd and weston can fail very early.
+    /bin/busybox mkdir -p /proc /sys /dev/pts /dev/shm
+    echo "--- chroot mounts (before) ---" >>/tmp/seatd.log 2>/dev/null || true
+    /bin/busybox cat /proc/mounts 2>/dev/null >>/tmp/seatd.log || true
+    /bin/busybox mount -t proc proc /proc >>/tmp/seatd.log 2>&1 || true
+    /bin/busybox mount -t sysfs sys /sys >>/tmp/seatd.log 2>&1 || true
+    /bin/busybox mount -t devpts devpts /dev/pts >>/tmp/seatd.log 2>&1 || true
+    /bin/busybox mount -t tmpfs tmpfs /dev/shm >>/tmp/seatd.log 2>&1 || true
+    echo "--- chroot mounts (after) ---" >>/tmp/seatd.log 2>/dev/null || true
+    /bin/busybox cat /proc/mounts 2>/dev/null >>/tmp/seatd.log || true
+
+    echo "--- env/host ---" >>/tmp/seatd.log 2>/dev/null || true
+    /bin/busybox uname -a >>/tmp/seatd.log 2>/dev/null || true
+    echo "--- /proc/cmdline ---" >>/tmp/seatd.log 2>/dev/null || true
+    /bin/busybox ls -l /proc/cmdline 2>/dev/null >>/tmp/seatd.log || true
+    echo "cmdline=$(cat /proc/cmdline 2>/dev/null)" >>/tmp/seatd.log 2>/dev/null || true
+    echo "--- /proc/consoles ---" >>/tmp/seatd.log 2>/dev/null || true
+    /bin/busybox ls -l /proc/consoles 2>/dev/null >>/tmp/seatd.log || true
+    /bin/busybox cat /proc/consoles 2>/dev/null >>/tmp/seatd.log || true
+    echo "--- /dev snapshot ---" >>/tmp/seatd.log 2>/dev/null || true
+    /bin/busybox ls -l /dev /dev/pts /dev/shm /dev/dri /dev/tty /dev/tty0 /dev/tty1 2>/dev/null >>/tmp/seatd.log || true
+
+    echo "--- seatd binary ---" >>/tmp/seatd.log 2>/dev/null || true
+    /bin/busybox ls -l /usr/bin/seatd 2>/dev/null >>/tmp/seatd.log || true
+    /bin/busybox readlink -f /usr/bin/seatd 2>/dev/null >>/tmp/seatd.log || true
+    /bin/busybox hexdump -C -n 16 /usr/bin/seatd 2>/dev/null >>/tmp/seatd.log || true
+    /bin/busybox ls -l /lib/ld-musl-x86_64.so.1 2>/dev/null >>/tmp/seatd.log || true
+
+    echo "seatd starting" >>/tmp/seatd.log 2>/dev/null || true
+    echo "--- seatd help/version ---" >>/tmp/seatd.log 2>/dev/null || true
+    SEATD_H_OUT="$(seatd -h 2>&1)"
+    SEATD_H_RC=$?
+    echo "$SEATD_H_OUT" >>/tmp/seatd.log 2>/dev/null || true
+    echo "seatd -h rc=$SEATD_H_RC bytes=$(printf \"%s\" \"$SEATD_H_OUT\" | /bin/busybox wc -c 2>/dev/null)" >>/tmp/seatd.log 2>/dev/null || true
+    SEATD_V_OUT="$(seatd -v 2>&1)"
+    SEATD_V_RC=$?
+    echo "$SEATD_V_OUT" >>/tmp/seatd.log 2>/dev/null || true
+    echo "seatd -v rc=$SEATD_V_RC bytes=$(printf \"%s\" \"$SEATD_V_OUT\" | /bin/busybox wc -c 2>/dev/null)" >>/tmp/seatd.log 2>/dev/null || true
+
+    # Force libseat to prefer seatd and a known socket path.
+    export LIBSEAT_BACKEND=seatd
+    export SEATD_SOCK=/run/seatd.sock
+
+    # Start seatd daemon (creates /run/seatd.sock by default).
+    echo "--- seatd daemon start ---" >>/tmp/seatd.log 2>/dev/null || true
+    seatd -u root -g root -l debug >>/tmp/seatd.log 2>&1 &
+    SEATD_PID=$!
+
+    # If seatd exits immediately, capture the actual exit code.
+    /bin/busybox sleep 0.05
+    if ! /bin/busybox kill -0 "$SEATD_PID" 2>/dev/null; then
+      wait "$SEATD_PID"
+      echo "seatd exited early rc=$?" >>/tmp/seatd.log 2>/dev/null || true
+    fi
+
+    # Wait for seatd socket (weston/libseat needs it).
+    for i in 1 2 3 4 5 6 7 8 9 10 \
+             11 12 13 14 15 16 17 18 19 20; do
+      /bin/busybox test -S /run/seatd.sock && break
+      /bin/busybox sleep 0.1
+    done
+
+    USE_SEATD=1
+    if ! /bin/busybox test -S /run/seatd.sock; then
+      USE_SEATD=0
+      emit "RAYOS_LINUX_DESKTOP_ERR seatd_no_socket"
+      if ! /bin/busybox kill -0 "$SEATD_PID" 2>/dev/null; then
+        emit "RAYOS_LINUX_DESKTOP_ERR seatd_exited_early"
+      fi
+      echo "--- seatd.log ---"
+      /bin/busybox tail -n 200 /tmp/seatd.log 2>/dev/null || true
+    fi
+
+    echo "--- weston help/version ---" >>/tmp/weston.out 2>/dev/null || true
+    weston --help >>/tmp/weston.out 2>&1
+    echo "weston --help rc=$?" >>/tmp/weston.out 2>/dev/null || true
+    weston --version >>/tmp/weston.out 2>&1
+    echo "weston --version rc=$?" >>/tmp/weston.out 2>/dev/null || true
+    echo "weston starting (use_seatd=$USE_SEATD)" >>/tmp/weston.out 2>/dev/null || true
+
+    # Alpine weston 12.x does not accept a --tty flag; VT handling is delegated
+    # to seatd/logind/weston-launch. Keep this explicit so failures are readable.
+    echo "weston tty arg: none" >>/tmp/weston.out 2>/dev/null || true
+
+    # Ensure we always know which Wayland socket to expect.
+    /bin/busybox rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayland-*.lock 2>/dev/null || true
+
+    if [ "$USE_SEATD" -eq 0 ] && command -v weston-launch >/dev/null 2>&1; then
+      echo "weston-launch available; trying it" >>/tmp/weston.out 2>/dev/null || true
+      weston-launch --backend=drm --socket=wayland-0 --log=/tmp/weston.log --continue-without-input >>/tmp/weston.out 2>&1 &
+    else
+      weston --backend=drm --socket=wayland-0 --log=/tmp/weston.log --continue-without-input >>/tmp/weston.out 2>&1 &
+    fi
+    WESTON_PID=$!
+    /bin/busybox sleep 0.2
+    if ! /bin/busybox kill -0 "$WESTON_PID" 2>/dev/null; then
+      emit "RAYOS_LINUX_DESKTOP_ERR weston_exited_early"
+    fi
+    # Wait briefly for weston to either come up or error.
+    for i in 1 2 3 4 5 6 7 8 9 10 \
+             11 12 13 14 15 16 17 18 19 20 \
+             21 22 23 24 25 26 27 28 29 30 \
+             31 32 33 34 35 36 37 38 39 40 \
+             41 42 43 44 45 46 47 48 49 50; do
+      if /bin/busybox test -S "$XDG_RUNTIME_DIR/wayland-0"; then
+        exit 0
+      fi
+      /bin/busybox sleep 0.2
+    done
+    emit "RAYOS_LINUX_DESKTOP_ERR weston_no_wayland_socket"
+    echo "--- which ---"
+    command -v seatd 2>/dev/null || true
+    command -v weston 2>/dev/null || true
+    echo "--- ls /dev/dri ---"
+    /bin/busybox ls -l /dev/dri 2>/dev/null || true
+    echo "--- ls /dev/tty ---"
+    /bin/busybox ls -l /dev/tty /dev/tty0 /dev/tty1 2>/dev/null || true
+    echo "--- ls /run ---"
+    /bin/busybox ls -l /run 2>/dev/null || true
+    echo "--- ls /tmp ---"
+    /bin/busybox ls -l /tmp 2>/dev/null || true
+    echo "--- ls $XDG_RUNTIME_DIR ---"
+    /bin/busybox ls -l "$XDG_RUNTIME_DIR" 2>/dev/null || true
+    echo "--- ps ---"
+    /bin/busybox ps 2>/dev/null || true
+    echo "--- seatd.log ---"
+    /bin/busybox tail -n 200 /tmp/seatd.log 2>/dev/null || true
+    echo "--- weston.log ---"
+    /bin/busybox tail -n 200 /tmp/weston.log 2>/dev/null || true
+    echo "--- weston.out ---"
+    /bin/busybox tail -n 200 /tmp/weston.out 2>/dev/null || true
+    exit 1
+  '
+  CHROOT_WESTON_RC=$?
+  set -e
+
+  # Only attempt the terminal after weston is confirmed.
+  if [ "$CHROOT_WESTON_RC" -eq 0 ]; then
+    do_chroot "$ROOTFS_DIR" /bin/sh -lc '
+      export XDG_RUNTIME_DIR=/tmp/xdg
+      WAYLAND_DISPLAY=wayland-0 weston-terminal >/tmp/weston-terminal.log 2>&1 &
+    ' || true
+  else
+    emit "RAYOS_LINUX_DESKTOP_ERR weston_start_failed rc=$CHROOT_WESTON_RC"
+  fi
+else
+  # RAM-only fallback.
+  export XDG_RUNTIME_DIR=/tmp/xdg
+  mkd "$XDG_RUNTIME_DIR"
+  chmod 700 "$XDG_RUNTIME_DIR"
+  seatd -g root >/tmp/seatd.log 2>&1 &
+  rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayland-*.lock 2>/dev/null || true
+  weston --backend=drm --socket=wayland-0 --log=/tmp/weston.log --continue-without-input >/tmp/weston.out 2>&1 &
+  sleep 1
+  WAYLAND_DISPLAY=wayland-0 weston-terminal >/tmp/weston-terminal.log 2>&1 &
+fi
+
+# Verify Weston produced a Wayland socket before claiming readiness.
+if [ -n "$PERSIST_MNT" ]; then
+  if [ -S "$ROOTFS_DIR/tmp/xdg/wayland-0" ]; then
+    emit "RAYOS_LINUX_DESKTOP_READY"
+  else
+    emit "RAYOS_LINUX_DESKTOP_ERR not_ready_no_wayland_socket"
+  fi
+else
+  if [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; then
+    emit "RAYOS_LINUX_DESKTOP_READY"
+  else
+    emit "RAYOS_LINUX_DESKTOP_ERR not_ready_no_wayland_socket"
+  fi
+fi
+
+# Keep the system alive.
+exec /bin/sh

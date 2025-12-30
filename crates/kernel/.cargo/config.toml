@@ -1,0 +1,9 @@
+[build]
+target = "x86_64-unknown-linux-gnu"
+
+[target.x86_64-rayos]
+linker = "rust-lld"
+
+# For bare-metal kernel
+[target.'cfg(target_os = "none")']
+runner = "echo"

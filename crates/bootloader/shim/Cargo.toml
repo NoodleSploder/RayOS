@@ -1,0 +1,11 @@
+[package]
+name = "rayos-shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+uefi = { version = "0.13.0", default-features = false }
+
+[package.metadata]
+description = "Shim skeleton: locate kernel on ESP and report size (RayOS)."

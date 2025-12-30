@@ -1,0 +1,35 @@
+# RayOS repo-root ignores
+/build/
+
+# Rust build outputs
+**/target/
+**/*.rmeta
+
+# QEMU / test harness artifacts (in case they end up outside /build)
+*.log
+*.pid
+*.sock
+
+# Disk/ISO artifacts (in case they end up outside /build)
+*.iso
+*.img
+*.qcow2
+*.vhdx
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Common local artifacts
+.DS_Store
+*.swp
+*.swo
+__pycache__/
+*.pyc
+
+# Python tooling
+.pytest_cache/
+
+# Local environment
+.env
+.env.*

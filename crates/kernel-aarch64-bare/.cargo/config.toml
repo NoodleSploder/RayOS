@@ -1,0 +1,10 @@
+[build]
+target = "aarch64-unknown-none-softfloat"
+
+[target.aarch64-unknown-none-softfloat]
+linker = "rust-lld"
+rustflags = [
+  "-C", "link-arg=-Tlinker.ld",
+  "-C", "relocation-model=static",
+  "-C", "code-model=large",
+]

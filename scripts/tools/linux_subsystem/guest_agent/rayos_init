@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# Minimal init for RayOS-controlled Linux guest.
+# Boots from initramfs and immediately hands control to the RayOS guest agent.
+
+mount -t proc proc /proc 2>/dev/null || true
+mount -t sysfs sys /sys 2>/dev/null || true
+mount -t devtmpfs dev /dev 2>/dev/null || true
+
+# Ensure agent speaks over the serial console.
+exec </dev/console >/dev/console 2>/dev/console
+
+exec /bin/sh /rayos_agent.sh

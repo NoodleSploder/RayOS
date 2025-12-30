@@ -1,0 +1,79 @@
+[package]
+name = "rayos-intent"
+version = "0.1.0"
+edition = "2021"
+authors = ["RayOS Team"]
+description = "Phase 5: Intent - Natural language understanding and cognitive reasoning"
+
+[dependencies]
+# Core async runtime
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# LLM integration
+# Keep Candle versions aligned with the rest of the repo (e.g. `kernel` uses 0.8)
+# to avoid dependency conflicts (notably rand/half).
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+candle-transformers = { version = "0.8", optional = true }
+tokenizers = { version = "0.15", optional = true }
+
+# NLP and text processing
+regex = "1.10"
+unicode-segmentation = "1.11"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Concurrency
+parking_lot = "0.12"
+dashmap = "5.5"
+
+# System monitoring
+sysinfo = "0.31"
+
+# Hashing and IDs
+uuid = { version = "1.6", features = ["v4", "serde"] }
+blake3 = "1.5"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Logging and error handling
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1.0"
+thiserror = "1.0"
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# Integration with other phases
+rayos-conductor = { path = "../conductor", optional = true }
+
+[dev-dependencies]
+tempfile = "3.8"
+criterion = "0.5"
+
+[features]
+default = []
+llm = ["candle-core", "candle-nn", "candle-transformers", "tokenizers"]
+conductor = ["rayos-conductor"]
+full = ["llm", "conductor"]
+
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug = false
+
+[profile.dev]
+opt-level = 1
+incremental = true
+
+[profile.dev.package."*"]
+opt-level = 3

@@ -1,0 +1,35 @@
+╔═══════════════════════════════════════════════════╗
+║        RayOS Boot Test (Graphical Mode)         ║
+╚═══════════════════════════════════════════════════╝
+
+Testing: iso-output/rayos-universal-usb.img
+
+Controls:
+  - Ctrl+Alt+G: Release mouse from QEMU window
+  - Ctrl+Alt+Q: Quit QEMU
+  - Ctrl+C: Stop in terminal
+
+Starting QEMU...
+
+[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01H[2J[01;01H[=3h[2J[01;01HBdsDxe: loading Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+BdsDxe: starting Boot0001 "UEFI QEMU HARDDISK QM00001 " from PciRoot(0x0)/Pci(0x1F,0x2)/Sata(0x0,0xFFFF,0x0)
+[2J[01;01H[=3h[2J[01;01H
+
+╔════════════════════════════════════╗
+║  RayOS UEFI Bootloader v0.1      ║
+║  Bicameral GPU-Native Kernel       ║
+╚════════════════════════════════════╝
+
+[BOOTLOADER] Initializing framebuffer graphics...
+[BOOTLOADER] Loading kernel binary...
+[BOOTLOADER] Initializing kernel memory...
+[BOOTLOADER] Kernel base: 0x400000
+[BOOTLOADER] Kernel size: 0x100000
+[BOOTLOADER] Kernel stub ready
+[BOOTLOADER] Kernel loaded successfully!
+[BOOTLOADER] Jumping to kernel...
+
+System entering autonomous megakernel loop...
+You may see a black screen - this is normal for Phase 1.
+Kernel is running autonomously in the background.
+[2J[01;01H[=3h[2J[01;01H

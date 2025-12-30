@@ -1,0 +1,38 @@
+[package]
+name = "rayos-kernel-bare"
+version = "0.1.0"
+edition = "2021"
+authors = ["RayOS Kernel Team"]
+build = "build.rs"
+
+[[bin]]
+name = "kernel-bare"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+# Minimal (no_std-safe)
+libm = { version = "0.2", default-features = false }
+
+[features]
+# Default behavior: local model path if available, with deterministic fallback.
+default = ["local_llm", "local_ai"]
+
+# Enable deterministic in-guest replies.
+local_ai = []
+
+# Enable local (in-guest) learned model inference when a `model.bin` is provided.
+local_llm = []
+
+# Enable the host-bridge protocol (emits RAYOS_INPUT / consumes AI: replies).
+# When enabled, local_ai is automatically suppressed in code to avoid double replies.
+host_ai = []
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[build-dependencies]
