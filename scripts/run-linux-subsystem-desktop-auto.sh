@@ -15,9 +15,18 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/build}"
 mkdir -p "$WORK_DIR"
 
-# Ensure only one desktop launcher touches the persistent disk at a time.
+# Ensure only one desktop launcher runs system-wide (prevents duplicate QEMU windows
+# when multiple host bridge processes react to the same SHOW_LINUX_DESKTOP event).
+GLOBAL_LOCK_FILE="${LINUX_DESKTOP_GLOBAL_LOCK:-/tmp/rayos-linux-desktop-auto.lock}"
+
+# Ensure only one desktop launcher touches the persistent disk at a time (per WORK_DIR).
 LOCK_FILE="$WORK_DIR/.linux-desktop-auto.lock"
 if command -v flock >/dev/null 2>&1; then
+  exec 8>"$GLOBAL_LOCK_FILE"
+  if ! flock -n 8; then
+    echo "WARN: Linux desktop launcher already running (lock: $GLOBAL_LOCK_FILE)" >&2
+    exit 0
+  fi
   exec 9>"$LOCK_FILE"
   if ! flock -n 9; then
     echo "WARN: Linux desktop launcher already running (lock: $LOCK_FILE)" >&2
@@ -25,20 +34,40 @@ if command -v flock >/dev/null 2>&1; then
   fi
 else
   # Best-effort fallback: atomic mkdir lock.
+  GLOBAL_LOCK_DIR="${LINUX_DESKTOP_GLOBAL_LOCK_DIR:-/tmp/rayos-linux-desktop-auto.lockdir}"
+  if ! mkdir "$GLOBAL_LOCK_DIR" 2>/dev/null; then
+    echo "WARN: Linux desktop launcher already running (lock: $GLOBAL_LOCK_DIR)" >&2
+    exit 0
+  fi
   LOCK_DIR="$WORK_DIR/.linux-desktop-auto.lockdir"
   if ! mkdir "$LOCK_DIR" 2>/dev/null; then
     echo "WARN: Linux desktop launcher already running (lock: $LOCK_DIR)" >&2
     exit 0
   fi
-  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true' EXIT
+  trap 'rmdir "$LOCK_DIR" 2>/dev/null || true; rmdir "$GLOBAL_LOCK_DIR" 2>/dev/null || true' EXIT
 fi
 
-# Persistent desktop rootfs disk. The guest init will provision this disk on first boot
-# (installing weston/seatd/weston-terminal into a chroot rootfs) and reuse it on later boots.
+
+# VM registry path
+VM_REGISTRY_PATH="$WORK_DIR/linux-guest/desktop/vm_registry.json"
+mkdir -p "$(dirname "$VM_REGISTRY_PATH")"
+
+# Default values
+VM_ID="linux-desktop-001"
+VM_NAME="RayOS Linux Desktop"
 DESKTOP_DISK_PATH="${LINUX_DESKTOP_DISK:-$WORK_DIR/linux-guest/desktop/desktop-rootfs.ext4}"
 DESKTOP_DISK_SIZE="${LINUX_DESKTOP_DISK_SIZE:-4G}"
+
+# If registry exists, load config
+if [ -f "$VM_REGISTRY_PATH" ]; then
+  VM_ID=$(jq -r .vm_id "$VM_REGISTRY_PATH" 2>/dev/null || echo "$VM_ID")
+  VM_NAME=$(jq -r .name "$VM_REGISTRY_PATH" 2>/dev/null || echo "$VM_NAME")
+  DESKTOP_DISK_PATH="$WORK_DIR/$(jq -r .disk_path "$VM_REGISTRY_PATH" 2>/dev/null || echo "linux-guest/desktop/desktop-rootfs.ext4")"
+fi
+
 mkdir -p "$(dirname "$DESKTOP_DISK_PATH")"
 
+# If disk does not exist, create it and update registry
 if [ ! -f "$DESKTOP_DISK_PATH" ]; then
   echo "Creating persistent desktop disk: $DESKTOP_DISK_PATH ($DESKTOP_DISK_SIZE)" >&2
   if ! command -v mkfs.ext4 >/dev/null 2>&1; then
@@ -47,6 +76,41 @@ if [ ! -f "$DESKTOP_DISK_PATH" ]; then
   fi
   truncate -s "$DESKTOP_DISK_SIZE" "$DESKTOP_DISK_PATH"
   mkfs.ext4 -F -L RAYOSDESK "$DESKTOP_DISK_PATH" >/dev/null
+  # Update registry with disk path if the registry already exists.
+  # (On fresh start, the registry is created below.)
+  if [ -f "$VM_REGISTRY_PATH" ]; then
+    jq \
+      --arg disk_path "$(realpath --relative-to="$WORK_DIR" "$DESKTOP_DISK_PATH")" \
+      '.disk_path = $disk_path' "$VM_REGISTRY_PATH" > "$VM_REGISTRY_PATH.tmp" && mv "$VM_REGISTRY_PATH.tmp" "$VM_REGISTRY_PATH"
+  fi
+fi
+
+# Mark resume vs fresh start
+if [ -f "$DESKTOP_DISK_PATH" ]; then
+  if [ -f "$VM_REGISTRY_PATH" ]; then
+    echo "[vm_lifecycle] Resuming persistent VM: $VM_ID ($VM_NAME)" >&2
+  else
+    echo "[vm_lifecycle] Fresh start: creating new VM registry for $VM_ID ($VM_NAME)" >&2
+    cat > "$VM_REGISTRY_PATH" <<EOF
+{
+  "vm_id": "$VM_ID",
+  "name": "$VM_NAME",
+  "disk_path": "$(realpath --relative-to="$WORK_DIR" "$DESKTOP_DISK_PATH")",
+  "device_config": {
+    "mem": 4096,
+    "smp": 2,
+    "gpu": "virtio-vga",
+    "keyboard": true,
+    "mouse": true
+  },
+  "policy": {
+    "autoboot": true,
+    "networking": false,
+    "present_on_boot": false
+  }
+}
+EOF
+  fi
 fi
 
 # If the disk got corrupted by an abrupt QEMU kill, fix it on the host.
@@ -175,6 +239,11 @@ echo "Waiting for: RAYOS_LINUX_DESKTOP_READY" >&2
 MON_SOCK="${LINUX_DESKTOP_MONITOR_SOCK:-$WORK_DIR/linux-desktop-monitor.sock}"
 rm -f "$MON_SOCK" 2>/dev/null || true
 
+SERIAL_ARGS=(-serial stdio)
+if [ -n "${LINUX_SERIAL_LOG:-}" ]; then
+  SERIAL_ARGS=(-serial "file:$LINUX_SERIAL_LOG")
+fi
+
 exec "$QEMU_BIN" \
   -machine q35,graphics=on,i8042=on \
   -m "${LINUX_MEM:-4096}" \
@@ -191,7 +260,7 @@ exec "$QEMU_BIN" \
   -device usb-kbd \
   -device usb-tablet \
   "${DISPLAY_ARGS[@]}" \
-  -serial stdio \
+  "${SERIAL_ARGS[@]}" \
   -monitor "unix:$MON_SOCK,server,nowait" \
   -no-reboot \
   "${NET_ARGS[@]}"

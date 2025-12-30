@@ -61,6 +61,15 @@ export LINUX_CMDLINE="${LINUX_CMDLINE:-console=ttyS0 rdinit=/rayos_desktop_init 
 # Ask the runner to attach the virtio GPU + the persistent disk + modloop.
 export QEMU_GPU=1
 
+
+# Check for VM registry and log lifecycle state
+VM_REGISTRY_PATH="$WORK_DIR/linux-guest/desktop/vm_registry.json"
+if [ -f "$VM_REGISTRY_PATH" ]; then
+  echo "[test] VM registry found: resuming persistent VM" >&2
+else
+  echo "[test] No VM registry: fresh start" >&2
+fi
+
 ARTS="$(PREPARE_ONLY=1 WORK_DIR="$WORK_DIR" python3 "$ROOT_DIR/scripts/tools/linux_subsystem/run_linux_guest.py")"
 KERNEL="$(printf "%s\n" "$ARTS" | sed -n 's/^KERNEL=//p' | head -n1)"
 INITRD="$(printf "%s\n" "$ARTS" | sed -n 's/^INITRD=//p' | head -n1)"

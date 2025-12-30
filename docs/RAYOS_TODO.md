@@ -104,6 +104,8 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	- Developer bring-up helper: `./scripts/run-linux-subsystem-desktop-weston.sh` (boots Alpine ISO with networking so you can `apk add weston ...` and run a compositor manually while we implement the real bridge).
 	- More automatic bring-up helper: `./scripts/run-linux-subsystem-desktop-auto.sh` (netboot + initramfs overlay auto-DHCP + persistent rootfs provisioning on first boot + auto-start `seatd`+`weston`, then prints `RAYOS_LINUX_DESKTOP_READY` only when the Wayland socket exists).
 		- Pre-provision headlessly: `./scripts/tools/linux_subsystem/build_desktop_rootfs_image.sh` (builds the persistent ext4 rootfs image once).
+	- ✅ Pointer/input bridge: RayOS prompt now accepts `mouse <x> <y>` (normalized 0..1) and `click left|right`, emitting `LINUX_MOUSE_ABS`/`LINUX_CLICK` host events; host injects via QEMU monitor and appends ACK markers.
+	- ✅ Host ACK markers: `scripts/test-boot.sh` now writes `RAYOS_HOST_ACK:<op>:<ok|err>:<detail>` to `serial-boot-graphical.log` for desktop launch/control/mouse events (guest/UI consumption still pending).
 
 23a) Linux desktop “show desktop” path (QEMU window shows a working Weston session)
 - Success criteria: a visible desktop (Weston + terminal) appears in the QEMU display window when triggered; readiness is only signaled when Wayland is actually up.
@@ -117,11 +119,12 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 		- `show linux desktop` (or `show desktop`, `linux desktop`)
 		- `type <text>` (types text + Enter into the Linux desktop VM)
 		- `press <key>` / `key <key>` (sends a single key or combo; examples: `press esc`, `press tab`, `press enter`, `press ctrl+l`, `press alt+f4`, `press up`)
+		- `mouse <x> <y>` (normalized 0..1 absolute pointer injection)
+		- `click left|right` (button injection)
 		- `shutdown linux` / `stop linux` (best-effort ACPI powerdown; falls back to forcing QEMU quit)
 		- Notes: this is currently host-level QEMU input injection; it is not yet a guest agent “launch app / list windows / click element” API.
 	- Next tasks (make it usable, not just demo-able):
-		- Host ACK channel: host replies over serial with `RAYOS_HOST_ACK:<op>:<ok|err>:<detail>` so RayOS can display “sent / failed / desktop not running”.
-		- Mouse injection (minimum): add `LINUX_MOUSE_ABS:x:y` + `LINUX_CLICK:left|right` host events; implement via QEMU monitor (`mouse_move` / `mouse_button`) or switch to QMP input events.
+		- Host ACK channel to the guest UI: current ACKs are log-only; plumb a real guest-visible feedback path and display “sent / failed / desktop not running”.
 		- Focus & routing: ensure the Linux desktop VM can be focused/raised on request (host-side window focus is best-effort; still provide typing even when unfocused).
 		- Graceful shutdown: prefer in-guest shutdown via agent/control-plane when available; keep ACPI powerdown fallback.
 		- Hardening: debounce/queue host events so repeated commands don’t spam QEMU; add bounded timeouts per command.
@@ -131,10 +134,10 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 - Goal: a minimal, versioned RayOS→host→guest command surface that’s deterministic and testable.
 - Success criteria: RayOS can (1) show/hide desktop, (2) type, (3) press keys, (4) click, (5) confirm success via ACKs, (6) shut down cleanly.
 - TODOs:
-	- Define v0 wire format + version tag (e.g. `RAYOS_HOST_EVENT_V0:<op>:<payload>`).
-	- Add host-side schema validation (reject oversized payloads; strict ASCII for now).
-	- Add a single end-to-end smoke test: boot RayOS → show desktop → type `echo ok` → press `enter` → observe visible effect marker or serial echo → shutdown.
-	- Add host-side “desktop running state” tracking to avoid acting on stale PID/sock.
+	- ✅ Define v0 wire format + version tag (`RAYOS_HOST_EVENT_V0:<op>:<payload>`, backward-compatible parsing).
+	- ✅ Add host-side schema validation (reject oversized payloads; strict ASCII for now).
+	- ✅ Add a single end-to-end smoke test: `./scripts/test-desktop-control-e2e-headless.sh` (boot RayOS headless → show desktop → type/press via host bridge → shutdown; asserts `RAYOS_HOST_ACK:*` markers).
+	- Add host-side “desktop running state” tracking to avoid acting on stale PID/sock (baseline PID/monitor gating + ACKs now exist in `scripts/test-boot.sh`; still need versioned state + reattach semantics).
 
 23c) Policy alignment (contract enforcement)
 - Goal: keep Option D authority model true even during bring-up.
@@ -210,9 +213,9 @@ Design notes + contract: [WINDOWS_SUBSYSTEM_DESIGN.md](WINDOWS_SUBSYSTEM_DESIGN.
 	- `windows press <key>` (sends a single key or combo; examples: `windows press esc`, `windows press tab`, `windows press ctrl+l`, `windows press alt+f4`)
 	- `shutdown windows` / `stop windows` (best-effort ACPI powerdown; falls back to forcing QEMU quit)
 - Milestones / steps:
-	- Kernel event: add `RAYOS_HOST_EVENT:SHOW_WINDOWS_DESKTOP` emission for phrases like `show windows desktop` / `windows desktop`.
-	- Host wiring: extend `test-boot.sh` to watch for `SHOW_WINDOWS_DESKTOP` and launch a Windows VM script (debounced, PID-file guarded).
-	- Windows launcher script: add `./scripts/run-windows-subsystem-desktop.sh` that:
+	- ✅ Kernel event: add `RAYOS_HOST_EVENT_V0:SHOW_WINDOWS_DESKTOP` emission for phrases like `show windows desktop` / `windows desktop`.
+	- ✅ Host wiring: extend `scripts/test-boot.sh` to watch for `SHOW_WINDOWS_DESKTOP` and launch a Windows VM script (PID-file guarded).
+	- ✅ Windows launcher script: add `./scripts/run-windows-subsystem-desktop.sh` that:
 		- Uses UEFI (OVMF) and a Windows disk image (user-supplied path).
 		- Creates an HMP monitor socket (for input injection + shutdown).
 		- Adds robust input devices (`usb-kbd`, `usb-tablet`, plus virtio input if desired).
@@ -227,14 +230,14 @@ Design notes + contract: [WINDOWS_SUBSYSTEM_DESIGN.md](WINDOWS_SUBSYSTEM_DESIGN.
 - Goal: reuse the same host-event mechanism used for Linux to drive basic Windows UI interactions.
 - Success criteria: RayOS can type text, press keys, and request shutdown of the Windows VM.
 - Milestones / steps:
-	- Add kernel events mirroring Linux:
-		- `RAYOS_HOST_EVENT:WINDOWS_SENDTEXT:<text>` (RayOS command: `windows type <text>`)
-		- `RAYOS_HOST_EVENT:WINDOWS_SENDKEY:<spec>` (RayOS command: `windows press <key>`)
-		- `RAYOS_HOST_EVENT:WINDOWS_SHUTDOWN`
-	- Host wiring in `test-boot.sh`:
+	- ✅ Add kernel events mirroring Linux:
+		- `RAYOS_HOST_EVENT_V0:WINDOWS_SENDTEXT:<text>` (RayOS command: `windows type <text>`)
+		- `RAYOS_HOST_EVENT_V0:WINDOWS_SENDKEY:<spec>` (RayOS command: `windows press <key>`)
+		- `RAYOS_HOST_EVENT_V0:WINDOWS_SHUTDOWN`
+	- ✅ Host wiring in `scripts/test-boot.sh`:
 		- Route `WINDOWS_SENDTEXT` via `scripts/qemu-sendtext.py` to the Windows monitor socket.
 		- Route `WINDOWS_SENDKEY` via `scripts/qemu-sendkey.py` to the Windows monitor socket.
-		- Implement `WINDOWS_SHUTDOWN` via `system_powerdown` (fallback `quit`).
+		- Implement `WINDOWS_SHUTDOWN` via `system_powerdown` (fallback `quit` is TODO).
 	- Logging: write `build/windows-desktop-launch.log` and `build/windows-desktop-control.log`.
 
 33) Windows readiness markers (deterministic automation hook)

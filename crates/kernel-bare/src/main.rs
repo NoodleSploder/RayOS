@@ -118,6 +118,12 @@ fn serial_write_str(s: &str) {
     }
 }
 
+fn serial_write_bytes(buf: &[u8]) {
+    for &b in buf {
+        serial_write_byte(b);
+    }
+}
+
 fn serial_write_hex_u64(mut value: u64) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut buf = [0u8; 16];
@@ -6509,6 +6515,294 @@ fn kernel_main() -> ! {
         Some(rest)
     }
 
+    fn is_show_windows_desktop(line: &[u8]) -> bool {
+        let s = trim_ascii_spaces(line);
+
+        if eq_ignore_ascii_case(s, b"show windows desktop")
+            || eq_ignore_ascii_case(s, b"windows desktop")
+            || eq_ignore_ascii_case(s, b"show win desktop")
+            || eq_ignore_ascii_case(s, b"win desktop")
+        {
+            return true;
+        }
+
+        // Token-aware tolerant match: require windows/win + desktop, optionally show.
+        let mut toks: [&[u8]; 5] = [&[]; 5];
+        let mut nt: usize = 0;
+        let mut i: usize = 0;
+        while i < s.len() {
+            while i < s.len() {
+                let b = s[i];
+                if b == b' ' || b == b'\t' {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            if i >= s.len() {
+                break;
+            }
+            let start = i;
+            while i < s.len() {
+                let b = s[i];
+                if b == b' ' || b == b'\t' {
+                    break;
+                }
+                i += 1;
+            }
+            if nt < toks.len() {
+                toks[nt] = &s[start..i];
+                nt += 1;
+            } else {
+                break;
+            }
+        }
+
+        let mut seen_show = false;
+        let mut seen_desktop = false;
+        let mut seen_windows = false;
+        let mut t = 0usize;
+        while t < nt {
+            let tok = toks[t];
+            if eq_ignore_ascii_case(tok, b"show") {
+                seen_show = true;
+            } else if eq_ignore_ascii_case(tok, b"desktop") {
+                seen_desktop = true;
+            } else if eq_ignore_ascii_case(tok, b"windows") || eq_ignore_ascii_case(tok, b"win") {
+                seen_windows = true;
+            }
+            t += 1;
+        }
+
+        (seen_windows && seen_desktop && seen_show) || (seen_windows && seen_desktop)
+    }
+
+    fn parse_windows_sendtext(line: &[u8]) -> Option<&[u8]> {
+        let s = trim_ascii_spaces(line);
+
+        // Supported forms:
+        // - windows type <text>
+        // - windows send <text>
+        // - win type <text>
+        // - win send <text>
+        const P1: &[u8] = b"windows type ";
+        const P2: &[u8] = b"windows send ";
+        const P3: &[u8] = b"win type ";
+        const P4: &[u8] = b"win send ";
+
+        let rest = if starts_with_ignore_ascii_case(s, P1) {
+            &s[P1.len()..]
+        } else if starts_with_ignore_ascii_case(s, P2) {
+            &s[P2.len()..]
+        } else if starts_with_ignore_ascii_case(s, P3) {
+            &s[P3.len()..]
+        } else if starts_with_ignore_ascii_case(s, P4) {
+            &s[P4.len()..]
+        } else {
+            return None;
+        };
+
+        let rest = trim_ascii_spaces(rest);
+        if rest.is_empty() {
+            return None;
+        }
+        Some(rest)
+    }
+
+    fn is_windows_shutdown(line: &[u8]) -> bool {
+        let s = trim_ascii_spaces(line);
+        if eq_ignore_ascii_case(s, b"shutdown windows")
+            || eq_ignore_ascii_case(s, b"shutdown win")
+            || eq_ignore_ascii_case(s, b"stop windows")
+            || eq_ignore_ascii_case(s, b"stop win")
+        {
+            return true;
+        }
+
+        // Tolerant token match: require shutdown/stop + windows/win.
+        let mut toks: [&[u8]; 4] = [&[]; 4];
+        let mut nt: usize = 0;
+        let mut i: usize = 0;
+        while i < s.len() {
+            while i < s.len() {
+                let b = s[i];
+                if b == b' ' || b == b'\t' {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            if i >= s.len() {
+                break;
+            }
+            let start = i;
+            while i < s.len() {
+                let b = s[i];
+                if b == b' ' || b == b'\t' {
+                    break;
+                }
+                i += 1;
+            }
+            if nt < toks.len() {
+                toks[nt] = &s[start..i];
+                nt += 1;
+            } else {
+                break;
+            }
+        }
+
+        let mut seen_shutdown = false;
+        let mut seen_windows = false;
+        let mut t = 0usize;
+        while t < nt {
+            let tok = toks[t];
+            if eq_ignore_ascii_case(tok, b"shutdown") || eq_ignore_ascii_case(tok, b"stop") {
+                seen_shutdown = true;
+            } else if eq_ignore_ascii_case(tok, b"windows") || eq_ignore_ascii_case(tok, b"win") {
+                seen_windows = true;
+            }
+            t += 1;
+        }
+        seen_shutdown && seen_windows
+    }
+
+    fn parse_windows_sendkey(line: &[u8]) -> Option<&[u8]> {
+        let s = trim_ascii_spaces(line);
+
+        // Supported forms:
+        // - windows press <key>
+        // - windows key <key>
+        // - win press <key>
+        // - win key <key>
+        const P1: &[u8] = b"windows press ";
+        const P2: &[u8] = b"windows key ";
+        const P3: &[u8] = b"win press ";
+        const P4: &[u8] = b"win key ";
+
+        let rest = if starts_with_ignore_ascii_case(s, P1) {
+            &s[P1.len()..]
+        } else if starts_with_ignore_ascii_case(s, P2) {
+            &s[P2.len()..]
+        } else if starts_with_ignore_ascii_case(s, P3) {
+            &s[P3.len()..]
+        } else if starts_with_ignore_ascii_case(s, P4) {
+            &s[P4.len()..]
+        } else {
+            return None;
+        };
+
+        let rest = trim_ascii_spaces(rest);
+        if rest.is_empty() {
+            return None;
+        }
+        Some(rest)
+    }
+
+    fn parse_linux_mouse_abs(line: &[u8]) -> Option<(&[u8], &[u8])> {
+        let s = trim_ascii_spaces(line);
+
+        // Supported forms:
+        // - mouse <x> <y>
+        // - move <x> <y>
+        // - linux mouse <x> <y>
+        // - linux move <x> <y>
+        const P1: &[u8] = b"mouse ";
+        const P2: &[u8] = b"move ";
+        const P3: &[u8] = b"linux mouse ";
+        const P4: &[u8] = b"linux move ";
+
+        let rest = if starts_with_ignore_ascii_case(s, P3) {
+            &s[P3.len()..]
+        } else if starts_with_ignore_ascii_case(s, P4) {
+            &s[P4.len()..]
+        } else if starts_with_ignore_ascii_case(s, P1) {
+            &s[P1.len()..]
+        } else if starts_with_ignore_ascii_case(s, P2) {
+            &s[P2.len()..]
+        } else {
+            return None;
+        };
+
+        let rest = trim_ascii_spaces(rest);
+        if rest.is_empty() {
+            return None;
+        }
+
+        let mut i = 0usize;
+        while i < rest.len() && rest[i] != b' ' {
+            i += 1;
+        }
+        if i == 0 {
+            return None;
+        }
+        let x = &rest[..i];
+
+        while i < rest.len() && rest[i] == b' ' {
+            i += 1;
+        }
+        if i >= rest.len() {
+            return None;
+        }
+
+        let start_y = i;
+        while i < rest.len() && rest[i] != b' ' {
+            i += 1;
+        }
+        if start_y == i {
+            return None;
+        }
+        let y = &rest[start_y..i];
+
+        while i < rest.len() {
+            if rest[i] != b' ' {
+                return None;
+            }
+            i += 1;
+        }
+
+        Some((x, y))
+    }
+
+    fn parse_linux_click(line: &[u8]) -> Option<&[u8]> {
+        let s = trim_ascii_spaces(line);
+
+        // Supported forms:
+        // - click <left|right>
+        // - linux click <left|right>
+        const P1: &[u8] = b"click ";
+        const P2: &[u8] = b"linux click ";
+
+        let rest = if starts_with_ignore_ascii_case(s, P2) {
+            &s[P2.len()..]
+        } else if starts_with_ignore_ascii_case(s, P1) {
+            &s[P1.len()..]
+        } else {
+            return None;
+        };
+
+        let rest = trim_ascii_spaces(rest);
+        if rest.is_empty() {
+            return None;
+        }
+
+        let mut i = 0usize;
+        while i < rest.len() && rest[i] != b' ' {
+            i += 1;
+        }
+        let btn = &rest[..i];
+        if !rest[i..].iter().all(|b| *b == b' ') {
+            return None;
+        }
+
+        if eq_ignore_ascii_case(btn, b"left") {
+            Some(b"left")
+        } else if eq_ignore_ascii_case(btn, b"right") {
+            Some(b"right")
+        } else {
+            None
+        }
+    }
+
     fn is_linux_shutdown(line: &[u8]) -> bool {
         let s = trim_ascii_spaces(line);
 
@@ -6621,13 +6915,19 @@ fn kernel_main() -> ! {
                             // Host-integrated commands (non-shell): keep these simple and explicit.
                             // This is a stepping stone until the Linux desktop is actually embedded.
                             if is_show_linux_desktop(&line_buf[..len]) {
-                                serial_write_str("RAYOS_HOST_EVENT:SHOW_LINUX_DESKTOP\n");
+                                serial_write_str("RAYOS_HOST_EVENT_V0:SHOW_LINUX_DESKTOP\n");
                                 chat.push_line(b"SYS: ", b"requesting Linux desktop (host will launch)");
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "launching Linux desktop...", 0xff_ff_88);
+                            } else if is_show_windows_desktop(&line_buf[..len]) {
+                                serial_write_str("RAYOS_HOST_EVENT_V0:SHOW_WINDOWS_DESKTOP\n");
+                                chat.push_line(b"SYS: ", b"requesting Windows desktop (host will launch)");
+                                render_chat_log(&chat);
+                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                draw_text(140, 560, "launching Windows desktop...", 0xff_ff_88);
                             } else if let Some(text) = parse_linux_sendtext(&line_buf[..len]) {
-                                serial_write_str("RAYOS_HOST_EVENT:LINUX_SENDTEXT:");
+                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDTEXT:");
                                 for &b in text {
                                     serial_write_byte(b);
                                 }
@@ -6636,22 +6936,60 @@ fn kernel_main() -> ! {
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "typing into Linux desktop...", 0xff_ff_88);
+                            } else if let Some(text) = parse_windows_sendtext(&line_buf[..len]) {
+                                serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SENDTEXT:");
+                                serial_write_bytes(text);
+                                serial_write_str("\n");
+                                chat.push_line(b"SYS: ", b"typing into Windows desktop (host inject)");
+                                render_chat_log(&chat);
+                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                draw_text(140, 560, "typing into Windows desktop...", 0xff_ff_88);
                             } else if is_linux_shutdown(&line_buf[..len]) {
-                                serial_write_str("RAYOS_HOST_EVENT:LINUX_SHUTDOWN\n");
+                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SHUTDOWN\n");
                                 chat.push_line(b"SYS: ", b"requesting Linux shutdown (host will stop VM)");
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "shutting down Linux desktop...", 0xff_ff_88);
+                            } else if is_windows_shutdown(&line_buf[..len]) {
+                                serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SHUTDOWN\n");
+                                chat.push_line(b"SYS: ", b"requesting Windows shutdown (host will stop VM)");
+                                render_chat_log(&chat);
+                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                draw_text(140, 560, "shutting down Windows desktop...", 0xff_ff_88);
                             } else if let Some(keyspec) = parse_linux_sendkey(&line_buf[..len]) {
-                                serial_write_str("RAYOS_HOST_EVENT:LINUX_SENDKEY:");
-                                for &b in keyspec {
-                                    serial_write_byte(b);
-                                }
+                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDKEY:");
+                                serial_write_bytes(keyspec);
                                 serial_write_str("\n");
                                 chat.push_line(b"SYS: ", b"sending key to Linux desktop (host inject)");
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "sending key to Linux desktop...", 0xff_ff_88);
+                            } else if let Some(keyspec) = parse_windows_sendkey(&line_buf[..len]) {
+                                serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SENDKEY:");
+                                serial_write_bytes(keyspec);
+                                serial_write_str("\n");
+                                chat.push_line(b"SYS: ", b"sending key to Windows desktop (host inject)");
+                                render_chat_log(&chat);
+                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                draw_text(140, 560, "sending key to Windows desktop...", 0xff_ff_88);
+                            } else if let Some((x, y)) = parse_linux_mouse_abs(&line_buf[..len]) {
+                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_MOUSE_ABS:");
+                                serial_write_bytes(x);
+                                serial_write_byte(b':');
+                                serial_write_bytes(y);
+                                serial_write_str("\n");
+                                chat.push_line(b"SYS: ", b"moving pointer in Linux desktop (host inject)");
+                                render_chat_log(&chat);
+                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                draw_text(140, 560, "moving pointer in Linux desktop...", 0xff_ff_88);
+                            } else if let Some(btn) = parse_linux_click(&line_buf[..len]) {
+                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_CLICK:");
+                                serial_write_bytes(btn);
+                                serial_write_str("\n");
+                                chat.push_line(b"SYS: ", b"clicking in Linux desktop (host inject)");
+                                render_chat_log(&chat);
+                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                draw_text(140, 560, "clicking in Linux desktop...", 0xff_ff_88);
                             } else {
                             // Update transcript with the user's line.
                             chat.push_line(b"YOU: ", &line_buf[..len]);
