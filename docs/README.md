@@ -11,9 +11,14 @@
 5. **[WINDOWS_SUBSYSTEM_DESIGN.md](WINDOWS_SUBSYSTEM_DESIGN.md)** - Windows Subsystem design notes
 6. **[INSTALLABLE_RAYOS_PLAN.md](INSTALLABLE_RAYOS_PLAN.md)** - Installability plan (USB boot + installer + boot manager tracking)
 
+
 ### Design Tracking (Draft Stubs)
 
 - **[SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md)** - Unified top-level architecture map
+- **[intent_primitives.md](intent_primitives.md)** - Intent primitives, envelope, and kernel contract
+- **[gaze_ray_pipeline.md](gaze_ray_pipeline.md)** - Gaze → ray → scheduler pipeline (attention modeling)
+- **[linux_projection.md](linux_projection.md)** - Linux compatibility projection (presented desktop)
+- **[hardware_target.md](hardware_target.md)** - Minimum viable hardware target for MVP
 - **[DISK_LAYOUT_AND_PERSISTENCE.md](DISK_LAYOUT_AND_PERSISTENCE.md)** - Concrete disk layout + persistence invariants
 - **[INSTALLER_AND_BOOT_MANAGER_SPEC.md](INSTALLER_AND_BOOT_MANAGER_SPEC.md)** - Installer wizard + boot manager requirements
 - **[POLICY_CONFIGURATION_SCHEMA.md](POLICY_CONFIGURATION_SCHEMA.md)** - Policy config schema (VM lifecycle/presentation/networking)
