@@ -77,6 +77,23 @@ Minimum virtual device set (subject to change, but the *principle* must hold):
 
 Linux must never require direct host device pass-through for the baseline milestones.
 
+### 4.1 Security boundary (explicit) — what is exposed vs denied
+
+Exposed to the guest (policy-gated, via virtualization only):
+- virtio-blk/virtiofs storage explicitly configured by RayOS
+- virtio-input events routed by RayOS (only when “presented”)
+- optional virtio-net when policy enables networking
+- virtual GPU (virtio-gpu or equivalent)
+- serial/console for deterministic readiness markers and logs
+
+Explicitly **not** exposed to the guest:
+- Host device passthrough by default (GPU, USB, raw disks, PCI devices)
+- Host filesystem outside explicit virtiofs/virtio-blk surfaces
+- Host control interfaces such as QEMU monitor sockets / host automation hooks
+
+Important note (developer harness):
+- The repo’s host tooling may use QEMU monitor sockets to inject input for bring-up and CI. This is a **host-side dev harness** and is **not a security boundary**; it must not be relied on for authorization. Policy enforcement belongs to the RayOS runtime.
+
 ---
 
 ## 5) Control plane (RayOS drives Linux)
@@ -101,6 +118,12 @@ The exact wire format can be simple (line-based) initially, but must be versione
 ---
 
 ## 6) Graphics contract (Wayland-first)
+
+Implementation constraint (product path):
+
+- Guest UI presentation must be **RayOS-native** (guest scanout/surfaces are rendered by RayOS).
+- External viewer protocols (e.g., VNC clients) may exist in the developer harness,
+  but are **not** part of the installed-RayOS architecture.
 
 ### 6.1 Embedded desktop surface (milestone 1)
 - RayOS presents **one** Linux desktop surface as a single RayOS surface/window.

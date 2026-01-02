@@ -79,6 +79,19 @@ Graphical boot (interactive):
 ./scripts/test-boot.sh
 ```
 
+### Linux desktop (dev harness)
+
+The `show linux desktop` / `hide linux desktop` flow is currently implemented via the **host-side bridge** inside `./scripts/test-boot.sh`.
+
+- With defaults, the bridge is **off**, so `show linux desktop` will not present anything.
+- To prelaunch a Linux desktop VM hidden at boot and then present it instantly on demand (no new VM spawn), run:
+
+```bash
+ENABLE_HOST_DESKTOP_BRIDGE=1 PRELAUNCH_HIDDEN_DESKTOPS=1 ./scripts/test-boot.sh
+```
+
+Presentation uses a VNC client (currently `gvncviewer`, often provided by the `virt-viewer` package).
+
 If your OVMF firmware path differs, override it:
 
 ```bash
@@ -89,6 +102,38 @@ If your QEMU binary name differs:
 
 ```bash
 QEMU_BIN=qemu-system-x86_64 ./scripts/test-boot-headless.sh
+```
+
+### RayOS-native guest presentation (dev_scanout)
+
+RayOS is being brought up to present guest desktops *natively* (guest scanout pixels blitted into the RayOS framebuffer UI), without relying on an external host VNC client.
+
+To validate the presentation pipeline before a real virtio-gpu/VMM scanout producer exists, there is a **dev-only synthetic scanout** producer feature in the kernel.
+
+Headless validation (checks for serial markers):
+
+```bash
+./scripts/test-dev-scanout-headless.sh
+```
+
+Graphical demo (opens a QEMU window and injects `show linux desktop` automatically):
+
+```bash
+./scripts/test-dev-scanout.sh
+```
+
+While the guest panel is presented, press ` (backtick) to toggle hide/show.
+
+Optional: auto-hide after N seconds (compile-time env var used only for `dev_scanout` builds):
+
+```bash
+RAYOS_DEV_SCANOUT_AUTOHIDE_SECS=10 ./scripts/test-dev-scanout.sh
+```
+
+If you need a different QEMU UI backend, override `QEMU_DISPLAY`:
+
+```bash
+QEMU_DISPLAY=sdl ./scripts/test-dev-scanout.sh
 ```
 
 ### 3) Run the broader boot verification

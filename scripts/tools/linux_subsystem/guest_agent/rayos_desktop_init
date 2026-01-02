@@ -799,4 +799,20 @@ else
 fi
 
 # Keep the system alive.
+export RAYOS_AGENT_MODE=desktop
+if [ -n "$PERSIST_MNT" ]; then
+  export RAYOS_DESKTOP_ROOTFS="$ROOTFS_DIR"
+  export RAYOS_DESKTOP_XDG_RUNTIME_DIR="/tmp/xdg"
+  export RAYOS_DESKTOP_WAYLAND_DISPLAY="wayland-0"
+else
+  # RAM-only fallback.
+  export RAYOS_DESKTOP_ROOTFS=""
+  export RAYOS_DESKTOP_XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/xdg}"
+  export RAYOS_DESKTOP_WAYLAND_DISPLAY="wayland-0"
+fi
+
+if [ -x /rayos_agent.sh ]; then
+  exec /rayos_agent.sh
+fi
+
 exec /bin/sh

@@ -47,6 +47,7 @@ timeout 25s qemu-system-aarch64 \
   -machine virt \
   -cpu cortex-a57 \
   -m 2048 \
+  -device virtio-gpu-pci \
   -device ramfb \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/AAVMF/AAVMF_CODE.no-secboot.fd \
   -drive if=pflash,format=raw,file="$VARS_FD" \

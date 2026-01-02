@@ -10,6 +10,60 @@ exec </dev/console >/dev/console 2>/dev/console
 
 echo "RAYOS_LINUX_AGENT_READY"
 
+MODE="${RAYOS_AGENT_MODE:-}"
+
+validate_ascii_payload() {
+  # Usage: validate_ascii_payload <s> <maxlen>
+  s="$1"
+  maxlen="$2"
+  # Length check.
+  if [ "${#s}" -gt "$maxlen" ]; then
+    return 1
+  fi
+  # Strict ASCII printable plus space.
+  # shellcheck disable=SC2018,SC2019
+  printf '%s' "$s" | LC_ALL=C /bin/busybox grep -Eq '^[ -~]+$'
+}
+
+desktop_launch_app() {
+  app="$1"
+
+  # Minimal allowlist for now.
+  case "$app" in
+    weston-terminal)
+      ;;
+    *)
+      echo "RAYOS_LINUX_APP_LAUNCH_ERR reason=not_allowed name=$app"
+      return 1
+      ;;
+  esac
+
+  rootfs="${RAYOS_DESKTOP_ROOTFS:-}"
+  xdg="${RAYOS_DESKTOP_XDG_RUNTIME_DIR:-/tmp/xdg}"
+  wdisp="${RAYOS_DESKTOP_WAYLAND_DISPLAY:-wayland-0}"
+
+  if [ -z "$rootfs" ] || [ ! -d "$rootfs" ]; then
+    echo "RAYOS_LINUX_APP_LAUNCH_ERR reason=no_rootfs name=$app"
+    return 1
+  fi
+  if [ ! -d "$rootfs/tmp" ]; then
+    echo "RAYOS_LINUX_APP_LAUNCH_ERR reason=rootfs_tmp_missing name=$app"
+    return 1
+  fi
+
+  # Launch inside the chroot so the app sees the real rootfs.
+  # Use a tiny log file for debugging.
+  ts="$(date +%s 2>/dev/null || echo 0)"
+  /bin/busybox chroot "$rootfs" /bin/sh -lc "export XDG_RUNTIME_DIR=$xdg; export WAYLAND_DISPLAY=$wdisp; $app >/tmp/rayos-launch-$app-$ts.log 2>&1 &" >/dev/null 2>&1
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "RAYOS_LINUX_APP_LAUNCH_OK name=$app"
+    return 0
+  fi
+  echo "RAYOS_LINUX_APP_LAUNCH_ERR reason=launch_failed name=$app rc=$rc"
+  return 1
+}
+
 emit_ppm_p3() {
   # Usage: emit_ppm_p3 <w> <h> <seed>
   w="$1"
@@ -49,6 +103,27 @@ while true; do
     SHUTDOWN)
       echo "RAYOS_LINUX_AGENT_SHUTDOWN_ACK"
       poweroff -f 2>/dev/null || reboot -f 2>/dev/null || true
+      ;;
+    SHELL)
+      # Escape hatch for manual debugging.
+      echo "RAYOS_LINUX_AGENT_SHELL"
+      exec /bin/sh
+      ;;
+    LAUNCH_APP:*)
+      if [ "$MODE" != "desktop" ]; then
+        echo "RAYOS_LINUX_APP_LAUNCH_ERR reason=not_in_desktop_mode"
+        continue
+      fi
+      app="${line#LAUNCH_APP:}"
+      if [ -z "$app" ]; then
+        echo "RAYOS_LINUX_APP_LAUNCH_ERR reason=empty"
+        continue
+      fi
+      if ! validate_ascii_payload "$app" 64; then
+        echo "RAYOS_LINUX_APP_LAUNCH_ERR reason=invalid_ascii_or_length"
+        continue
+      fi
+      desktop_launch_app "$app"
       ;;
     SURFACE_TEST)
       # Deterministic single-surface output (PPM P3) over serial.

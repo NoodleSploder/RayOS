@@ -48,6 +48,16 @@ BUILD_KERNEL="${BUILD_KERNEL:-1}"
 QUIET_BUILD="${QUIET_BUILD:-1}"
 if [ "$BUILD_KERNEL" != "0" ]; then
   echo "Building kernel-bare (release)..." >&2
+
+  # Optional: pass extra kernel Cargo features without editing the script.
+  # Example:
+  #   RAYOS_KERNEL_FEATURES=dev_scanout ./scripts/test-boot-ai-headless.sh
+  RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-}"
+  KERNEL_FEATURES="host_ai"
+  if [ -n "$RAYOS_KERNEL_FEATURES" ]; then
+    KERNEL_FEATURES="$KERNEL_FEATURES,$RAYOS_KERNEL_FEATURES"
+  fi
+
   pushd "$ROOT_DIR/crates/kernel-bare" >/dev/null
   if [ "$QUIET_BUILD" = "1" ]; then
     RUSTC="$(rustup which rustc)" cargo build --quiet \
@@ -55,14 +65,14 @@ if [ "$BUILD_KERNEL" != "0" ]; then
       -Z build-std-features=compiler-builtins-mem \
       --release \
       --target x86_64-unknown-none \
-      --no-default-features --features host_ai >/dev/null
+      --no-default-features --features "$KERNEL_FEATURES" >/dev/null
   else
     RUSTC="$(rustup which rustc)" cargo build \
       -Z build-std=core,alloc \
       -Z build-std-features=compiler-builtins-mem \
       --release \
       --target x86_64-unknown-none \
-      --no-default-features --features host_ai
+      --no-default-features --features "$KERNEL_FEATURES"
   fi
   popd >/dev/null
 fi

@@ -73,6 +73,23 @@ Windows:
 - Windows must not require direct passthrough of the host GPU/input for baseline operation.
 - If Windows 11 is targeted, RayOS must provide required platform expectations via virtualization (e.g., vTPM when needed), under RayOS policy.
 
+### 5.1 Security boundary (explicit) — what is exposed vs denied
+
+Exposed to the guest (policy-gated, via virtualization only):
+- virtual disks and firmware variables owned by RayOS (persistent)
+- virtual input devices routed by RayOS (only when “presented”)
+- optional virtual networking when policy enables it
+- virtual GPU (no host GPU ownership)
+- optional vTPM for Windows 11 expectations
+
+Explicitly **not** exposed to the guest:
+- Host device passthrough by default (GPU, USB, raw disks, PCI devices)
+- Host filesystem mounts outside explicit, policy-approved surfaces
+- Host control interfaces such as QEMU monitor sockets / host automation hooks
+
+Important note (developer harness):
+- The repo’s host tooling uses QEMU monitor sockets and host scripts to drive bring-up. This is a **dev harness** and is **not** a security boundary; authorization and policy enforcement must live in the RayOS runtime.
+
 ---
 
 ## 6) Presentation model

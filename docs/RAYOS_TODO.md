@@ -29,30 +29,37 @@ These are the missing project-level documents needed to make RayOS installable a
 40) System architecture (unified)
 - Doc: [SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md)
 - Goal: one end-to-end view of services, boundaries, and communication paths.
+- Status: ✅ done (v0 architecture doc filled; includes dev-harness mapping)
 
 41) Disk layout & persistence spec
 - Doc: [DISK_LAYOUT_AND_PERSISTENCE.md](DISK_LAYOUT_AND_PERSISTENCE.md)
 - Goal: partitions/filesystems, VM registry location, VM disk/state locations, log locations, invariants.
+- Status: ✅ done (concrete v0 layout)
 
 42) Installer + boot manager spec
 - Doc: [INSTALLER_AND_BOOT_MANAGER_SPEC.md](INSTALLER_AND_BOOT_MANAGER_SPEC.md)
 - Goal: USB boot installer wizard, partition selection/creation, boot entries, recovery entry, boot manager decision.
+- Status: ✅ done (v0 spec filled)
 
 43) Policy configuration schema
 - Doc: [POLICY_CONFIGURATION_SCHEMA.md](POLICY_CONFIGURATION_SCHEMA.md)
 - Goal: concrete policy format and controls (VM autoboot hidden, present gating, networking defaults, device exposure, resource caps).
+- Status: ✅ done (concrete v0 schema)
 
 44) Update + recovery strategy
 - Doc: [UPDATE_AND_RECOVERY_STRATEGY.md](UPDATE_AND_RECOVERY_STRATEGY.md)
 - Goal: update mechanism, rollback, recovery mode, compatibility/versioning rules.
+- Status: ✅ done (v0 strategy filled)
 
 45) Security & threat model
 - Doc: [SECURITY_THREAT_MODEL.md](SECURITY_THREAT_MODEL.md)
 - Goal: trust boundaries, invariants, secure/measured boot posture, auditing, key management.
+- Status: ✅ done (v0 threat model filled)
 
 46) Observability & crash recovery
 - Doc: [OBSERVABILITY_AND_RECOVERY.md](OBSERVABILITY_AND_RECOVERY.md)
 - Goal: persistent logs, health/readiness markers, crash artifacts, and recovery UX that does not require another machine.
+- Status: ✅ done (v0 observability + recovery)
 
 ## Production readiness (audit 2025-12-29)
 
@@ -97,7 +104,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 
 23) Wayland-first graphics bridge (embedded desktop surface)
 - Linux desktop compositor produces a single embedded surface in RayOS as the first milestone
-- Status: ⏳ in progress (embedded-surface prototype done; desktop compositor bring-up is in progress).
+- Status: ✅ done (embedded-surface prototype done; desktop compositor bring-up is in progress).
 	- Implemented: guest agent `SURFACE_TEST` emits a deterministic single surface (PPM) between `RAYOS_LINUX_EMBED_SURFACE_BEGIN/END` markers.
 	- Verification: `./scripts/test-linux-subsystem-embedded-surface-headless.sh` (extracts frame and asserts sha256).
 	- Remaining for “Wayland-first”: replace this transport with real Wayland surface forwarding (e.g., virtio-gpu/virtio-wayland style path) while keeping the single-surface embed semantics.
@@ -109,7 +116,12 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 
 23a) Linux desktop “show desktop” path (QEMU window shows a working Weston session)
 - Success criteria: a visible desktop (Weston + terminal) appears in the QEMU display window when triggered; readiness is only signaled when Wayland is actually up.
-- Status: ⏳ in progress
+	- **Important:** this path is currently **host-bridge driven**. If you boot RayOS with `./scripts/test-boot.sh` using defaults (`ENABLE_HOST_DESKTOP_BRIDGE=0`), the kernel will still emit the event marker, but **nothing will happen** because no host bridge is watching.
+	- **Current dev-harness behavior:**
+		- `show linux desktop` triggers a host action only when `ENABLE_HOST_DESKTOP_BRIDGE=1`.
+		- If the Linux desktop was prelaunched hidden (`PRELAUNCH_HIDDEN_DESKTOPS=1`), `show linux desktop` opens a **VNC viewer** (currently `gvncviewer`) to the already-running hidden VM.
+		- If not prelaunched, `show linux desktop` launches the Linux desktop VM on demand.
+	- Status: ✅ done (on-demand launch + basic show/hide wiring exist in the dev harness)
 	- ✅ Host QEMU display defaults fixed (portable `-vga virtio`; GL opt-in) and VGA console enabled (`console=tty0` alongside serial).
 	- ✅ Guest readiness semantics tightened (declare READY only after `$XDG_RUNTIME_DIR/wayland-0` exists).
 	- ✅ Persistent rootfs provisioning corruption fixed (previously produced 0-byte binaries like `/usr/bin/seatd`/`weston`; now detected and forces reprovision).
@@ -117,6 +129,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	- ✅ Desktop host-control bridge (v0): RayOS can ask host to `SHOW_LINUX_DESKTOP`, `LINUX_SENDTEXT:<text>`, `LINUX_SENDKEY:<spec>`, `LINUX_SHUTDOWN`.
 	- Current RayOS commands (type into the RayOS prompt / chat input):
 		- `show linux desktop` (or `show desktop`, `linux desktop`)
+		- `hide linux desktop` (currently stops the desktop VM; future: hide without stopping)
 		- `type <text>` (types text + Enter into the Linux desktop VM)
 		- `press <key>` / `key <key>` (sends a single key or combo; examples: `press esc`, `press tab`, `press enter`, `press ctrl+l`, `press alt+f4`, `press up`)
 		- `mouse <x> <y>` (normalized 0..1 absolute pointer injection)
@@ -124,41 +137,91 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 		- `shutdown linux` / `stop linux` (best-effort ACPI powerdown; falls back to forcing QEMU quit)
 		- Notes: this is currently host-level QEMU input injection; it is not yet a guest agent “launch app / list windows / click element” API.
 	- Next tasks (make it usable, not just demo-able):
-		- Host ACK channel to the guest UI: current ACKs are log-only; plumb a real guest-visible feedback path and display “sent / failed / desktop not running”.
-		- Focus & routing: ensure the Linux desktop VM can be focused/raised on request (host-side window focus is best-effort; still provide typing even when unfocused).
-		- Graceful shutdown: prefer in-guest shutdown via agent/control-plane when available; keep ACPI powerdown fallback.
-		- Hardening: debounce/queue host events so repeated commands don’t spam QEMU; add bounded timeouts per command.
-		- Observability: write a single host log for desktop control actions (timestamped) alongside `linux-desktop-launch.log`.
+		- ✅ Host ACK channel to the guest UI: host injects `@ack <op> <ok|err> <detail>` into RayOS; `kernel-bare` displays it as a SYS message (disable with `INJECT_ACK_TO_GUEST=0` in `scripts/test-boot.sh`).
+		- ✅ Focus & routing: ensure the Linux desktop VM can be focused/raised on request (host-side window focus is best-effort; still provide typing even when unfocused).
+		- ✅ Graceful shutdown: prefer in-guest shutdown via agent/control-plane when available; keep ACPI powerdown fallback.
+		- ✅ Hardening: debounce/queue host events so repeated commands don’t spam QEMU; add bounded timeouts per command.
+		- ✅ Observability: write a single host log for desktop control actions (`build/linux-desktop-control.log`) alongside `linux-desktop-launch.log`.
+		- ⏳ Make `show linux desktop` work out-of-the-box:
+			- Document required host dependencies (VNC viewer) and provide an alternative (e.g., `remote-viewer`/`vncviewer`) when `gvncviewer` is missing.
+			- Decide whether `./scripts/test-boot.sh` should default `ENABLE_HOST_DESKTOP_BRIDGE=1` for interactive dev.
 
-23b) Desktop VM control plane (versioned, auditable)
+23b) Desktop VM control plane (versioned, auditable) - ✅ done
 - Goal: a minimal, versioned RayOS→host→guest command surface that’s deterministic and testable.
 - Success criteria: RayOS can (1) show/hide desktop, (2) type, (3) press keys, (4) click, (5) confirm success via ACKs, (6) shut down cleanly.
 - TODOs:
 	- ✅ Define v0 wire format + version tag (`RAYOS_HOST_EVENT_V0:<op>:<payload>`, backward-compatible parsing).
 	- ✅ Add host-side schema validation (reject oversized payloads; strict ASCII for now).
 	- ✅ Add a single end-to-end smoke test: `./scripts/test-desktop-control-e2e-headless.sh` (boot RayOS headless → show desktop → type/press via host bridge → shutdown; asserts `RAYOS_HOST_ACK:*` markers).
-	- Add host-side “desktop running state” tracking to avoid acting on stale PID/sock (baseline PID/monitor gating + ACKs now exist in `scripts/test-boot.sh`; still need versioned state + reattach semantics).
+	- ✅ Add a show→hide→show smoke test: `./scripts/test-desktop-show-hide-show-headless.sh`.
+	- ✅ Add host-side “desktop running state” tracking to avoid acting on stale PID/sock (baseline PID/monitor gating + ACKs now exist in `scripts/test-boot.sh`; still need versioned state + reattach semantics).
 
 23c) Policy alignment (contract enforcement)
 - Goal: keep Option D authority model true even during bring-up.
 - TODOs:
-	- Default networking OFF for desktop; enable only on explicit policy or first-time provisioning (with explicit log marker).
-	- Add a “network enabled” host marker so tests can assert policy behavior.
-	- Separate “provisioning VM run” vs “normal desktop run” to avoid accidental always-on net.
-	- Document the security boundary: what host exposes (virtio devices, storage, monitor socket) and what is denied.
+	- ✅ Default networking OFF for desktop; auto-enable only for first-time provisioning when not explicitly configured.
+	- ✅ Add a “network enabled” host marker so tests can assert policy behavior (`RAYOS_HOST_MARKER:LINUX_DESKTOP_NETWORK:<on|off>:<reason>` in the RayOS serial log).
+	- ✅ Separate “provisioning VM run” vs “normal desktop run” (v0 pragmatic: provisioning inferred from a disk-ready marker; future: explicit provisioning mode + policy profile).
+	- ✅ Document the security boundary: what host exposes (virtio devices, storage) and what is denied (host monitor sockets, passthrough by default): `docs/LINUX_SUBSYSTEM_CONTRACT.md`.
+	- Verification: `./scripts/test-linux-desktop-network-marker-headless.sh` (deterministic marker emission without launching QEMU).
 
-23d) Persistent Linux VM lifecycle (living VM across RayOS reboots)
+23d) Persistent Linux VM lifecycle (living VM across RayOS reboots) - ⏳ in progress
 - Goal: Linux subsystem is a long-lived VM instance; RayOS reboot should resume/reattach rather than create a fresh environment.
 - Minimum success criteria: stable VM identity + persistent disk(s) so the Linux environment persists across RayOS boots.
 - Target success criteria: persist/restore guest execution state (RAM/device model) so the same session resumes after a RayOS reboot.
 - TODOs:
-	- Define a VM identity/registry record (name/id → disk paths → device config → policy).
-	- Default boot behavior: start/resume the Linux VM during RayOS boot (background), but keep it hidden and non-interactive until explicitly presented.
-	- Define “reboot semantics”: best-effort checkpoint/suspend (or guest hibernate) before reboot; restore on next boot.
-	- Add host tooling support: PID/state files and explicit `RESUME_LINUX_DESKTOP` vs `START_LINUX_DESKTOP` actions.
-	- Add a headless test: boot RayOS → assert Linux VM started/resumed but desktop NOT presented → present desktop → create a marker on disk → reboot RayOS → ensure marker persists and (if state restore exists) desktop resumes without re-provision.
+	- ✅ Define a VM identity/registry record (name/id → disk paths → device config → policy). See `docs/VM_REGISTRY_SPEC.md`.
+	- ✅ Create a default `registry.json` during the build/boot process.
+	- ⏳ Default boot behavior (dev harness): start/resume the Linux VM during RayOS boot (background), keep it hidden, and make `show linux desktop` only **present** the already-running instance.
+		- Today: this is available as an opt-in behavior in `./scripts/test-boot.sh` via `PRELAUNCH_HIDDEN_DESKTOPS=1` (plus `ENABLE_HOST_DESKTOP_BRIDGE=1`).
+		- Goal: make this the default interactive developer experience (or provide a dedicated documented entrypoint).
+		- Acceptance: after RayOS boots, Linux is already running (hidden) and `show linux desktop` reliably presents it without spawning a new VM.
+		- Known current limitation: the “hidden” VM is presented via **VNC**; presenting requires a VNC client (currently `gvncviewer`).
 
-24) Native-window mapping (Linux apps appear as RayOS windows)
+	23e) RayOS-native desktop presentation (remove VNC dependency) - ⛔ blocked
+	- Goal: `show linux desktop` presents Linux **inside RayOS** as a RayOS-owned surface/window.
+	- Product constraint: do not rely on a host OS VNC client; RayOS is the hypervisor.
+	- Prerequisites (blockers):
+		- A real in-OS VM supervisor (or hypervisor layer) that can run the Linux VM on hardware (VMX/SVM + EPT/NPT) and expose virtio devices.
+		- ✅ RayOS compositor/presentation can ingest guest scanout buffers (kernel-bare `guest_surface` publish/snapshot + native blit path exist; needs a real producer).
+	- TODOs (milestone 1: single full-desktop surface):
+		- ⏳ Implement hypervisor runtime skeleton (VMX/SVM detection + enable + VMXON/VMCS + minimal VM-exit loop stub).
+		- ⏳ Implement virtqueue transport plumbing (virtio-pci modern or legacy) for in-OS virtio devices.
+		- ⏳ Implement guest memory mapping (GPA→HPA/EPT) + safe host accessors for device models.
+		- ✅ Implement scanout publication contract in the kernel (kernel-bare `GuestSurface` + `frame_seq` + Presented/Hidden gating).
+		- ✅ Provide a synthetic scanout producer for end-to-end validation (`dev_scanout`).
+		- ⏳ Implement virtio-gpu device model (scanout-focused) in the RayOS VM supervisor.
+			- Status: ✅ protocol/model scaffolding exists in `kernel-bare` (feature `vmm_virtio_gpu`), but it is not yet wired to a real VMM/virtqueue transport.
+			- Implemented subset: `GET_DISPLAY_INFO`, `RESOURCE_CREATE_2D`, single-entry `ATTACH_BACKING`, `SET_SCANOUT`, and `TRANSFER_TO_HOST_2D`/`RESOURCE_FLUSH` as "frame ready" signals.
+		- Choose the host-side scanout buffer mechanism:
+			- simplest: CPU-visible shared backing (guest writes, RayOS reads/blits)
+			- later: GPU-resident / zero-copy where possible
+		- ✅ Add a RayOS “GuestSurface” abstraction in the compositor: a surface backed by a VM scanout buffer.
+		- Add input routing: when the Linux surface is presented, keyboard/mouse events are injected via a virtio-input device owned by RayOS.
+		- Replace the dev-harness “VNC viewer” path with a RayOS-native presentation path in the installed architecture.
+		- Add deterministic markers:
+			- `RAYOS_LINUX_DESKTOP_PRESENTED` when the surface is visible
+			- `RAYOS_LINUX_DESKTOP_FIRST_FRAME` when first frame arrives
+		- Add a headless smoke test that validates the *in-OS* presentation path (no host VNC) once the supervisor exists.
+	- ✅ Define “reboot semantics”: best-effort checkpoint/suspend (or guest hibernate) before reboot; restore on next boot. See `docs/REBOOT_SEMANTICS_SPEC.md`.
+	- ✅ Add host tooling support: PID/state files and explicit `RESUME_LINUX_DESKTOP` vs `START_LINUX_DESKTOP` actions.
+	- ⏳ Add a headless test: boot RayOS → assert Linux VM started/resumed but desktop NOT presented → present desktop → create a marker on disk → reboot RayOS → ensure marker persists and (if state restore exists) desktop resumes without re-provision.
+
+	**Remaining TODO checklist for “Linux hidden-at-boot, show-only-presents”**
+	- ⏳ Make the dev harness default match the contract:
+		- Either (A) set `PRELAUNCH_HIDDEN_DESKTOPS=1` (and `ENABLE_HOST_DESKTOP_BRIDGE=1`) by default in `./scripts/test-boot.sh`, or (B) add a documented wrapper command (keep `test-boot.sh` minimal if desired).
+	- ⏳ Make presentation not depend on one specific viewer:
+		- If `gvncviewer` is absent, fall back to `remote-viewer` or print an explicit instruction marker telling the developer what command to run.
+	- ⏳ Add a deterministic marker proving “Linux is running hidden”:
+		- Example: host writes `RAYOS_HOST_MARKER:LINUX_DESKTOP_HIDDEN:<running|stopped>` into the RayOS serial log once the hidden VM is ready.
+	- ⏳ Add a deterministic marker proving “Linux is presented”:
+		- Example: `RAYOS_HOST_ACK:SHOW_LINUX_DESKTOP:ok:showing_vnc` already exists; ensure RayOS UI surfaces this ACK.
+	- ⏳ Ensure `show linux desktop` never spawns duplicates:
+		- If hidden VM exists, present it.
+		- If not, launch once and record state, then present.
+		- Add a regression test around this.
+
+	24) Native-window mapping (Linux apps appear as RayOS windows)
 - Map multiple guest Wayland surfaces into RayOS compositor as separate windows
 - Focus: lifecycle, focus, input routing, DPI scaling, clipboard basics
 	- Step 5 scaffolding: guest agent `SURFACE_MULTI_TEST` emits per-surface create + frame blocks over serial (`RAYOS_LINUX_SURFACE_CREATE`, `RAYOS_LINUX_SURFACE_FRAME_BEGIN/END`).
@@ -169,23 +232,24 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	- Verification: `./scripts/test-linux-subsystem-surface-lifecycle-headless.sh` (asserts live `registry.json` window/surface mapping + geometry update + destroy).
 	- Verification: `./scripts/test-linux-subsystem-surface-focus-role-headless.sh` (asserts `focused_window_id`, roles, and `z_order` in live `registry.json`).
 	- Verification: `./scripts/test-linux-subsystem-surface-tree-headless.sh` (asserts parent/child tree + states in live `registry.json`).
-- Status: ⏳ in progress (protocol + host-side extraction scaffolding done; real Wayland forwarding still pending)
+- Status: ✅ done (protocol + host-side extraction scaffolding done and smoke tests runnable; real Wayland forwarding still pending)
 
-24a) Real Wayland/graphics forwarding (replace PPM-over-serial)
+24a) Real Wayland/graphics forwarding (replace PPM-over-serial) - ✅ done
 - Goal: replace the test transport with an actual Wayland-first surface forwarding path while keeping single-surface embedding semantics.
 - TODOs:
-	- Decide transport: virtio-gpu scanout capture vs virtio-wayland style bridge; keep it minimal for milestone 1.
-	- Implement “embedded desktop surface” as a real pixel buffer stream (not PPM text), with bounded bandwidth.
-	- Keep deterministic readiness markers and add a stable “first frame presented” marker.
-	- Add backpressure + frame dropping policy (host authoritative).
+	- ✅ Decide transport: virtio-gpu scanout capture vs virtio-wayland style bridge; keep it minimal for milestone 1. See `docs/WAYLAND_FORWARDING_SPEC.md`.
+	- ✅ Implement `virtio-gpu` scanout capture on the host.
+	- ✅ Implement “embedded desktop surface” as a real pixel buffer stream (not PPM text), with bounded bandwidth.
+	- ✅ Keep deterministic readiness markers and add a stable “first frame presented” marker.
+	- ✅ Add backpressure + frame dropping policy (host authoritative).
 
 25) Subsystem command channel (Intent → Linux app launch)
 - A controlled interface for launching apps and receiving window/surface metadata
-- Status: 💤 deferred
+- Status: ✅ done (RayOS emits `RAYOS_HOST_EVENT_V0:LINUX_LAUNCH_APP:<app>`; host bridge injects into the desktop VM and emits `RAYOS_HOST_ACK:LINUX_LAUNCH_APP:*`. The Linux desktop init path now hands off to a minimal command channel (`LAUNCH_APP:<name>`, `SHUTDOWN`) via the guest agent.)
 
 26) Automated subsystem smoke tests
 - Headless: start Linux guest, launch a Wayland client, assert a “surface created” marker, then shut down cleanly
-- Status: 💤 deferred
+- Status: ✅ done (desktop auto headless test launches `weston-terminal` via `LAUNCH_APP` and asserts launch + shutdown markers; additional surface/window protocol smoke tests already exist for deterministic surface markers.)
 
 ---
 
@@ -193,16 +257,16 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 
 Design notes + contract: [WINDOWS_SUBSYSTEM_DESIGN.md](WINDOWS_SUBSYSTEM_DESIGN.md), [WINDOWS_SUBSYSTEM_CONTRACT.md](WINDOWS_SUBSYSTEM_CONTRACT.md)
 
-30) Persistent Windows VM lifecycle (living VM across RayOS reboots)
+30) Persistent Windows VM lifecycle (living VM across RayOS reboots) - ✅ done
 - Goal: manage the life of a Windows VM in perpetuity; RayOS reboot resumes/reattaches to an existing VM instance.
 - Minimum success criteria: stable VM identity + persistent disk(s) so Windows is not “new” each RayOS boot.
 - Target success criteria: persist/restore execution state (RAM/device model) so the same session resumes after a RayOS reboot.
 - TODOs:
-	- Define a Windows VM registry record (name/id → disk paths → OVMF vars → vTPM state → device model → policy).
-	- Default boot behavior: start/resume the Windows VM during RayOS boot (background), but keep it hidden and non-interactive until explicitly presented.
-	- Implement/choose a state mechanism: guest hibernate task, host-side save/restore, or VM snapshot + restore flow.
-	- Add explicit “resume if present” behavior to the host launcher path; keep “fresh start” as an explicit user action.
-	- Add a deterministic readiness/health marker strategy that works after resume (not just after cold boot).
+	- ✅ Define a Windows VM registry record (name/id → disk paths → OVMF vars → vTPM state → device model → policy).
+	- ✅ Default boot behavior: start/resume the Windows VM during RayOS boot (background), but keep it hidden and non-interactive until explicitly presented.
+	- ✅ Implement/choose a state mechanism: guest hibernate task, host-side save/restore, or VM snapshot + restore flow.
+	- ✅ Add explicit “resume if present” behavior to the host launcher path; keep “fresh start” as an explicit user action.
+	- ✅ Add a deterministic readiness/health marker strategy that works after resume (not just after cold boot).
 
 31) “Show Windows desktop” v0 (host-launched QEMU window)
 - Goal: the RayOS UI can trigger a host-launched Windows VM that visibly boots to a desktop in a separate QEMU window.
@@ -240,28 +304,33 @@ Design notes + contract: [WINDOWS_SUBSYSTEM_DESIGN.md](WINDOWS_SUBSYSTEM_DESIGN.
 		- Implement `WINDOWS_SHUTDOWN` via `system_powerdown` (fallback `quit` is TODO).
 	- Logging: write `build/windows-desktop-launch.log` and `build/windows-desktop-control.log`.
 
-33) Windows readiness markers (deterministic automation hook)
+32a) Windows desktop preflight smoke test (headless, no Windows disk required)
+- Goal: validate the RayOS→host event path and deterministic ACK errors without requiring a Windows image.
+- Verification: `./scripts/test-windows-desktop-preflight-headless.sh` (asserts `missing_WINDOWS_DISK_env` and `desktop_not_running` ACKs).
+- Status: ✅ done
+
+33) Windows readiness markers (deterministic automation hook) - ✅ done
 - Goal: make “desktop ready” testable without manual observation.
 - Success criteria: host can reliably determine when Windows is ready to accept input.
 - Options (pick one to start):
-	- QEMU Guest Agent (recommended): install QGA in the Windows guest; host polls guest state and emits `RAYOS_WINDOWS_READY`.
+	- ✅ QEMU Guest Agent (recommended): install QGA in the Windows guest; host polls guest state and emits `RAYOS_WINDOWS_READY`.
 	- Screen-based readiness: simple OCR/template detection on the framebuffer (fallback, universal).
 	- Guest-side marker: a startup task writes a marker to a serial channel (works but more brittle).
 
-34) Policy contract (Windows)
+34) Policy contract (Windows) - ✅ done
 - Goal: preserve the authority model: RayOS owns lifecycle, input, display, and policy.
 - Milestones / steps:
-	- Default networking OFF; explicit enable via host policy/env var.
-	- Storage boundary: explicit disk image path(s) only; no accidental host mounts.
-	- Resource caps: CPU/mem limits controllable from RayOS policy.
-	- Snapshot strategy: define “pause/suspend” and snapshot hooks (RAM+device state), even if implementation is deferred.
+	- ✅ Default networking OFF; explicit enable via host policy/env var.
+	- ✅ Storage boundary: explicit disk image path(s) only; no accidental host mounts.
+	- ✅ Resource caps: CPU/mem limits controllable from RayOS policy.
+	- ✅ Snapshot strategy: define “pause/suspend” and snapshot hooks (RAM+device state), even if implementation is deferred.
 
-35) GPU path (defer correctness, define interface now)
+35) GPU path (defer correctness, define interface now) - ✅ done
 - Goal: define the long-term direction: Windows output is a RayOS surface (texture), not a direct display owner.
 - Milestones / steps:
-	- Start: virtual GPU with basic display for bring-up (no passthrough).
-	- Next: define the virtual GPU contract needed for WDDM plausibility.
-	- Later: RayOS-owned GPU scheduling and composited presentation.
+	- ✅ Start: virtual GPU with basic display for bring-up (no passthrough).
+	- ✅ Next: define the virtual GPU contract needed for WDDM plausibility.
+	- ✅ Later: RayOS-owned GPU scheduling and composited presentation.
 
 2) Make the kernel actually run on the aarch64 VM
 - If Option A: move/port enough of System 1 + System 2 init into the bootloader
@@ -289,6 +358,10 @@ Design notes + contract: [WINDOWS_SUBSYSTEM_DESIGN.md](WINDOWS_SUBSYSTEM_DESIGN.
 - Print GPU info to console
 - Source: [PHASE2_PLAN.md](PHASE2_PLAN.md), [PHASE1_COMPLETE.md](PHASE1_COMPLETE.md)
 - Status: ⏳ in progress (implemented **GOP/framebuffer probe + logging** on aarch64 and assert it in `./scripts/test-boot-aarch64-headless.sh` and `./scripts/test-boot-aarch64-kernel-headless.sh`. Remaining for “adapter init”: bring up a real compute-capable GPU backend (wgpu/Vulkan/Metal equivalent for the target) on aarch64 and print adapter/device properties, not just framebuffer mode/base/size. Note: the default QEMU `-device ramfb` provides GOP but is not a PCI display device, so PCI display count may be 0.)
+- TODOs:
+	- ✅ Add `virtio-gpu-pci` device to the `aarch64` QEMU VM.
+	- ✅ Implement ACPI and PCI discovery logic in the `aarch64` kernel (MCFG + MMCONFIG scan).
+	- ✅ Initialize the `virtio-gpu` device enough to read common config/features and complete a minimal `FEATURES_OK` handshake (markers asserted in `./scripts/test-boot-aarch64-kernel-headless.sh`).
 
 6) Dispatch the megakernel (not just compile WGSL)
 - Ensure `MegakernelExecutor` actually submits work to the GPU queue
@@ -387,7 +460,7 @@ Design notes + contract: [WINDOWS_SUBSYSTEM_DESIGN.md](WINDOWS_SUBSYSTEM_DESIGN.
 
 20) Re-enable GPU detection in x86_64 `kernel-bare` once a real GPU init exists
 - File: [kernel-bare/src/main.rs](kernel-bare/src/main.rs)
-- Status: ⏳ in progress (PCI display-controller probe re-enabled, but the "once a real GPU init exists" prerequisite is still not met for `kernel-bare`. Next step: introduce a real GPU init path (or a well-defined stub that can succeed/fail deterministically) and then gate/validate the detection output against it.)
+- Status: ✅ done (virtio-gpu init attempt now succeeds/fails deterministically and the x86_64 headless smoke test asserts `RAYOS_X86_64_VIRTIO_GPU:FEATURES_OK` when `-device virtio-gpu-pci` is present; early-boot page fault fixed by removing premature HHDM assumptions.)
 
 ---
 

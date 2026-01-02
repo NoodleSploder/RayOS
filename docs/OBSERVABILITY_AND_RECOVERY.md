@@ -63,6 +63,7 @@ Desktop bridge (host harness) markers:
 
 - `RAYOS_HOST_EVENT_V0:<...>`
 - `RAYOS_HOST_ACK:<op>:<ok|err>:<detail>`
+- `RAYOS_HOST_MARKER:LINUX_DESKTOP_NETWORK:<on|off>:<reason>` (policy observability for provisioning/defaults)
 
 These are harness-level observability hooks and must not be treated as a security boundary.
 

@@ -39,6 +39,7 @@ set +e
 timeout "$TIMEOUT_SECS" "$QEMU_BIN" \
     -machine q35 \
     -m 2048 \
+    -device virtio-gpu-pci \
     -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
     -drive file="$IMAGE",format=raw \
     -serial "file:$SERIAL_LOG" \
@@ -58,10 +59,12 @@ tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
 BOOTLOADER_MARKER="RayOS uefi_boot: start"
 KERNEL_MARKER="RayOS kernel-bare: _start"
 BICAMERAL_MARKER="RayOS bicameral loop ready (':' for shell)"
+GPU_MARKER="RAYOS_X86_64_VIRTIO_GPU:FEATURES_OK"
 
 if grep -F -a -q "$BOOTLOADER_MARKER" "$SERIAL_NORM" \
     && grep -F -a -q "$KERNEL_MARKER" "$SERIAL_NORM" \
-    && grep -F -a -q "$BICAMERAL_MARKER" "$SERIAL_NORM"; then
+    && grep -F -a -q "$BICAMERAL_MARKER" "$SERIAL_NORM" \
+    && grep -F -a -q "$GPU_MARKER" "$SERIAL_NORM"; then
     echo "PASS: Found boot markers in serial log"
     echo "Serial log: $SERIAL_LOG"
     echo "QEMU log: $QEMU_LOG"

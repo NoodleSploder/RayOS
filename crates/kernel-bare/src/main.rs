@@ -1,11 +1,105 @@
 #![no_std]
 #![no_main]
 
+// ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
+#[inline(always)]
+fn init_boot_info(boot_info_phys: u64) {
+    // Store the boot info physical address for later use.
+    BOOT_INFO_PHYS.store(boot_info_phys, Ordering::Relaxed);
+
+    if boot_info_phys == 0 {
+        return;
+    }
+
+    // BootInfo lives in low physical memory. Early boot runs with identity mappings,
+    // later code can use `bootinfo_ref()` which translates via `phys_to_virt()`.
+    let bi = unsafe { &*(boot_info_phys as *const BootInfo) };
+    if bi.magic != BOOTINFO_MAGIC {
+        return;
+    }
+
+    unsafe {
+        FB_BASE = bi.fb_base as usize;
+        FB_WIDTH = bi.fb_width as usize;
+        FB_HEIGHT = bi.fb_height as usize;
+        FB_STRIDE = bi.fb_stride as usize;
+    }
+
+    // Optional staged blobs.
+    MODEL_PHYS.store(bi.model_ptr, Ordering::Relaxed);
+    MODEL_SIZE.store(bi.model_size, Ordering::Relaxed);
+
+    // Capture best-effort boot time baseline.
+    BOOT_UNIX_SECONDS_AT_BOOT.store(bi.boot_unix_seconds, Ordering::Relaxed);
+    BOOT_TIME_VALID.store(bi.boot_time_valid as u64, Ordering::Relaxed);
+}
+
+#[inline(always)]
+fn init_idt() {
+    // Install a minimal IDT that supports timer + keyboard interrupts and key exceptions.
+    cli();
+    unsafe {
+        idt_set_gate(TIMER_VECTOR, isr_timer as *const () as u64);
+        idt_set_gate(KEYBOARD_VECTOR, isr_keyboard as *const () as u64);
+
+        idt_set_gate(UD_VECTOR, isr_invalid_opcode as *const () as u64);
+        idt_set_gate(PF_VECTOR, isr_page_fault as *const () as u64);
+        idt_set_gate(GP_VECTOR, isr_general_protection as *const () as u64);
+        idt_set_gate_ist(DF_VECTOR, isr_double_fault as *const () as u64, DF_IST_INDEX);
+
+        lidt();
+    }
+}
+
+#[inline(always)]
+fn fb_try_draw_test_pattern(_bi: &BootInfo) {
+    // Phase 1: No-op for now. Optionally draw a test pattern to the framebuffer.
+    // TODO: Implement a real test pattern for framebuffer validation.
+}
+
+#[inline(always)]
+fn init_interrupts() {
+    // Bring up interrupts using the PIC by default.
+    // (APIC/IOAPIC routing is handled later in `kernel_after_paging`.)
+    pic_remap_and_unmask_irq0();
+    pic_unmask_irq1();
+    pit_init_hz(100);
+    sti();
+}
+
+
+
+
+// Core prelude for no_std
+use core::option::Option::{self, Some, None};
+use core::result::Result::{self, Ok, Err};
+use core::marker::{Sync, Send};
+use core::ops::Drop;
+use core::iter::Iterator;
+use core::cmp::Ord;
+
 use core::cell::UnsafeCell;
 use core::arch::{asm, global_asm};
 use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use libm::{expf, sqrtf};
+
+mod acpi;
+mod pci;
+mod guest_surface;
+mod vmm;
+
+#[cfg(feature = "vmm_hypervisor")]
+mod hypervisor;
+
+#[cfg(feature = "dev_scanout")]
+mod dev_scanout;
+
+#[cfg(feature = "vmm_virtio_gpu")]
+mod virtio_gpu_proto;
+
+#[cfg(feature = "vmm_virtio_gpu")]
+mod virtio_gpu_model;
 
 const KERNEL_BASE: u64 = 0xffff_ffff_8000_0000;
 static KERNEL_PHYS_START_ALIGNED: AtomicU64 = AtomicU64::new(0);
@@ -133,6 +227,24 @@ fn serial_write_hex_u64(mut value: u64) {
     }
     for b in buf {
         serial_write_byte(b);
+    }
+}
+
+fn serial_write_u32_dec(mut value: u32) {
+    let mut buf = [0u8; 10];
+    let mut i = 0usize;
+    if value == 0 {
+        serial_write_byte(b'0');
+        return;
+    }
+    while value != 0 && i < buf.len() {
+        buf[i] = b'0' + (value % 10) as u8;
+        i += 1;
+        value /= 10;
+    }
+    while i != 0 {
+        i -= 1;
+        serial_write_byte(buf[i]);
     }
 }
 
@@ -1907,7 +2019,7 @@ static mut IRQ1_FLAGS: u16 = 0;
 //=============================================================================
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct LogicRay {
     id: u64,
     op: u8,
@@ -1957,6 +2069,15 @@ static CONDUCTOR_LAST_TICK: AtomicU64 = AtomicU64::new(0);
 // Host-bridge (Conductor/ai_bridge) presence indicator.
 // We consider the bridge "connected" once we have received at least one AI reply line over COM1.
 static HOST_BRIDGE_CONNECTED: AtomicBool = AtomicBool::new(false);
+
+// Linux subsystem lifecycle (host-driven today).
+// Updated from:
+// - user commands (show/hide)
+// - host-injected @ack lines (from scripts/test-boot.sh)
+//
+// States (u8):
+// 0 unavailable, 1 starting, 2 available (running hidden), 3 running (presented), 4 stopping
+static LINUX_DESKTOP_STATE: AtomicU8 = AtomicU8::new(0);
 
 const CONDUCTOR_TARGET_DEPTH: usize = 8;
 const CONDUCTOR_MAX_SUBMITS_PER_TICK: usize = 2;
@@ -2250,6 +2371,176 @@ const VIRTIO_STATUS_DRIVER: u8 = 2;
 const VIRTIO_STATUS_DRIVER_OK: u8 = 4;
 const VIRTIO_STATUS_FEATURES_OK: u8 = 8;
 const VIRTIO_STATUS_FAILED: u8 = 0x80;
+
+const PCI_VENDOR_NONE: u16 = 0xFFFF;
+const PCI_VENDOR_VIRTIO: u16 = 0x1AF4;
+const PCI_CLASS_DISPLAY: u8 = 0x03;
+
+fn pci_read8(bus: u8, dev: u8, func: u8, off: u8) -> u8 {
+    let v = pci_read32(bus, dev, func, off & !3);
+    ((v >> ((off & 3) * 8)) & 0xFF) as u8
+}
+
+fn pci_read16(bus: u8, dev: u8, func: u8, off: u8) -> u16 {
+    let v = pci_read32(bus, dev, func, off & !3);
+    ((v >> ((off & 2) * 8)) & 0xFFFF) as u16
+}
+
+fn pci_bar_base(bus: u8, dev: u8, func: u8, bar: u8) -> Option<u64> {
+    if bar >= 6 {
+        return None;
+    }
+    let off = 0x10u8 + bar.saturating_mul(4);
+    let low = pci_read32(bus, dev, func, off);
+    if (low & 0x1) != 0 {
+        // I/O space BAR
+        return None;
+    }
+    let ty = (low >> 1) & 0x3;
+    let low_addr = (low as u64) & !0xFu64;
+    if ty == 0x2 {
+        let high = pci_read32(bus, dev, func, off.wrapping_add(4)) as u64;
+        Some((high << 32) | low_addr)
+    } else {
+        Some(low_addr)
+    }
+}
+
+#[inline(always)]
+fn mmio_read8(phys: u64, off: u64) -> u8 {
+    // Early bring-up: rely on identity-mapped physical addresses.
+    // This avoids touching HHDM before paging/HHDM are established.
+    let addr = phys.wrapping_add(off) as *const u8;
+    unsafe { core::ptr::read_volatile(addr) }
+}
+
+#[inline(always)]
+fn mmio_read16(phys: u64, off: u64) -> u16 {
+    let addr = phys.wrapping_add(off) as *const u16;
+    unsafe { core::ptr::read_volatile(addr) }
+}
+
+#[inline(always)]
+fn mmio_read32(phys: u64, off: u64) -> u32 {
+    let addr = phys.wrapping_add(off) as *const u32;
+    unsafe { core::ptr::read_volatile(addr) }
+}
+
+#[inline(always)]
+fn mmio_write8(phys: u64, off: u64, v: u8) {
+    let addr = phys.wrapping_add(off) as *mut u8;
+    unsafe { core::ptr::write_volatile(addr, v) }
+}
+
+#[inline(always)]
+fn mmio_write32(phys: u64, off: u64, v: u32) {
+    let addr = phys.wrapping_add(off) as *mut u32;
+    unsafe { core::ptr::write_volatile(addr, v) }
+}
+
+fn gpu_init_try_virtio_display_bus0() -> bool {
+    // Find a virtio display controller on bus 0.
+    for dev in 0u8..32 {
+        for func in 0u8..8 {
+            let id = pci_read32(0, dev, func, 0x00);
+            let vendor = (id & 0xFFFF) as u16;
+            if vendor == PCI_VENDOR_NONE {
+                continue;
+            }
+            if vendor != PCI_VENDOR_VIRTIO {
+                continue;
+            }
+
+            let class_reg = pci_read32(0, dev, func, 0x08);
+            let class = ((class_reg >> 24) & 0xFF) as u8;
+            if class != PCI_CLASS_DISPLAY {
+                continue;
+            }
+
+            // Enable MEM space + bus mastering.
+            let cmdsts = pci_read32(0, dev, func, 0x04);
+            let mut cmd = (cmdsts & 0xFFFF) as u16;
+            cmd |= 0x2; // MEM space
+            cmd |= 0x4; // bus master
+            pci_write32(0, dev, func, 0x04, (cmdsts & 0xFFFF_0000) | (cmd as u32));
+
+            // Parse PCI capability list for virtio vendor-specific caps (cap_id=0x09).
+            let mut cap_ptr = pci_read8(0, dev, func, 0x34) & 0xFC;
+            let mut common_cfg_phys: u64 = 0;
+
+            for _ in 0..64 {
+                if cap_ptr == 0 {
+                    break;
+                }
+                let cap_id = pci_read8(0, dev, func, cap_ptr);
+                let next = pci_read8(0, dev, func, cap_ptr.wrapping_add(1)) & 0xFC;
+                if cap_id == 0x09 {
+                    let cfg_type = pci_read8(0, dev, func, cap_ptr.wrapping_add(3));
+                    let bar = pci_read8(0, dev, func, cap_ptr.wrapping_add(4));
+                    let off = pci_read32(0, dev, func, cap_ptr.wrapping_add(8)) as u64;
+                    if cfg_type == 1 {
+                        if let Some(bar_base) = pci_bar_base(0, dev, func, bar) {
+                            common_cfg_phys = bar_base.wrapping_add(off);
+                        }
+                    }
+                }
+                if next == 0 || next == cap_ptr {
+                    break;
+                }
+                cap_ptr = next;
+            }
+
+            serial_write_str("RAYOS_X86_64_VIRTIO_GPU:FOUND\n");
+            if common_cfg_phys == 0 {
+                serial_write_str("RAYOS_X86_64_VIRTIO_GPU:NO_COMMON_CFG\n");
+                return false;
+            }
+
+            // Minimal virtio-modern handshake through common config.
+            // Offsets within virtio_pci_common_cfg
+            //   0x00 device_feature_select (u32)
+            //   0x04 device_feature (u32)
+            //   0x08 driver_feature_select (u32)
+            //   0x0C driver_feature (u32)
+            //   0x12 num_queues (u16)
+            //   0x14 device_status (u8)
+            mmio_write32(common_cfg_phys, 0x00, 0);
+            let feat0 = mmio_read32(common_cfg_phys, 0x04);
+            mmio_write32(common_cfg_phys, 0x00, 1);
+            let feat1 = mmio_read32(common_cfg_phys, 0x04);
+
+            serial_write_str("[gpu] virtio common_cfg=0x");
+            serial_write_hex_u64(common_cfg_phys);
+            serial_write_str(" num_queues=");
+            serial_write_u32_dec(mmio_read16(common_cfg_phys, 0x12) as u32);
+            serial_write_str(" features_hi=0x");
+            serial_write_hex_u64(feat1 as u64);
+            serial_write_str(" features_lo=0x");
+            serial_write_hex_u64(feat0 as u64);
+            serial_write_str("\n");
+
+            mmio_write8(common_cfg_phys, 0x14, 0);
+            mmio_write8(common_cfg_phys, 0x14, 0x01 | 0x02);
+
+            // Negotiate no features for deterministic stub bring-up.
+            mmio_write32(common_cfg_phys, 0x08, 0);
+            mmio_write32(common_cfg_phys, 0x0C, 0);
+            mmio_write32(common_cfg_phys, 0x08, 1);
+            mmio_write32(common_cfg_phys, 0x0C, 0);
+
+            let st = mmio_read8(common_cfg_phys, 0x14);
+            mmio_write8(common_cfg_phys, 0x14, st | 0x08);
+            let st2 = mmio_read8(common_cfg_phys, 0x14);
+            if (st2 & 0x08) != 0 {
+                serial_write_str("RAYOS_X86_64_VIRTIO_GPU:FEATURES_OK\n");
+                return true;
+            }
+            serial_write_str("RAYOS_X86_64_VIRTIO_GPU:FEATURES_FAIL\n");
+            return false;
+        }
+    }
+    false
+}
 
 fn pci_cfg_addr(bus: u8, dev: u8, func: u8, off: u8) -> u32 {
     0x8000_0000u32
@@ -3299,6 +3590,7 @@ const HHDM_OFFSET: u64 = 0xffff_8000_0000_0000;
 const DEFAULT_HHDM_PHYS_LIMIT: u64 = 0x1_0000_0000; // 4GiB
 
 static HHDM_PHYS_LIMIT: AtomicU64 = AtomicU64::new(DEFAULT_HHDM_PHYS_LIMIT);
+static HHDM_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 fn hhdm_phys_limit() -> u64 {
@@ -3322,12 +3614,25 @@ fn set_hhdm_phys_limit(new_limit: u64) {
 
 #[inline(always)]
 fn phys_to_virt(phys: u64) -> u64 {
-    phys + HHDM_OFFSET
+    // Before `init_paging()` runs we rely on low identity mappings.
+    // After switching to our own page tables, we access physical resources via the HHDM.
+    if HHDM_ACTIVE.load(Ordering::Relaxed) {
+        // Callers should generally ensure `phys < hhdm_phys_limit()`.
+        phys.wrapping_add(HHDM_OFFSET)
+    } else {
+        phys
+    }
 }
 
 #[inline(always)]
 fn virt_to_phys(virt: u64) -> u64 {
-    virt - HHDM_OFFSET
+    if HHDM_ACTIVE.load(Ordering::Relaxed) {
+        // Only translate addresses in the HHDM window.
+        if virt >= HHDM_OFFSET {
+            return virt.wrapping_sub(HHDM_OFFSET);
+        }
+    }
+    virt
 }
 
 #[inline(always)]
@@ -3365,10 +3670,7 @@ fn bootinfo_ref() -> Option<&'static BootInfo> {
     if phys == 0 {
         return None;
     }
-    if phys >= hhdm_phys_limit() {
-        return None;
-    }
-    Some(unsafe { &*phys_as_ptr::<BootInfo>(phys) })
+    Some(unsafe { &*(phys_to_virt(phys) as *const BootInfo) })
 }
 
 #[inline(always)]
@@ -3519,7 +3821,7 @@ extern "C" {
 }
 
 #[repr(C, packed)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 struct IdtEntry {
     offset_low: u16,
     selector: u16,
@@ -3766,6 +4068,21 @@ fn lapic_write(offset: u32, value: u32) {
     }
 }
 
+fn lapic_read(offset: u32) -> u32 {
+    unsafe {
+        if LAPIC_MMIO == 0 {
+            return 0;
+        }
+        let reg = (LAPIC_MMIO + offset as u64) as *const u32;
+        core::ptr::read_volatile(reg)
+    }
+}
+
+fn lapic_id() -> u8 {
+    // Local APIC ID register at offset 0x20; ID is in bits 24..31.
+    (lapic_read(0x20) >> 24) as u8
+}
+
 fn lapic_enable() {
     // Ensure the APIC is enabled in IA32_APIC_BASE.
     const IA32_APIC_BASE: u32 = 0x1B;
@@ -3909,13 +4226,29 @@ fn pit_init_hz(hz: u32) {
     }
 }
 
+fn pic_eoi(irq: u8) {
+    unsafe {
+        // If the IRQ came from the slave PIC, we must EOI the slave first.
+        if irq >= 8 {
+            outb(0xA0, 0x20);
+        }
+        outb(0x20, 0x20);
+    }
+}
+
 #[no_mangle]
 extern "C" fn timer_interrupt_handler() {
     TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
     IRQ_TIMER_COUNT.fetch_add(1, Ordering::Relaxed);
     // Run a small slice of System 1 each tick to make it "running" without a scheduler.
     system1_process_budget(8);
-    lapic_eoi();
+    unsafe {
+        if LAPIC_MMIO != 0 {
+            lapic_eoi();
+        } else {
+            pic_eoi(0);
+        }
+    }
 }
 
 #[no_mangle]
@@ -3952,7 +4285,13 @@ extern "C" fn keyboard_interrupt_handler() {
             LAST_ASCII.store(ch as u64, Ordering::Relaxed);
         }
     }
-    lapic_eoi();
+    unsafe {
+        if LAPIC_MMIO != 0 {
+            lapic_eoi();
+        } else {
+            pic_eoi(1);
+        }
+    }
 }
 
 fn kbd_buf_push(byte: u8) {
@@ -4076,12 +4415,13 @@ fn shell_split_whitespace<'a>(line: &'a [u8], argv: &mut [&'a [u8]; 8]) -> usize
 }
 
 fn shell_print_usables() {
-    let (count, regions) = unsafe { (USABLE_REGION_COUNT, USABLE_REGIONS) };
+    let count = unsafe { USABLE_REGION_COUNT };
+    let regions = unsafe { &USABLE_REGIONS };
     serial_write_str("mmap regions=0x");
     serial_write_hex_u64(count as u64);
     serial_write_str("\n");
     for i in 0..count {
-        let r = regions[i];
+        let r = &regions[i];
         serial_write_str("  [");
         serial_write_hex_u64(i as u64);
         serial_write_str("] start=0x");
@@ -4134,7 +4474,7 @@ fn shell_print_mmap_raw() {
     };
 
     for i in 0..desc_count {
-        let d = descs[i];
+        let d = &descs[i];
         serial_write_str("  [");
         serial_write_hex_u64(i as u64);
         serial_write_str("] ty=0x");
@@ -5094,7 +5434,7 @@ fn acpi_find_madt(rsdp_addr: u64) -> Option<(*const Madt, u64, u64, u32, u16, u3
 }
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 struct BootMemoryDescriptor {
     ty: u32,
     _padding: u32,
@@ -5118,7 +5458,7 @@ extern "C" {
     static __kernel_end: u8;
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq, Eq)]
 struct UsableRegion {
     start: u64,
     end: u64,
@@ -5515,6 +5855,7 @@ fn init_paging() {
     }
 
     CURRENT_PML4_PHYS.store(pml4, Ordering::Relaxed);
+    HHDM_ACTIVE.store(true, Ordering::Relaxed);
 }
 
 fn init_paging_final_no_identity() {
@@ -5661,6 +6002,7 @@ fn init_paging_final_no_identity() {
         asm!("mov cr3, {0}", in(reg) pml4, options(nostack, preserves_flags));
     }
     CURRENT_PML4_PHYS.store(pml4, Ordering::Relaxed);
+    HHDM_ACTIVE.store(true, Ordering::Relaxed);
 }
 
 //=============================================================================
@@ -5941,168 +6283,38 @@ static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 #[no_mangle]
 pub extern "C" fn _start(boot_info_phys: u64) -> ! {
-    serial_init();
-    // UEFI may leave interrupts enabled. Until we have an IDT installed, any IRQ
-    // can cause a triple-fault reset. Keep interrupts off during early bring-up.
-    cli();
-    serial_write_str("RayOS kernel-bare: _start\n");
-
+    // We must enable SSE before any other code that might use floats, otherwise
+    // we'll hit a UD fault.
     cpu_enable_x87_sse();
 
-    BOOT_INFO_PHYS.store(boot_info_phys, Ordering::Relaxed);
+    // Set up serial for early-boot debug prints.
+    serial_init();
+    serial_write_str("RayOS kernel-bare: _start\n");
 
-    // Compute the kernel's physical base (we start executing with identity mappings)
-    // and precompute the virtual delta for the higher-half mapping.
-    const TWO_MIB: u64 = 0x20_0000;
-    let kernel_phys_start = unsafe { &__kernel_start as *const u8 as u64 };
-    let kernel_phys_end = unsafe { &__kernel_end as *const u8 as u64 };
-    let kernel_phys_start_aligned = align_down(kernel_phys_start, TWO_MIB);
-    let kernel_phys_end_aligned = align_up(kernel_phys_end, TWO_MIB);
-    KERNEL_PHYS_START_ALIGNED.store(kernel_phys_start_aligned, Ordering::Relaxed);
-    KERNEL_PHYS_END_ALIGNED.store(kernel_phys_end_aligned, Ordering::Relaxed);
-    KERNEL_VIRT_DELTA.store(KERNEL_BASE.wrapping_sub(kernel_phys_start_aligned), Ordering::Relaxed);
+    // Copy boot info to a safe place and set up basic env.
+    init_boot_info(boot_info_phys);
 
-    let (fb_phys, fb_width, fb_height, fb_stride, rsdp_phys, model_ptr, model_size, boot_unix, boot_time_valid) = unsafe {
-        if boot_info_phys == 0 {
-            serial_write_str("  boot_info_phys=0\n");
-            (0usize, 0usize, 0usize, 0usize, 0u64, 0u64, 0u64, 0u64, 0u32)
-        } else {
-            let bi = &*(boot_info_phys as *const BootInfo);
-            if bi.magic != BOOTINFO_MAGIC {
-                serial_write_str("  boot_info magic mismatch\n");
-            }
-            (
-                bi.fb_base as usize,
-                bi.fb_width as usize,
-                bi.fb_height as usize,
-                bi.fb_stride as usize,
-                bi.rsdp_addr,
-                bi.model_ptr,
-                bi.model_size,
-                bi.boot_unix_seconds,
-                bi.boot_time_valid,
-            )
-        }
-    };
+    // Set up our own GDT+TSS for fault handling (IST).
+    init_gdt();
 
-    serial_write_str("  fb_base=0x");
-    serial_write_hex_u64(fb_phys as u64);
-    serial_write_str(" width=");
-    serial_write_hex_u64(fb_width as u64);
-    serial_write_str(" height=");
-    serial_write_hex_u64(fb_height as u64);
-    serial_write_str(" stride=");
-    serial_write_hex_u64(fb_stride as u64);
-    serial_write_str("\n");
+    // Set up IDT for faults and interrupts.
+    init_idt();
 
-    serial_write_str("  rsdp=0x");
-    serial_write_hex_u64(rsdp_phys);
-    serial_write_str("\n");
+    // Initialize memory management.
+    init_memory();
 
-    unsafe {
-        // Before we install our own paging, the bootloader's mappings are in effect.
-        // Use the physical address for the initial proof pixel write.
-        FB_BASE = fb_phys;
-        FB_WIDTH = fb_width;
-        FB_HEIGHT = fb_height;
-        FB_STRIDE = fb_stride;
-    }
+    // Draw a test pattern to the framebuffer to prove we have graphics.
+    let bi = bootinfo_ref().unwrap();
+    fb_try_draw_test_pattern(bi);
 
-    // Record optional model blob for local LLM.
-    MODEL_PHYS.store(model_ptr, Ordering::Relaxed);
-    MODEL_SIZE.store(model_size, Ordering::Relaxed);
+    // Initialize PCI subsystem.
+    init_pci(bi);
 
-    // Record boot wall-clock baseline, if provided.
-    BOOT_UNIX_SECONDS_AT_BOOT.store(boot_unix, Ordering::Relaxed);
-    BOOT_TIME_VALID.store(boot_time_valid as u64, Ordering::Relaxed);
+    // Initialize PIC/APIC and enable interrupts.
+    init_interrupts();
 
-    if boot_time_valid != 0 {
-        serial_write_str("SYS: boot time valid unix=0x");
-        serial_write_hex_u64(boot_unix);
-        serial_write_str("\n");
-    } else {
-        serial_write_str("SYS: boot time not available\n");
-    }
-
-    if LOCAL_LLM_ENABLED {
-        if model_ptr != 0 && model_size != 0 {
-            serial_write_str("SYS: local LLM model loaded bytes=0x");
-            serial_write_hex_u64(model_size);
-            serial_write_str("\n");
-        } else {
-            serial_write_str("SYS: local LLM enabled but model.bin missing (EFI/RAYOS/model.bin)\n");
-        }
-    }
-
-    // Early visible proof we got control.
-    unsafe {
-        let fb = FB_BASE as *mut u32;
-        if !fb.is_null() {
-            *fb = 0x00_ff_00;
-            *fb.add(1) = 0x00_ff_00;
-            *fb.add(FB_STRIDE) = 0x00_ff_00;
-            *fb.add(FB_STRIDE + 1) = 0x00_ff_00;
-        }
-    }
-
-    if boot_info_phys == 0 {
-        // No BootInfo means no paging/alloc init; limp along on bootloader mappings.
-        init_gdt();
-        init_memory();
-        kernel_main();
-    }
-
-    // Expand HHDM mapping coverage based on the UEFI memory map so we can safely
-    // dereference physical pointers above 4GiB (ACPI tables, memory map, etc.).
-    serial_write_str("  bootinfo: scanning max phys end...\n");
-    unsafe {
-        let bi = &*(boot_info_phys as *const BootInfo);
-        if bi.magic == BOOTINFO_MAGIC {
-            if let Some(max_end) = bootinfo_max_phys_end(bi) {
-                set_hhdm_phys_limit(max_end);
-            }
-        }
-    }
-
-    serial_write_str("  bootinfo: hhdm_phys_limit=0x");
-    serial_write_hex_u64(hhdm_phys_limit());
-    serial_write_str("\n");
-
-    serial_write_str("  phys_alloc: init from bootinfo...\n");
-
-    unsafe { phys_alloc_init_from_bootinfo(&*(boot_info_phys as *const BootInfo)) };
-
-    serial_write_str("  phys_alloc: init OK\n");
-    serial_write_str("  paging: init...\n");
-    init_paging();
-    serial_write_str("  paging: init OK\n");
-
-    // Relocate the stack into HHDM without returning to the old stack.
-    // We must not switch stacks mid-Rust-frame and then keep using locals.
-    serial_write_str("  stack: allocating page...\n");
-    if let Some(stack_phys) = phys_alloc_page() {
-        serial_write_str("  stack: phys=0x");
-        serial_write_hex_u64(stack_phys);
-        serial_write_str("\n");
-        let top = phys_to_virt(stack_phys + 4096);
-        let new_rsp = (top & !0xF).wrapping_sub(8);
-        let delta = KERNEL_VIRT_DELTA.load(Ordering::Relaxed);
-        let entry = (kernel_after_paging as usize as u64).wrapping_add(delta);
-        unsafe {
-            asm!(
-                "mov rsp, {stack}",
-                "xor rbp, rbp",
-                "jmp {entry}",
-                stack = in(reg) new_rsp,
-                entry = in(reg) entry,
-                in("rdi") rsdp_phys,
-                options(noreturn)
-            );
-        }
-    }
-
-    // If stack allocation failed, continue on the current stack (still mapped).
-    kernel_after_paging(rsdp_phys)
+    // Main kernel loop.
+    kernel_main();
 }
 
 #[no_mangle]
@@ -6170,8 +6382,12 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
             pic_mask_all();
             lapic_enable();
             if ioapic_phys != 0 {
-                ioapic_set_redir(irq0_gsi, TIMER_VECTOR, 0, irq0_flags);
-                ioapic_set_redir(irq1_gsi, KEYBOARD_VECTOR, 0, irq1_flags);
+                let dest = lapic_id();
+                serial_write_str("  LAPIC id=0x");
+                serial_write_hex_u64(dest as u64);
+                serial_write_str("\n");
+                ioapic_set_redir(irq0_gsi, TIMER_VECTOR, dest, irq0_flags);
+                ioapic_set_redir(irq1_gsi, KEYBOARD_VECTOR, dest, irq1_flags);
             } else {
                 pic_remap_and_unmask_irq0();
                 pic_unmask_irq1();
@@ -6239,18 +6455,27 @@ fn kernel_main() -> ! {
     clear_text_line(70, 300, 48, panel_bg);
     draw_text_bg(70, 300, "[..] System 1: GPU Init (stub)", 0xff_ff_00, panel_bg);
 
-    // Re-enabled: a safe PCI probe that never touches a GPU driver.
-    // This gives us a real signal in logs/UI without risking instability.
-    let gpu_detected = pci_probe_display_controller_bus0().is_some();
+    // Safe bring-up signal:
+    // - Log raw PCI display presence (for debugging)
+    // - Gate the "GPU ready" status on a deterministic init attempt
+    let gpu_present = pci_probe_display_controller_bus0().is_some();
     serial_write_str("[gpu] pci display controller: ");
-    if gpu_detected {
+    if gpu_present {
         serial_write_str("present\n");
     } else {
         serial_write_str("absent\n");
     }
 
+    let gpu_init_ok = gpu_init_try_virtio_display_bus0();
+    serial_write_str("[gpu] init (virtio stub): ");
+    if gpu_init_ok {
+        serial_write_str("ok\n");
+    } else {
+        serial_write_str("fail\n");
+    }
+
     clear_text_line(70, 300, 48, panel_bg);
-    if gpu_detected {
+    if gpu_init_ok {
         draw_text_bg(70, 300, "[OK] System 1: GPU Detected (reflex loop)", 0x00_ff_88, panel_bg);
     } else {
         draw_text_bg(70, 300, "[--] System 1: No PCI GPU (reflex loop)", 0xaa_aa_aa, panel_bg);
@@ -6262,6 +6487,27 @@ fn kernel_main() -> ! {
     // Intent is provided by System 2 in the current kernel build (deterministic NL parser stub).
     clear_text_line(70, 420, 48, panel_bg);
     draw_text_bg(70, 420, "[OK] Intent: Natural Language Parser", 0x00_ff_00, panel_bg);
+
+    fn linux_state_label(state: u8) -> (&'static str, u32) {
+        match state {
+            1 => ("[..] Linux Desktop: starting", 0xff_ff_00),
+            2 => ("[OK] Linux Desktop: available", 0x00_ff_00),
+            3 => ("[OK] Linux Desktop: running", 0x00_ff_00),
+            4 => ("[..] Linux Desktop: stopping", 0xff_ff_00),
+            _ => ("[--] Linux Desktop: unavailable", 0xaa_aa_aa),
+        }
+    }
+
+    fn render_linux_state(panel_bg: u32, state: u8) {
+        // This sits with the other subsystem status lines.
+        clear_text_line(70, 450, 48, panel_bg);
+        let (label, color) = linux_state_label(state);
+        draw_text_bg(70, 450, label, color, panel_bg);
+    }
+
+    // Initial Linux status.
+    let mut last_linux_state = LINUX_DESKTOP_STATE.load(Ordering::Relaxed);
+    render_linux_state(panel_bg, last_linux_state);
 
     SYSTEM1_RUNNING.store(true, Ordering::Relaxed);
 
@@ -6331,6 +6577,13 @@ fn kernel_main() -> ! {
     // Bicameral interactive loop:
     // - Default: free-form text is fed to System 2, which enqueues rays.
     // - Prefix ':' to run debug shell commands (help/mem/irq/s1/s2/etc).
+    #[cfg(feature = "vmm_hypervisor")]
+    {
+        // VMX bring-up skeleton (no guest yet). Emits deterministic serial markers.
+        // This is feature-gated to avoid changing default boots.
+        let _ = hypervisor::try_init_vmx_skeleton();
+    }
+
     serial_write_str("RayOS bicameral loop ready (':' for shell)\n");
 
     let mut line_buf = [0u8; 128];
@@ -6363,7 +6616,58 @@ fn kernel_main() -> ! {
     }
     render_chat_log(&chat);
 
+    #[cfg(feature = "dev_scanout")]
+    fn parse_u64_ascii(s: &str) -> Option<u64> {
+        let bytes = s.as_bytes();
+        if bytes.is_empty() {
+            return None;
+        }
+        let mut v: u64 = 0;
+        let mut i: usize = 0;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if b < b'0' || b > b'9' {
+                return None;
+            }
+            v = v.saturating_mul(10).saturating_add((b - b'0') as u64);
+            i += 1;
+        }
+        Some(v)
+    }
+
+    #[cfg(feature = "dev_scanout")]
+    fn dev_scanout_autohide_after_ticks() -> u64 {
+        // PIT is initialized to 100 Hz in init_interrupts().
+        const TICKS_PER_SEC: u64 = 100;
+
+        match option_env!("RAYOS_DEV_SCANOUT_AUTOHIDE_SECS") {
+            Some(s) => parse_u64_ascii(s).unwrap_or(0).saturating_mul(TICKS_PER_SEC),
+            None => 0,
+        }
+    }
+
     let mut last_tick = TIMER_TICKS.load(Ordering::Relaxed);
+    let mut last_guest_frame_seq = guest_surface::frame_seq();
+    let mut last_presentation_state = guest_surface::presentation_state();
+
+    #[cfg(feature = "dev_scanout")]
+    let mut dev_present_start_tick: u64 = last_tick;
+    #[cfg(feature = "dev_scanout")]
+    let dev_autohide_after_ticks: u64 = dev_scanout_autohide_after_ticks();
+
+    #[cfg(feature = "dev_scanout")]
+    {
+        // Dev-only: automatically present the synthetic scanout so the blit pipeline can
+        // be validated visually without typing commands or injecting keystrokes.
+        if guest_surface::presentation_state() != guest_surface::PresentationState::Presented {
+            guest_surface::set_presentation_state(guest_surface::PresentationState::Presented);
+            serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n");
+            LINUX_DESKTOP_STATE.store(3, Ordering::Relaxed);
+            dev_present_start_tick = TIMER_TICKS.load(Ordering::Relaxed);
+            chat.push_line(b"SYS: ", b"dev_scanout: auto-presenting guest panel");
+            render_chat_log(&chat);
+        }
+    }
 
     fn trim_ascii_spaces(mut s: &[u8]) -> &[u8] {
         while !s.is_empty() {
@@ -6412,6 +6716,131 @@ fn kernel_main() -> ! {
             return false;
         }
         eq_ignore_ascii_case(&s[..prefix.len()], prefix)
+    }
+
+    fn find_subslice_ignore_ascii_case(hay: &[u8], needle: &[u8]) -> Option<usize> {
+        if needle.is_empty() {
+            return Some(0);
+        }
+        if hay.len() < needle.len() {
+            return None;
+        }
+        let mut i = 0usize;
+        while i + needle.len() <= hay.len() {
+            if eq_ignore_ascii_case(&hay[i..i + needle.len()], needle) {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    fn parse_send_to_linux(line: &[u8]) -> Option<(&[u8], bool)> {
+        // Natural-language helper:
+        //   - send k to linux
+        //   - send ctrl+l to linux desktop
+        //   - send hello to linux
+        //
+        // Returns (payload, is_key).
+        let s = trim_ascii_spaces(line);
+        const P: &[u8] = b"send ";
+        if !starts_with_ignore_ascii_case(s, P) {
+            return None;
+        }
+        let rest = trim_ascii_spaces(&s[P.len()..]);
+        if rest.is_empty() {
+            return None;
+        }
+
+        // Look for a target suffix.
+        let suffixes: [&[u8]; 4] = [b" to linux desktop", b" to linux", b" to linux vm", b" to linux subsystem"];
+        let mut cut = None;
+        let mut si = 0usize;
+        while si < suffixes.len() {
+            if let Some(pos) = find_subslice_ignore_ascii_case(rest, suffixes[si]) {
+                cut = Some(pos);
+                break;
+            }
+            si += 1;
+        }
+        let payload = if let Some(pos) = cut {
+            trim_ascii_spaces(&rest[..pos])
+        } else {
+            return None;
+        };
+        if payload.is_empty() {
+            return None;
+        }
+
+        // Heuristic: treat single token with no spaces as a key spec; otherwise as text.
+        let mut has_space = false;
+        let mut j = 0usize;
+        while j < payload.len() {
+            let b = payload[j];
+            if b == b' ' || b == b'\t' {
+                has_space = true;
+                break;
+            }
+            j += 1;
+        }
+        let is_key = !has_space;
+        Some((payload, is_key))
+    }
+
+    fn parse_send_to_windows(line: &[u8]) -> Option<(&[u8], bool)> {
+        // Natural-language helper:
+        //   - send k to windows
+        //   - send alt+f4 to win desktop
+        //   - send hello to windows
+        //
+        // Returns (payload, is_key).
+        let s = trim_ascii_spaces(line);
+        const P: &[u8] = b"send ";
+        if !starts_with_ignore_ascii_case(s, P) {
+            return None;
+        }
+        let rest = trim_ascii_spaces(&s[P.len()..]);
+        if rest.is_empty() {
+            return None;
+        }
+
+        let suffixes: [&[u8]; 5] = [
+            b" to windows desktop",
+            b" to windows",
+            b" to win desktop",
+            b" to win",
+            b" to windows vm",
+        ];
+        let mut cut = None;
+        let mut si = 0usize;
+        while si < suffixes.len() {
+            if let Some(pos) = find_subslice_ignore_ascii_case(rest, suffixes[si]) {
+                cut = Some(pos);
+                break;
+            }
+            si += 1;
+        }
+        let payload = if let Some(pos) = cut {
+            trim_ascii_spaces(&rest[..pos])
+        } else {
+            return None;
+        };
+        if payload.is_empty() {
+            return None;
+        }
+
+        let mut has_space = false;
+        let mut j = 0usize;
+        while j < payload.len() {
+            let b = payload[j];
+            if b == b' ' || b == b'\t' {
+                has_space = true;
+                break;
+            }
+            j += 1;
+        }
+        let is_key = !has_space;
+        Some((payload, is_key))
     }
 
     fn is_show_linux_desktop(line: &[u8]) -> bool {
@@ -6515,6 +6944,30 @@ fn kernel_main() -> ! {
         Some(rest)
     }
 
+    fn parse_linux_launch_app(line: &[u8]) -> Option<&[u8]> {
+        let s = trim_ascii_spaces(line);
+
+        // Supported forms (minimal, controlled):
+        // - linux launch <app>
+        // - launch linux <app>
+        const P1: &[u8] = b"linux launch ";
+        const P2: &[u8] = b"launch linux ";
+
+        let rest = if starts_with_ignore_ascii_case(s, P1) {
+            &s[P1.len()..]
+        } else if starts_with_ignore_ascii_case(s, P2) {
+            &s[P2.len()..]
+        } else {
+            return None;
+        };
+
+        let rest = trim_ascii_spaces(rest);
+        if rest.is_empty() {
+            return None;
+        }
+        Some(rest)
+    }
+
     fn is_show_windows_desktop(line: &[u8]) -> bool {
         let s = trim_ascii_spaces(line);
 
@@ -6575,6 +7028,68 @@ fn kernel_main() -> ! {
         }
 
         (seen_windows && seen_desktop && seen_show) || (seen_windows && seen_desktop)
+    }
+
+    fn is_hide_linux_desktop(line: &[u8]) -> bool {
+        let s = trim_ascii_spaces(line);
+
+        // Fast path for exact phrases.
+        if eq_ignore_ascii_case(s, b"hide linux desktop")
+            || eq_ignore_ascii_case(s, b"hide desktop")
+            || eq_ignore_ascii_case(s, b"hide linux")
+        {
+            return true;
+        }
+
+        // Token-aware tolerant match.
+        let mut toks: [&[u8]; 4] = [&[]; 4];
+        let mut nt: usize = 0;
+        let mut i: usize = 0;
+        while i < s.len() {
+            while i < s.len() {
+                let b = s[i];
+                if b == b' ' || b == b'\t' {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            if i >= s.len() {
+                break;
+            }
+            let start = i;
+            while i < s.len() {
+                let b = s[i];
+                if b == b' ' || b == b'\t' {
+                    break;
+                }
+                i += 1;
+            }
+            if nt < toks.len() {
+                toks[nt] = &s[start..i];
+                nt += 1;
+            } else {
+                break;
+            }
+        }
+
+        let mut seen_hide = false;
+        let mut seen_linux = false;
+        let mut seen_desktop = false;
+        let mut t = 0usize;
+        while t < nt {
+            let tok = toks[t];
+            if eq_ignore_ascii_case(tok, b"hide") {
+                seen_hide = true;
+            } else if eq_ignore_ascii_case(tok, b"linux") || eq_ignore_ascii_case(tok, b"linu") {
+                seen_linux = true;
+            } else if eq_ignore_ascii_case(tok, b"desktop") {
+                seen_desktop = true;
+            }
+            t += 1;
+        }
+
+        seen_hide && (seen_desktop || seen_linux)
     }
 
     fn parse_windows_sendtext(line: &[u8]) -> Option<&[u8]> {
@@ -6696,6 +7211,53 @@ fn kernel_main() -> ! {
             return None;
         }
         Some(rest)
+    }
+
+    fn parse_host_ack(line: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+        let s = trim_ascii_spaces(line);
+
+        // Host-to-RayOS feedback line (typed/injected by the host harness):
+        //   @ack <op> <ok|err> <detail>
+        // All fields are treated as ASCII and displayed as a SYS line.
+        const P: &[u8] = b"@ack ";
+        if !starts_with_ignore_ascii_case(s, P) {
+            return None;
+        }
+        let mut rest = trim_ascii_spaces(&s[P.len()..]);
+        if rest.is_empty() {
+            return None;
+        }
+
+        // Parse <op>
+        let mut i = 0usize;
+        while i < rest.len() && rest[i] != b' ' {
+            i += 1;
+        }
+        if i == 0 {
+            return None;
+        }
+        let op = &rest[..i];
+        rest = trim_ascii_spaces(&rest[i..]);
+        if rest.is_empty() {
+            return None;
+        }
+
+        // Parse <status>
+        i = 0usize;
+        while i < rest.len() && rest[i] != b' ' {
+            i += 1;
+        }
+        if i == 0 {
+            return None;
+        }
+        let status = &rest[..i];
+        rest = trim_ascii_spaces(&rest[i..]);
+        if rest.is_empty() {
+            return None;
+        }
+
+        // Remaining is <detail> (may contain colons/underscores).
+        Some((op, status, rest))
     }
 
     fn parse_linux_mouse_abs(line: &[u8]) -> Option<(&[u8], &[u8])> {
@@ -6898,6 +7460,27 @@ fn kernel_main() -> ! {
     loop {
         // Drain available keyboard input without blocking.
         while let Some(b) = kbd_try_read_byte() {
+            #[cfg(feature = "dev_scanout")]
+            {
+                // Dev-only: press ` (backtick) to toggle the presented guest panel.
+                if b == b'`' {
+                    if guest_surface::presentation_state() == guest_surface::PresentationState::Presented {
+                        guest_surface::set_presentation_state(guest_surface::PresentationState::Hidden);
+                        serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:HIDDEN\n");
+                        serial_write_str("DEV_SCANOUT: toggle hidden\n");
+                        chat.push_line(b"SYS: ", b"dev_scanout: hide guest panel");
+                        render_chat_log(&chat);
+                    } else {
+                        guest_surface::set_presentation_state(guest_surface::PresentationState::Presented);
+                        serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n");
+                        serial_write_str("DEV_SCANOUT: toggle presented\n");
+                        dev_present_start_tick = TIMER_TICKS.load(Ordering::Relaxed);
+                        chat.push_line(b"SYS: ", b"dev_scanout: show guest panel");
+                        render_chat_log(&chat);
+                    }
+                    continue;
+                }
+            }
             match b {
                 b'\n' => {
                     serial_write_str("\n");
@@ -6914,18 +7497,188 @@ fn kernel_main() -> ! {
                         } else {
                             // Host-integrated commands (non-shell): keep these simple and explicit.
                             // This is a stepping stone until the Linux desktop is actually embedded.
-                            if is_show_linux_desktop(&line_buf[..len]) {
+                            if let Some((op, status, detail)) = parse_host_ack(&line_buf[..len]) {
+                                // Update Linux desktop state from host ACKs.
+                                // These ACK lines are injected by the host harness as a control-plane channel.
+                                if eq_ignore_ascii_case(op, b"LINUX_DESKTOP") {
+                                    if eq_ignore_ascii_case(status, b"ok") {
+                                        // treat as a coarse lifecycle hint
+                                        if starts_with_ignore_ascii_case(detail, b"starting") {
+                                            LINUX_DESKTOP_STATE.store(1, Ordering::Relaxed);
+                                        }
+                                    } else {
+                                        LINUX_DESKTOP_STATE.store(0, Ordering::Relaxed);
+                                    }
+                                } else if eq_ignore_ascii_case(op, b"LINUX_DESKTOP_HIDDEN_READY") {
+                                    if eq_ignore_ascii_case(status, b"ok") {
+                                        LINUX_DESKTOP_STATE.store(2, Ordering::Relaxed);
+                                    } else {
+                                        LINUX_DESKTOP_STATE.store(0, Ordering::Relaxed);
+                                    }
+                                } else if eq_ignore_ascii_case(op, b"SHOW_LINUX_DESKTOP") {
+                                    if eq_ignore_ascii_case(status, b"ok") {
+                                        LINUX_DESKTOP_STATE.store(3, Ordering::Relaxed);
+                                    }
+                                } else if eq_ignore_ascii_case(op, b"HIDE_LINUX_DESKTOP") {
+                                    if eq_ignore_ascii_case(status, b"ok") {
+                                        if starts_with_ignore_ascii_case(detail, b"hiding") {
+                                            // Viewer hidden; VM still running.
+                                            LINUX_DESKTOP_STATE.store(2, Ordering::Relaxed);
+                                        } else if starts_with_ignore_ascii_case(detail, b"stopped") {
+                                            // VM stopped.
+                                            LINUX_DESKTOP_STATE.store(0, Ordering::Relaxed);
+                                        }
+                                    }
+                                } else if eq_ignore_ascii_case(op, b"FIRST_FRAME_PRESENTED") {
+                                    // First frame generally indicates the hidden VM is alive.
+                                    if eq_ignore_ascii_case(status, b"ok") {
+                                        if LINUX_DESKTOP_STATE.load(Ordering::Relaxed) == 1 {
+                                            LINUX_DESKTOP_STATE.store(2, Ordering::Relaxed);
+                                        }
+                                    }
+                                }
+
+                                let mut msg = [0u8; CHAT_MAX_COLS];
+                                let mut n = 0usize;
+                                for &b in b"ACK ".iter() {
+                                    if n >= msg.len() {
+                                        break;
+                                    }
+                                    msg[n] = b;
+                                    n += 1;
+                                }
+                                for &b in op.iter() {
+                                    if n >= msg.len() {
+                                        break;
+                                    }
+                                    msg[n] = b;
+                                    n += 1;
+                                }
+                                if n < msg.len() {
+                                    msg[n] = b' ';
+                                    n += 1;
+                                }
+                                for &b in status.iter() {
+                                    if n >= msg.len() {
+                                        break;
+                                    }
+                                    msg[n] = b;
+                                    n += 1;
+                                }
+                                if n < msg.len() {
+                                    msg[n] = b' ';
+                                    n += 1;
+                                }
+                                for &b in detail.iter() {
+                                    if n >= msg.len() {
+                                        break;
+                                    }
+                                    msg[n] = b;
+                                    n += 1;
+                                }
+                                chat.push_line(b"SYS: ", &msg[..n]);
+                                render_chat_log(&chat);
+                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                draw_text(140, 560, "host ack received", 0x88_ff_88);
+
+                                // Refresh Linux status line if it changed.
+                                let cur = LINUX_DESKTOP_STATE.load(Ordering::Relaxed);
+                                if cur != last_linux_state {
+                                    last_linux_state = cur;
+                                    if guest_surface::presentation_state() == guest_surface::PresentationState::Hidden {
+                                        render_linux_state(panel_bg, cur);
+                                    }
+                                }
+                            } else if is_hide_linux_desktop(&line_buf[..len]) {
+                                serial_write_str("RAYOS_HOST_EVENT_V0:HIDE_LINUX_DESKTOP\n");
+                                guest_surface::set_presentation_state(guest_surface::PresentationState::Hidden);
+                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:HIDDEN\n");
+                                LINUX_DESKTOP_STATE.store(4, Ordering::Relaxed);
+                                chat.push_line(b"SYS: ", b"hiding Linux desktop (host will stop VM)");
+                                render_chat_log(&chat);
+                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                draw_text(140, 560, "hiding Linux desktop...", 0xff_ff_88);
+
+                                let cur = LINUX_DESKTOP_STATE.load(Ordering::Relaxed);
+                                if cur != last_linux_state {
+                                    last_linux_state = cur;
+                                    render_linux_state(panel_bg, cur);
+                                }
+                            } else if is_show_linux_desktop(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:SHOW_LINUX_DESKTOP\n");
+                                // Update lifecycle state first so the status line reflects the action
+                                // even if we switch into Presented mode immediately afterward.
+                                LINUX_DESKTOP_STATE.store(1, Ordering::Relaxed);
                                 chat.push_line(b"SYS: ", b"requesting Linux desktop (host will launch)");
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "launching Linux desktop...", 0xff_ff_88);
+
+                                let cur = LINUX_DESKTOP_STATE.load(Ordering::Relaxed);
+                                if cur != last_linux_state {
+                                    last_linux_state = cur;
+                                    render_linux_state(panel_bg, cur);
+                                }
+
+                                // If no scanout is available yet, tell the user what to do.
+                                if guest_surface::surface_snapshot().is_none() {
+                                    #[cfg(feature = "dev_scanout")]
+                                    {
+                                        chat.push_line(b"SYS: ", b"no scanout yet; waiting for dev_scanout producer");
+                                        serial_write_str("SYS: no scanout yet; waiting for dev_scanout producer\n");
+                                    }
+                                    #[cfg(not(feature = "dev_scanout"))]
+                                    {
+                                        chat.push_line(b"SYS: ", b"no guest scanout available; run RAYOS_KERNEL_FEATURES=dev_scanout");
+                                        serial_write_str("SYS: no guest scanout available; run RAYOS_KERNEL_FEATURES=dev_scanout\n");
+                                    }
+                                    render_chat_log(&chat);
+                                }
+
+                                guest_surface::set_presentation_state(guest_surface::PresentationState::Presented);
+                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n");
                             } else if is_show_windows_desktop(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:SHOW_WINDOWS_DESKTOP\n");
                                 chat.push_line(b"SYS: ", b"requesting Windows desktop (host will launch)");
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "launching Windows desktop...", 0xff_ff_88);
+                            } else if let Some((payload, is_key)) = parse_send_to_linux(&line_buf[..len]) {
+                                if is_key {
+                                    serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDKEY:");
+                                    serial_write_bytes(payload);
+                                    serial_write_str("\n");
+                                    chat.push_line(b"SYS: ", b"sending key to Linux desktop (host inject)");
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(140, 560, "sending key to Linux desktop...", 0xff_ff_88);
+                                } else {
+                                    serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDTEXT:");
+                                    serial_write_bytes(payload);
+                                    serial_write_str("\n");
+                                    chat.push_line(b"SYS: ", b"typing into Linux desktop (host inject)");
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(140, 560, "typing into Linux desktop...", 0xff_ff_88);
+                                }
+                            } else if let Some((payload, is_key)) = parse_send_to_windows(&line_buf[..len]) {
+                                if is_key {
+                                    serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SENDKEY:");
+                                    serial_write_bytes(payload);
+                                    serial_write_str("\n");
+                                    chat.push_line(b"SYS: ", b"sending key to Windows desktop (host inject)");
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(140, 560, "sending key to Windows desktop...", 0xff_ff_88);
+                                } else {
+                                    serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SENDTEXT:");
+                                    serial_write_bytes(payload);
+                                    serial_write_str("\n");
+                                    chat.push_line(b"SYS: ", b"typing into Windows desktop (host inject)");
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(140, 560, "typing into Windows desktop...", 0xff_ff_88);
+                                }
                             } else if let Some(text) = parse_linux_sendtext(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDTEXT:");
                                 for &b in text {
@@ -6936,6 +7689,14 @@ fn kernel_main() -> ! {
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "typing into Linux desktop...", 0xff_ff_88);
+                            } else if let Some(app) = parse_linux_launch_app(&line_buf[..len]) {
+                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_LAUNCH_APP:");
+                                serial_write_bytes(app);
+                                serial_write_str("\n");
+                                chat.push_line(b"SYS: ", b"launching app in Linux desktop (host inject)");
+                                render_chat_log(&chat);
+                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                draw_text(140, 560, "launching Linux app...", 0xff_ff_88);
                             } else if let Some(text) = parse_windows_sendtext(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SENDTEXT:");
                                 serial_write_bytes(text);
@@ -7074,6 +7835,58 @@ fn kernel_main() -> ! {
         if tick != last_tick {
             last_tick = tick;
 
+            let ps = guest_surface::presentation_state();
+
+            #[cfg(feature = "dev_scanout")]
+            {
+                if ps == guest_surface::PresentationState::Presented {
+                    // Track when we entered Presented so we can auto-hide.
+                    if last_presentation_state != guest_surface::PresentationState::Presented {
+                        dev_present_start_tick = tick;
+                    }
+
+                    if dev_autohide_after_ticks != 0
+                        && tick.saturating_sub(dev_present_start_tick) >= dev_autohide_after_ticks
+                    {
+                        guest_surface::set_presentation_state(guest_surface::PresentationState::Hidden);
+                        serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:HIDDEN\n");
+                        serial_write_str("DEV_SCANOUT: auto-hide\n");
+                        chat.push_line(b"SYS: ", b"dev_scanout: auto-hide guest panel");
+                        render_chat_log(&chat);
+                    }
+                }
+            }
+
+            // If a guest scanout is being presented, blit on frame updates.
+            if ps == guest_surface::PresentationState::Presented {
+                #[cfg(feature = "dev_scanout")]
+                {
+                    // Keep a synthetic scanout ticking so the blit path is visible
+                    // even before the real guest scanout publisher exists.
+                    dev_scanout::tick_if_presented();
+                }
+
+                let fs = guest_surface::frame_seq();
+                if ps != last_presentation_state {
+                    // Entering Presented: render the current scanout immediately
+                    // (even if no new frame_seq has been bumped yet).
+                    if let Some(surface) = guest_surface::surface_snapshot() {
+                        blit_guest_surface_panel(surface);
+                    }
+                    last_guest_frame_seq = fs;
+                } else if fs != last_guest_frame_seq {
+                    last_guest_frame_seq = fs;
+                    if let Some(surface) = guest_surface::surface_snapshot() {
+                        blit_guest_surface_panel(surface);
+                    }
+                }
+                // Avoid drawing UI elements that would scribble over the guest panel.
+                last_presentation_state = ps;
+                continue;
+            }
+
+            last_presentation_state = ps;
+
             // Run a small slice of Conductor orchestration in thread context.
             conductor_tick(tick);
 
@@ -7125,6 +7938,13 @@ fn kernel_main() -> ! {
             draw_box(490, 300, 16, 16, color);
             let color2 = if blink { 0xff_88_00 } else { 0x44_22_00 };
             draw_box(490, 330, 16, 16, color2);
+
+            // Linux desktop status line.
+            let cur = LINUX_DESKTOP_STATE.load(Ordering::Relaxed);
+            if cur != last_linux_state {
+                last_linux_state = cur;
+                render_linux_state(panel_bg, cur);
+            }
         }
 
         // Drain any serial input (host->guest).
@@ -7325,15 +8145,8 @@ fn parse_u32_decimal(buf: &[u8]) -> Option<u32> {
 }
 
 fn init_memory() {
-    // Prefer a heap carved from real physical memory via the UEFI memory map.
-    if let Some(heap_phys) = phys_alloc_bytes(HEAP_SIZE, 4096) {
-        // Use HHDM to avoid assuming identity mapping.
-        let heap_virt = phys_to_virt(heap_phys) as usize;
-        HEAP_ALLOCATOR.lock().init(heap_virt, HEAP_SIZE);
-        return;
-    }
-
-    // Fallback: static heap.
+    // Early bring-up: static heap.
+    // This avoids depending on paging/HHDM/physical allocator state.
     let heap_ptr = unsafe { HEAP.0.as_ptr() as usize };
     HEAP_ALLOCATOR.lock().init(heap_ptr, HEAP_SIZE);
 }
@@ -7421,6 +8234,46 @@ fn draw_char_bg(x: usize, y: usize, ch: char, fg: u32, bg: u32) {
 fn draw_text(x: usize, y: usize, text: &str, color: u32) {
     for (i, ch) in text.chars().enumerate() {
         draw_char(x + (i * FONT_WIDTH), y, ch, color);
+    }
+}
+
+fn blit_guest_surface_panel(surface: guest_surface::GuestSurface) {
+    // Present guest scanout inside the existing main panel region.
+    // This is a placeholder “native presentation” path until a compositor exists.
+    const DST_X: usize = 30;
+    const DST_Y: usize = 30;
+    const DST_W: usize = 700;
+    const DST_H: usize = 450;
+
+    if surface.bpp != 32 {
+        return;
+    }
+    // Avoid dereferencing physical memory outside the HHDM window.
+    if surface.backing_phys >= hhdm_phys_limit() {
+        return;
+    }
+
+    let dst_w = DST_W.min(unsafe { FB_WIDTH }.saturating_sub(DST_X));
+    let dst_h = DST_H.min(unsafe { FB_HEIGHT }.saturating_sub(DST_Y));
+
+    let src_w = (surface.width as usize).min(dst_w);
+    let src_h = (surface.height as usize).min(dst_h);
+    let src_stride = surface.stride_px as usize;
+    if src_w == 0 || src_h == 0 || src_stride < src_w {
+        return;
+    }
+
+    // Clear the panel region behind the guest.
+    draw_box(DST_X, DST_Y, dst_w, dst_h, 0x1a_1a_2e);
+
+    unsafe {
+        let fb = FB_BASE as *mut u32;
+        let src = phys_as_ptr::<u32>(surface.backing_phys);
+        for y in 0..src_h {
+            let dst_off = (DST_Y + y) * FB_STRIDE + DST_X;
+            let src_off = y * src_stride;
+            core::ptr::copy_nonoverlapping(src.add(src_off), fb.add(dst_off), src_w);
+        }
     }
 }
 
@@ -7565,20 +8418,32 @@ fn get_glyph(ch: char) -> [u8; 8] {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    // Draw panic message on screen
-    unsafe {
-        if FB_BASE != 0 {
-            clear_screen(0x00_00_ff); // Blue screen of death
-            draw_box(100, 100, 600, 300, 0x00_00_aa);
-            draw_text(120, 120, "KERNEL PANIC!", 0xff_ff_ff);
-            draw_text(120, 150, "The system has encountered a critical error.", 0xff_ff_ff);
-            draw_text(120, 200, "Please restart your computer.", 0xaa_aa_aa);
+fn init_pci(bi: &BootInfo) {
+    if bi.rsdp_addr != 0 {
+        serial_write_str("  RSDP found at 0x");
+        serial_write_hex_u64(bi.rsdp_addr);
+        serial_write_str("\n");
+
+        if let Some(mcfg) = acpi::find_mcfg(bi.rsdp_addr) {
+            pci::enumerate_pci(mcfg);
         }
     }
+}
 
-    loop {
-        halt_spin();
+#[panic_handler]
+fn panic(info: &PanicInfo) -> ! {
+    serial_write_str("PANIC: ");
+    if let Some(s) = info.payload().downcast_ref::<&str>() {
+        serial_write_str(s);
+    } else {
+        serial_write_str("no payload");
     }
+    serial_write_str("\n");
+    if let Some(loc) = info.location() {
+        serial_write_str("  at ");
+        serial_write_str(loc.file());
+        serial_write_str(":");
+        // no u32 to dec yet
+    }
+    loop {}
 }

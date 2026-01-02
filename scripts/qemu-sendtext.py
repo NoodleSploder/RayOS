@@ -107,15 +107,25 @@ def send_cmds(sock_path: str, cmds: list[str]) -> None:
         s.sendall((cmd + "\r\n").encode("ascii"))
         time.sleep(0.03)
 
-        # Drain output to keep socket happy.
+        # Drain output to keep socket happy and detect HMP errors.
+        out = b""
         try:
-            s.settimeout(0.05)
+            s.settimeout(0.2)
             while True:
                 data = s.recv(4096)
                 if not data:
                     break
+                out += data
+                if b"(qemu)" in out:
+                    break
         except Exception:
             pass
+
+        text = out.decode("utf-8", errors="ignore")
+        lowered = text.lower()
+        if "unknown command" in lowered or "error" in lowered:
+            s.close()
+            raise SystemExit(f"HMP command failed: {cmd}\n{text.strip()}")
 
     s.close()
 

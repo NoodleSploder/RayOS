@@ -92,6 +92,8 @@ create_iso_for_arch() {
         cp "$KERNEL_SOURCE" "$RAYOS_DIR/kernel.bin"
     fi
 
+    echo '{"vms":{}}' > "$RAYOS_DIR/registry.json"
+
     # Create an EFI System Partition (ESP) FAT image for UEFI boot.
     local ESP_IMG="$BOOT_DIR/efiboot.img"
     # Keep < 32 MiB so El Torito load-size stays representable for picky firmware.
@@ -111,6 +113,7 @@ NSH
         if [ -f "$KERNEL_SOURCE" ]; then
             mcopy -i "$ESP_IMG" "$KERNEL_SOURCE" ::/EFI/RAYOS/kernel.bin
         fi
+        mcopy -i "$ESP_IMG" "$RAYOS_DIR/registry.json" ::/EFI/RAYOS/registry.json
     else
         # Without mtools, we fall back to loop-mounting the FAT image.
         # In non-interactive contexts, a sudo password prompt would hang the build.
@@ -144,6 +147,7 @@ NSH
         if [ -f "$KERNEL_SOURCE" ]; then
             sudo cp "$KERNEL_SOURCE" "$ESP_MNT/EFI/RAYOS/kernel.bin"
         fi
+        sudo cp "$RAYOS_DIR/registry.json" "$ESP_MNT/EFI/RAYOS/registry.json"
         sudo sync
         sudo umount "$ESP_MNT"
         rmdir "$ESP_MNT"
@@ -217,6 +221,8 @@ create_universal_iso() {
         cp "$KERNEL_SOURCE" "$RAYOS_DIR/kernel.bin"
     fi
 
+    echo '{"vms":{}}' > "$RAYOS_DIR/registry.json"
+
     local ESP_IMG="$BOOT_DIR/efiboot.img"
     # Keep < 32 MiB so El Torito load-size stays representable for picky firmware.
     dd if=/dev/zero of="$ESP_IMG" bs=1M count=31 status=none
@@ -237,6 +243,7 @@ NSH
         if [ -f "$KERNEL_SOURCE" ]; then
             mcopy -i "$ESP_IMG" "$KERNEL_SOURCE" ::/EFI/RAYOS/kernel.bin
         fi
+        mcopy -i "$ESP_IMG" "$RAYOS_DIR/registry.json" ::/EFI/RAYOS/registry.json
     else
         # Without mtools, we fall back to loop-mounting the FAT image.
         # In non-interactive contexts, a sudo password prompt would hang the build.
@@ -270,6 +277,7 @@ NSH
         if [ -f "$KERNEL_SOURCE" ]; then
             sudo cp "$KERNEL_SOURCE" "$ESP_MNT/EFI/RAYOS/kernel.bin"
         fi
+        sudo cp "$RAYOS_DIR/registry.json" "$ESP_MNT/EFI/RAYOS/registry.json"
         sudo sync
         sudo umount "$ESP_MNT"
         rmdir "$ESP_MNT"
@@ -478,14 +486,10 @@ fi
 echo "[3/5] Building RayOS kernel..."
 pushd "$ROOT_DIR/crates/kernel-bare" > /dev/null
 # Build the bare-metal kernel binary for x86_64-unknown-none target.
-# Pin the toolchain to avoid build-std breakage when rolling nightly's rust-src changes.
-KERNEL_TOOLCHAIN="nightly-2024-11-01-x86_64-unknown-linux-gnu"
+# Use the crate-local rust-toolchain.toml to select the pinned toolchain.
+# Avoid -Z build-std here; it can break depending on the host's rust-src/cargo pairing.
 export PATH="$HOME/.cargo/bin:$PATH"
-if RUSTC="$(rustup which rustc --toolchain "$KERNEL_TOOLCHAIN")" \
-    rustup run "$KERNEL_TOOLCHAIN" cargo build --release --target x86_64-unknown-none \
-    -Z build-std=core,alloc \
-    -Z build-std-features=compiler-builtins-mem \
-    2>&1; then
+if cargo build --release --target x86_64-unknown-none 2>&1; then
     # Binary name is kernel-bare
     KERNEL_PATH="./target/x86_64-unknown-none/release/kernel-bare"
     if [ -f "$KERNEL_PATH" ]; then

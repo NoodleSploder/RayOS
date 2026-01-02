@@ -84,6 +84,11 @@ fi
 # Note: indexes match rayos_desktop_init expectations (vda=persist, vdb=modloop).
 export QEMU_EXTRA_ARGS="-drive file=$DESKTOP_DISK_PATH,format=raw,if=virtio,index=0 -drive file=$MODLOOP,format=raw,if=virtio,readonly=on,index=1 -device virtio-keyboard-pci -device virtio-mouse-pci"
 
+# After the desktop reports READY, launch a Wayland client and request a clean shutdown.
+# The guest command channel is provided by /rayos_agent.sh (desktop mode).
+export POST_READY_SEND=$'LAUNCH_APP:weston-terminal\nSHUTDOWN\n'
+export POST_READY_EXPECT=RAYOS_LINUX_AGENT_SHUTDOWN_ACK
+
 echo "Starting Linux desktop auto bring-up (headless)..." >&2
 
 echo "QEMU: $QEMU_BIN" >&2
@@ -97,13 +102,23 @@ python3 "$ROOT_DIR/scripts/tools/linux_subsystem/run_linux_guest.py"
 NORM="$WORK_DIR/linux-subsystem-desktop-auto-headless.norm.log"
 tr -d '\r' < "$LOG_FILE" > "$NORM" 2>/dev/null || true
 
-if grep -F -a -q "RAYOS_LINUX_DESKTOP_READY" "$NORM"; then
-  echo "PASS: observed RAYOS_LINUX_DESKTOP_READY" >&2
-  exit 0
+if ! grep -F -a -q "RAYOS_LINUX_DESKTOP_READY" "$NORM"; then
+  echo "FAIL: missing desktop ready marker" >&2
+  tail -n 250 "$NORM" 2>/dev/null || true
+  exit 1
 fi
 
-echo "FAIL: missing desktop ready marker" >&2
+if ! grep -F -a -q "RAYOS_LINUX_APP_LAUNCH_OK name=weston-terminal" "$NORM"; then
+  echo "FAIL: missing Wayland client launch marker" >&2
+  tail -n 250 "$NORM" 2>/dev/null || true
+  exit 1
+fi
 
-tail -n 250 "$NORM" 2>/dev/null || true
+if ! grep -F -a -q "RAYOS_LINUX_AGENT_SHUTDOWN_ACK" "$NORM"; then
+  echo "FAIL: missing clean shutdown ack" >&2
+  tail -n 250 "$NORM" 2>/dev/null || true
+  exit 1
+fi
 
-exit 1
+echo "PASS: desktop ready + client launched + shutdown ack" >&2
+exit 0

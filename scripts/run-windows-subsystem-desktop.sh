@@ -99,6 +99,22 @@ if [ "$WINDOWS_NET" != "0" ]; then
   NET_ARGS=(-netdev user,id=net0 -device virtio-net-pci,netdev=net0)
 fi
 
+LINUX_DISPLAY_TYPE="${LINUX_DISPLAY_TYPE:-gtk}"
+LINUX_HEADLESS="${LINUX_HEADLESS:-0}"
+DISPLAY_ARGS=()
+if [ "$LINUX_DISPLAY_TYPE" = "vnc" ]; then
+    DISPLAY_ARGS=("-vnc" "unix:$WORK_DIR/vnc-win.sock")
+elif [ "$LINUX_HEADLESS" != "0" ]; then
+    DISPLAY_ARGS=("-display" "none")
+else
+    DISPLAY_ARGS=("-display" "gtk,zoom-to-fit=on")
+fi
+
+LOADVM_ARG=""
+if [ -n "${LINUX_LOADVM_TAG:-}" ]; then
+    LOADVM_ARG="-loadvm ${LINUX_LOADVM_TAG}"
+fi
+
 echo "Starting swtpm..." >&2
 "$SWTPM_BIN" socket \
   --tpm2 \
@@ -121,12 +137,16 @@ exec "$QEMU_BIN" \
   -chardev socket,id=chrtpm,path="$TPM_SOCK" \
   -tpmdev emulator,id=tpm0,chardev=chrtpm \
   -device tpm-tis,tpmdev=tpm0 \
+  -device virtio-serial \
+  -chardev socket,path=$WIN_DIR/qga.sock,server,nowait,id=qga0 \
+  -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0 \
   -drive file="$WINDOWS_DISK",if=virtio,format=qcow2 \
   -device qemu-xhci \
   -device usb-kbd \
   -device usb-tablet \
   -vga virtio \
-  -display gtk,zoom-to-fit=on \
+  "${DISPLAY_ARGS[@]}" \
+  ${LOADVM_ARG} \
   -serial "file:$WIN_DIR/windows-serial.log" \
   -monitor "unix:$MON_SOCK,server,nowait" \
   -no-reboot \

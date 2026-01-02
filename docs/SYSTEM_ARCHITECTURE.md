@@ -1,123 +1,190 @@
 
 # RayOS System Architecture (Top-Level)
 
-Status: **draft / tracking stub**
+Status: **draft (concrete v0 architecture)**
 
-Purpose: unify the end-to-end architecture across bootloader, kernel/runtime, subsystems (Linux/Windows VMs), compositor/presentation, input routing, policy, storage, and AI components.
+Purpose: unify the end-to-end architecture across boot, kernel/runtime, subsystems (Linux/Windows VMs), presentation, input routing, policy, storage, and AI components.
 
----
-
-## 1) Goals
-
-- Provide a single “how it all fits together” view.
-- Define the long-running services/processes and their boundaries.
-- Define the primary communication paths (events/IPC) and ownership.
+This document describes the *installed* RayOS target, and also maps to the current developer harness (QEMU + host scripts) where applicable.
 
 ---
 
-## 2) Components (to formalize)
+## 1) Architecture Goals (v0)
 
-- Boot chain: UEFI → RayOS bootloader → RayOS runtime
-- Core runtime services:
-  - VM Supervisor (Linux + Windows lifecycle)
-  - Display/Compositor (presentation gating)
-  - Input Broker (routing + injection)
-  - Policy Engine
-  - Volume/Storage service
-  - Optional AI runtime (local inference)
+- One end-to-end view of services, boundaries, and primary data/control paths.
+- Explicit ownership: who decides lifecycle, input routing, networking, and persistence.
+- Deterministic markers for automation and recovery (see `OBSERVABILITY_AND_RECOVERY.md`).
+
+Non-goals (v0):
+- Not a full microkernel spec.
+- Not a complete compositor protocol spec (see subsystem docs for today’s v0 control plane).
 
 ---
 
-## 3) Human–Computer Interaction Without Traditional UI
+## 2) High-Level View
 
-### 3.1 The Core Shift: Interaction → Interpretation
+RayOS is a host OS that treats Linux/Windows as *managed guests*, not as peers:
 
-Traditional operating systems assume:
+- **RayOS is authoritative** over guest lifecycle, devices, persistence, and policy.
+- Guests are **compatibility projections** used to run apps; their UI is presented as RayOS surfaces and is gated by policy.
 
-- A discrete user
-- Issuing explicit commands
-- Through mechanical interfaces (keyboard, mouse, touch)
+See `docs/architecture_diagram.md` for an intent/perception-oriented view; the rest of this document focuses on concrete boot/runtime boundaries.
 
-RayOS assumes:
+---
 
-- A continuous human presence
-- Emitting signals, not commands
-- That must be interpreted probabilistically
+## 3) Boot Chain & Modes (v0)
 
-RayOS does not wait for events. It continuously models user intent.
+### 3.1 Boot chain
 
-### 3.2 Input Is a Sensor Stream, Not an Event
+UEFI firmware → RayOS bootloader → RayOS runtime:
 
-In RayOS, inputs are not interrupts. They are fields.
+- Bootloader responsibilities:
+  - locate/load RayOS runtime artifacts
+  - stage required data (policy, registry pointers, optional Volume artifacts)
+  - emit boot markers and hand off with a minimal ABI (`BootInfo`)
+- Runtime responsibilities:
+  - bring up console/logging
+  - mount RayOS Data (`/var/rayos`)
+  - start core services (policy, storage, VM supervisor, presentation/input)
 
-| Input      | Linux Interpretation | RayOS Interpretation   |
-|------------|---------------------|------------------------|
-| Eye gaze   | Pointer movement    | Attention vector       |
-| Voice      | Text command        | Intent + urgency       |
-| Head pose  | Ignored             | Spatial orientation    |
-| Silence    | Idle                | Cognitive pause        |
-| Hesitation | Ignored             | Uncertainty signal     |
+### 3.2 Boot entries
 
-Each input modality becomes a ray-emitting sensor, contributing to a probabilistic model of what the user is trying to do.
+RayOS installs multiple boot entries (see `INSTALLER_AND_BOOT_MANAGER_SPEC.md`):
 
-### 3.3 Gaze as a First-Class System Primitive
+- `RayOS` (normal)
+- `RayOS (recovery)` (always boots recovery UX/tools)
+- `RayOS (previous)` (optional convenience rollback)
 
-Instead of:
+---
 
-  mousemove(x, y)
+## 4) Core Services (v0)
 
-RayOS reasons in terms of:
+These are logical services; early v0 may co-locate them in one process, but the boundaries should remain explicit.
 
-  focus_probability(object_id, duration, context)
+### 4.1 Policy Engine
 
-**Example:**
+Source-of-truth: `RAYOS_DATA/policy/rayos-policy.toml` (`POLICY_CONFIGURATION_SCHEMA.md`)
 
-If the user:
-- Looks at a window
-- Pauses for 600ms
-- Then says “open this”
+Responsibilities:
+- decide whether a guest may be started/resumed
+- decide whether a guest may be presented (“presentation gating”)
+- decide whether guest networking is allowed
+- enforce resource limits (CPU/mem caps)
+- log violations as stable markers: `RAYOS_POLICY_VIOLATION:<rule>:<detail>`
 
-RayOS resolves:
+### 4.2 Storage / Volume Service
 
-“This” = the object with the highest gaze-confidence score
+Responsibilities:
+- mount/manage RayOS Data layout (`DISK_LAYOUT_AND_PERSISTENCE.md`)
+- load/query Volume (vector store) for RAG paths when enabled
+- provide a stable location for logs and crash artifacts
 
-No pointer, no click, no ambiguity. This is selection by inference, not by action.
+### 4.3 VM Supervisor
 
-### 3.4 Voice Is Not a Command Line
+Responsibilities:
+- maintain VM identity and configuration (registry)
+- start/resume/stop Linux/Windows VMs
+- ensure “hidden vs presented” state is respected
+- manage guest devices (virtio input/gpu/net) according to policy
+- maintain VM health/readiness markers
 
-In RayOS, voice input is not parsed into verbs and flags. It is embedded into an intent lattice.
+VM identity:
+- stable VM IDs with disk/state paths under `RAYOS_DATA/vm/...`
+- registry is the canonical mapping from ID → storage/device config
 
-**Example:**
+### 4.4 Presentation & Compositor
 
-“Can we take a look at that again?”
+Responsibilities:
+- own the display and the user-visible composition of surfaces
+- gate guest “desktop” surfaces by policy and user intent
+- map guest output into RayOS surfaces (single-surface embed in v0; multi-surface later)
 
-This resolves into:
-- Reference resolution (“that”)
-- Temporal context (“again”)
-- Action ambiguity (inspect? restore? replay?)
+v0 milestones:
+- Linux: single “embedded desktop” surface, initially via a prototype transport, later via a real Wayland-first forwarding path (see `LINUX_SUBSYSTEM_DESIGN.md`)
 
-RayOS does not error. It asks follow-up questions only when confidence is below threshold.
+Product constraint:
+- The installed-RayOS path must present guest UI **inside RayOS** as RayOS-owned surfaces/windows.
+- Network-based viewers (e.g. VNC clients) may be used in the developer harness only.
 
-### 3.5 UI as a Projection, Not the Control Surface
+### 4.5 Input Broker
 
-In RayOS:
-- UI is rendered output, not control input
-- The OS state exists independently of windows or widgets
-- UI adapts to attention, not vice versa
+Responsibilities:
+- accept input from physical devices + sensors (keyboard/mouse, gaze, voice, etc.)
+- route inputs to the active RayOS surface/window
+- inject inputs into guests only when presented and allowed by policy
+- provide audit markers for sensitive actions (input injection and lifecycle control)
 
-This allows:
-- UI to disappear entirely
-- AR/VR overlays instead of desktops
-- Accessibility-first computing without special modes
+### 4.6 Intent / AI Runtime (optional in v0)
 
-The “desktop” becomes a lens, not a workspace.
+Responsibilities:
+- interpret user signals (text/voice/gaze) into intents
+- select targets (objects/surfaces) using attention models
+- produce “intent envelopes” that are checked against policy before execution
 
-### 3.6 Why Linux Cannot Be Extended to Do This
+In v0 bring-up, a text REPL can stand in for this layer; the architecture assumes it becomes a continuous model over time.
 
-Linux fails here because:
-- Inputs are interrupt-driven
-- Meaning is resolved in applications, not the OS
-- There is no global attention model
+---
+
+## 5) Primary Data/Control Paths (v0)
+
+### 5.1 Intent → Policy → Effects
+
+1) Inputs (text/voice/gaze) arrive at Intent resolution.
+2) Intent resolution produces an **intent envelope** (action + target + confidence).
+3) Policy Engine authorizes/denies (and may require explicit confirmation).
+4) Executors perform effects:
+   - native RayOS UI effects (future)
+   - guest lifecycle actions (start/stop/present)
+   - guest input injection (type/press/mouse/click)
+
+### 5.2 Linux subsystem (today’s v0 control plane)
+
+Control actions:
+- start/present/hide desktop
+- type / press key / mouse / click
+- shutdown
+
+Determinism requirements:
+- emit versioned host events (`RAYOS_HOST_EVENT_V0:<op>:<payload>`) for automation
+- emit ACK markers (`RAYOS_HOST_ACK:<op>:<ok|err>:<detail>`)
+
+This “host bridge” exists today in the developer harness, but the same event/ACK semantics should be preserved when the supervisor becomes an in-OS service.
+
+### 5.3 Persistence and continuity
+
+Authoritative state lives under `/var/rayos`:
+- policy file
+- VM registry
+- VM disks/state
+- logs and crash artifacts
+
+VM continuity goals:
+- minimum: persistent disks (cold-boot resume)
+- target: saved-state restore (RAM/device) where supported, guarded by version compatibility
+
+---
+
+## 6) Security Invariants (summary)
+
+See `SECURITY_THREAT_MODEL.md` for full detail. The architecture assumes:
+
+- Guests are untrusted; device exposure is explicitly policy-governed.
+- “Presented” gates input routing into guests.
+- Guest networking is off by default and must be explicitly enabled by policy.
+- All lifecycle and policy decisions are logged with stable markers.
+
+---
+
+## 7) Developer Harness Mapping (current repo)
+
+Today’s repo provides a “host harness” that simulates missing in-OS services:
+
+- `scripts/test-boot.sh` boots RayOS in QEMU and watches serial logs.
+- On specific markers, it launches/controls guest VMs (Linux/Windows) as separate QEMU instances.
+- This is *not* a security boundary and must not be treated as one; it is a developer/CI tool.
+
+Installability work (see `INSTALLABLE_RAYOS_PLAN.md`) migrates these responsibilities into the installed RayOS runtime.
+
 - The kernel cannot reason semantically
 
 RayOS embeds interpretation below applications, at the kernel cognition layer.

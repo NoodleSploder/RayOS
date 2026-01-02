@@ -8,7 +8,7 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}" )" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/build}"
 mkdir -p "$WORK_DIR"
 
@@ -85,33 +85,7 @@ if [ "$SHA2" != "$EXPECTED_SURFACE_2_SHA" ]; then
   exit 1
 fi
 
-echo "Surface1 sha: $SHA1" >&2
-echo "Surface2 sha: $SHA2" >&2
-exit 0
 echo "PASS: multi-surface extracted" >&2
 echo "Surface1 sha: $SHA1" >&2
 echo "Surface2 sha: $SHA2" >&2
-
-# Validate registry.json for window mapping, focus, and parent/child relationships
-REGISTRY_JSON="$OUT_DIR/registry.json"
-if [ ! -f "$REGISTRY_JSON" ]; then
-  echo "FAIL: missing registry.json from surface_bridge" >&2
-  exit 1
-fi
-
-python3 - <<'PY' "$REGISTRY_JSON"
-import json, sys
-with open(sys.argv[1]) as f:
-  reg = json.load(f)
-windows = reg.get("windows", {})
-if len(windows) < 2:
-  print("FAIL: expected at least 2 windows in registry", file=sys.stderr)
-  sys.exit(1)
-z_order = reg.get("z_order", [])
-if not z_order:
-  print("FAIL: z_order missing or empty", file=sys.stderr)
-  sys.exit(1)
-print(f"PASS: registry.json has {len(windows)} windows, z_order: {z_order}")
-PY
-
 exit 0

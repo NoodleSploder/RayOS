@@ -3,6 +3,9 @@
 
 use core::arch::asm;
 
+mod acpi;
+mod pci;
+
 #[repr(C)]
 struct BootInfo {
     magic: u64,
@@ -232,6 +235,17 @@ pub extern "C" fn _start(boot_info_phys: u64) -> ! {
     }
 
     fb_try_draw_test_pattern(bi);
+
+    if bi.rsdp_addr != 0 {
+        uart_write_str("  RSDP found at 0x");
+        uart_write_hex_u64(bi.rsdp_addr);
+        uart_write_str("\n");
+
+        if let Some(mcfg) = acpi::find_mcfg(bi.rsdp_addr) {
+            pci::enumerate_pci(mcfg);
+        }
+    }
+
 
     // Prove volume is queryable from Option B.
     uart_write_str("  volume_ptr=0x");

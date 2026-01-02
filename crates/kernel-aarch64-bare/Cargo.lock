@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "kernel-aarch64-bare"
+name = "rayos-kernel-aarch64-bare"
 version = "0.1.0"

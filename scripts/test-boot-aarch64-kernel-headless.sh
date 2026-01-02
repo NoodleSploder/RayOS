@@ -102,6 +102,7 @@ timeout 25s qemu-system-aarch64 \
   -machine virt \
   -cpu cortex-a57 \
   -m 2048 \
+  -device virtio-gpu-pci \
   -device ramfb \
   -drive if=pflash,format=raw,readonly=on,file="$AAVMF_CODE" \
   -drive if=pflash,format=raw,file="$VARS_FD" \
@@ -139,6 +140,18 @@ fi
 # Confirm the kernel can continue printing over UART after ExitBootServices.
 if ! grep -q "RayOS aarch64 kernel loop ready" "$OUT_LOG"; then
   echo "FAIL: did not see post-exit kernel UART loop marker" >&2
+  echo "Serial log: $OUT_LOG" >&2
+  exit 1
+fi
+
+# Ensure the kernel can discover virtio-gpu-pci via PCI and complete a minimal virtio handshake.
+if ! grep -q "RAYOS_AARCH64_VIRTIO_GPU:FOUND" "$OUT_LOG"; then
+  echo "FAIL: did not see virtio-gpu discovery marker" >&2
+  echo "Serial log: $OUT_LOG" >&2
+  exit 1
+fi
+if ! grep -q "RAYOS_AARCH64_VIRTIO_GPU:FEATURES_OK" "$OUT_LOG"; then
+  echo "FAIL: virtio-gpu handshake did not reach FEATURES_OK" >&2
   echo "Serial log: $OUT_LOG" >&2
   exit 1
 fi

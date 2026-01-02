@@ -106,11 +106,35 @@ Important default: Linux may already be running.
 - Linux should boot/resume during RayOS boot (background).
 - “Present” means “attach Linux output to RayOS presentation + enable interaction routing,” not “start the VM.”
 
+### Product requirement: RayOS-native presentation (no VNC)
+
+RayOS is intended to boot on physical hardware as the hypervisor/host OS.
+That means Linux/Windows UI presentation must be **RayOS-native**:
+
+- RayOS must directly present guest output as RayOS surfaces/windows.
+- RayOS must directly route input to guests through RayOS-owned virtual devices.
+- Network-based viewers (e.g. VNC clients) are **not** part of the product path.
+
+VNC may be used only as a **developer harness fallback** while the in-OS VM supervisor,
+virtio device model, and compositor are still being implemented.
+
+### Dev-harness note (today)
+
+- In `./scripts/test-boot.sh`, the “present/hide” behavior is implemented by a **host-side bridge** that watches RayOS serial for host-event markers.
+- To match the contract (“Linux starts hidden at boot; present shows the already-running instance”), run with:
+  - `ENABLE_HOST_DESKTOP_BRIDGE=1`
+  - `PRELAUNCH_HIDDEN_DESKTOPS=1`
+- Presentation in the dev harness may be done via **VNC** (the hidden VM exposes a VNC server; `show linux desktop` opens a host VNC viewer).
+  This is explicitly a bring-up tool, not the intended installed-RayOS architecture.
+
 ### Recommended: virtio-gpu + shared memory / scanout surfaces
 
 - Linux guest uses a standard driver for virtio-gpu.
 - Guest renders into buffers that are shared with host (RayOS).
 - RayOS composites those buffers.
+
+In the installed architecture, this “scanout → RayOS surface” path replaces any
+external viewer approach.
 
 ### “Present Linux Desktop”
 

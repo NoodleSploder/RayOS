@@ -24,13 +24,24 @@ KERNEL_BIN_SRC="${KERNEL_BIN_SRC:-$ROOT_DIR/crates/kernel-bare/target/x86_64-unk
 BUILD_KERNEL="${BUILD_KERNEL:-1}"
 if [ "$BUILD_KERNEL" != "0" ]; then
   echo "Building kernel-bare (release)..."
+
+  # Optional: pass extra kernel Cargo features without editing the script.
+  # Example:
+  #   RAYOS_KERNEL_FEATURES=dev_scanout ./scripts/test-boot-ai.sh
+  RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-}"
+  EXTRA_FEATURE_ARGS=()
+  if [ -n "$RAYOS_KERNEL_FEATURES" ]; then
+    EXTRA_FEATURE_ARGS=(--features "$RAYOS_KERNEL_FEATURES")
+  fi
+
   pushd "$ROOT_DIR/crates/kernel-bare" >/dev/null
   RUSTC="$(rustup which rustc)" cargo build \
     -Z build-std=core,alloc \
     -Z build-std-features=compiler-builtins-mem \
     --release \
     --target x86_64-unknown-none \
-    --no-default-features --features host_ai
+    --no-default-features --features host_ai \
+    "${EXTRA_FEATURE_ARGS[@]}"
   popd >/dev/null
 fi
 

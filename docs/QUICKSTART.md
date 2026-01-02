@@ -1,5 +1,16 @@
 # RayOS Quick Reference - Phase 1 Complete
 
+**Note:** This document is historically useful but **out of date** relative to the current repo layout and the current “Option D / Linux-subsystem-first” direction.
+
+For current build/boot commands, start from:
+- `README.MD`
+- `docs/RAYOS_TODO.md`
+
+Linux desktop (dev harness, current behavior):
+- `show linux desktop` works only when the host bridge is enabled in `./scripts/test-boot.sh`.
+- Recommended for the “Linux hidden at boot, show only presents” lifecycle:
+      - `ENABLE_HOST_DESKTOP_BRIDGE=1 PRELAUNCH_HIDDEN_DESKTOPS=1 ./scripts/test-boot.sh`
+
 ## 🚀 Current Status
 - ✅ aarch64 UEFI bootloader boots successfully
 - ✅ Kernel architecture fully designed and implemented

@@ -143,6 +143,7 @@ QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 # Default: networking OFF (matches contract). We auto-enable it only for first-time
 # provisioning when the caller did not explicitly set LINUX_NET.
 LINUX_NET_DEFAULTED=0
+LINUX_NET_AUTO_PROVISIONING=0
 if [ -z "${LINUX_NET+x}" ]; then
   LINUX_NET=0
   LINUX_NET_DEFAULTED=1
@@ -156,22 +157,53 @@ LINUX_GL="${LINUX_GL:-0}"
 
 # Default: GUI ON (GTK window). Set LINUX_HEADLESS=1 to run without a GUI.
 LINUX_HEADLESS="${LINUX_HEADLESS:-0}"
+LINUX_DISPLAY_TYPE="${LINUX_DISPLAY_TYPE:-gtk}"
 
 disk_ready_marker_exists() {
   # The guest marks provisioning completion by creating:
   #   /rootfs/.rayos_desktop_rootfs_ready
   # inside the ext4 image.
   command -v debugfs >/dev/null 2>&1 || return 1
-  debugfs -R 'stat /rootfs/.rayos_desktop_rootfs_ready' "$DESKTOP_DISK_PATH" >/dev/null 2>&1
+  local out
+  out="$(debugfs -R 'stat /rootfs/.rayos_desktop_rootfs_ready' "$DESKTOP_DISK_PATH" 2>&1 || true)"
+  # debugfs exits 0 even when the file is missing; detect success by output content.
+  # Typical success contains "Inode:".
+  printf '%s' "$out" | rg -n -F "Inode:" >/dev/null 2>&1
 }
 
 if [ "$LINUX_NET" = "0" ] && [ "$LINUX_NET_DEFAULTED" = "1" ]; then
   if ! disk_ready_marker_exists; then
     # First boot provisioning needs networking to fetch packages.
     LINUX_NET=1
+    LINUX_NET_AUTO_PROVISIONING=1
     echo "NOTE: enabling networking for first-time desktop provisioning (set LINUX_NET=0 to forbid)." >&2
     echo "NOTE: to pre-provision headlessly, run: ./tools/linux_subsystem/build_desktop_rootfs_image.sh" >&2
   fi
+fi
+
+emit_rayos_serial_marker() {
+  local line="$1"
+  if [ -n "${RAYOS_SERIAL_LOG:-}" ]; then
+    printf "%s\n" "$line" >>"$RAYOS_SERIAL_LOG" 2>/dev/null || true
+  fi
+}
+
+NET_MARKER_REASON="explicit"
+if [ "$LINUX_NET_DEFAULTED" = "1" ]; then
+  NET_MARKER_REASON="default_off"
+fi
+if [ "$LINUX_NET_AUTO_PROVISIONING" = "1" ]; then
+  NET_MARKER_REASON="auto_provisioning"
+fi
+if [ "$LINUX_NET" != "0" ]; then
+  emit_rayos_serial_marker "RAYOS_HOST_MARKER:LINUX_DESKTOP_NETWORK:on:${NET_MARKER_REASON}"
+else
+  emit_rayos_serial_marker "RAYOS_HOST_MARKER:LINUX_DESKTOP_NETWORK:off:${NET_MARKER_REASON}"
+fi
+
+# Test helper: allow CI/dev scripts to validate policy markers without launching QEMU.
+if [ "${EMIT_POLICY_MARKERS_ONLY:-0}" != "0" ]; then
+  exit 0
 fi
 
 # Prepare artifacts and agent overlay.
@@ -192,9 +224,14 @@ if [ -z "$MODLOOP" ]; then
 fi
 
 VGA_KIND="${LINUX_VGA_KIND:-virtio}"
-DISPLAY_ARGS=("-display" "gtk")
-if [ "$LINUX_HEADLESS" != "0" ]; then
-  DISPLAY_ARGS=("-display" "none")
+DISPLAY_ARGS=()
+if [ "$LINUX_DISPLAY_TYPE" = "vnc" ]; then
+  VNC_TARGET="${LINUX_VNC_TARGET:-unix:$WORK_DIR/vnc.sock}"
+  DISPLAY_ARGS=("-vnc" "$VNC_TARGET")
+elif [ "$LINUX_HEADLESS" != "0" ]; then
+    DISPLAY_ARGS=("-display" "none")
+else
+    DISPLAY_ARGS=("-display" "gtk")
 fi
 
 # If virgl is enabled, prefer an explicit virtio-vga with virgl=on.
@@ -218,6 +255,25 @@ if [ "$LINUX_NET" != "0" ]; then
 fi
 
 CMDLINE="${LINUX_CMDLINE:-console=tty0 console=ttyS0 rdinit=/rayos_desktop_init loglevel=7 earlyprintk=serial,ttyS0,115200 panic=-1}"
+LOADVM_ARG=""
+if [ -n "${LINUX_LOADVM_TAG:-}" ]; then
+    # Only qcow2 (or other snapshot-capable formats) support internal snapshots.
+    # Our default persistent disk is a raw ext4 image, so skip -loadvm in that case.
+    DISK_FMT="raw"
+    if command -v qemu-img >/dev/null 2>&1; then
+      DISK_FMT="$(qemu-img info --output=json "$DESKTOP_DISK_PATH" 2>/dev/null | jq -r '.format // "raw"' 2>/dev/null || echo raw)"
+    else
+      case "$DESKTOP_DISK_PATH" in
+        *.qcow2|*.qcow) DISK_FMT="qcow2" ;;
+      esac
+    fi
+
+    if [ "$DISK_FMT" = "qcow2" ]; then
+      LOADVM_ARG="-loadvm ${LINUX_LOADVM_TAG}"
+    else
+      echo "WARN: ignoring LINUX_LOADVM_TAG=${LINUX_LOADVM_TAG} (disk format=$DISK_FMT does not support snapshots)" >&2
+    fi
+fi
 
 echo "Launching auto desktop..." >&2
 
@@ -253,9 +309,8 @@ exec "$QEMU_BIN" \
   -append "$CMDLINE" \
   -drive "file=$DESKTOP_DISK_PATH,format=raw,if=virtio,index=0" \
   ${MODLOOP:+-drive "file=$MODLOOP,format=raw,if=virtio,readonly=on,index=1"} \
+  ${LOADVM_ARG} \
   "${QEMU_GPU_ARGS[@]}" \
-  -device virtio-keyboard-pci \
-  -device virtio-mouse-pci \
   -device qemu-xhci \
   -device usb-kbd \
   -device usb-tablet \

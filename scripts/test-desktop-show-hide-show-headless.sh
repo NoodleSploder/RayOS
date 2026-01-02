@@ -1,24 +1,19 @@
 #!/bin/bash
-# End-to-end desktop control smoke test (headless).
+# Desktop show→hide→show smoke test (headless).
 #
-# Boots RayOS kernel-bare (no GUI), triggers the host Linux desktop bridge via
-# "show linux desktop", injects text+key via the RayOS prompt, then requests a
-# shutdown and quits the RayOS QEMU.
-#
-# This validates:
-# - RayOS -> host event emission (SHOW_LINUX_DESKTOP / LINUX_SENDTEXT / LINUX_SENDKEY / LINUX_SHUTDOWN)
-# - host bridge parsing + ACK markers
-# - linux desktop VM monitor socket creation (basic liveness)
+# Validates v0 "presentation gating" semantics for the Linux desktop bridge:
+# - show linux desktop (starts VM)
+# - hide linux desktop (stops VM, keeps persistent disk)
+# - show linux desktop again (restarts)
 #
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ -z "${WORK_DIR+x}" ]; then
-  # Use a unique WORK_DIR to avoid lock collisions with other running test-boot.sh sessions.
   if command -v mktemp >/dev/null 2>&1; then
-    WORK_DIR="$(mktemp -d "$ROOT_DIR/build/e2e-desktop-control.XXXXXX")"
+    WORK_DIR="$(mktemp -d "$ROOT_DIR/build/e2e-desktop-show-hide-show.XXXXXX")"
   else
-    WORK_DIR="$ROOT_DIR/build/e2e-desktop-control.$(date +%s).$$"
+    WORK_DIR="$ROOT_DIR/build/e2e-desktop-show-hide-show.$(date +%s).$$"
     mkdir -p "$WORK_DIR"
   fi
 else
@@ -40,6 +35,42 @@ wait_for_log() {
   start="$(date +%s)"
   while true; do
     if [ -f "$SERIAL_LOG" ] && tr -d '\r' <"$SERIAL_LOG" | grep -F -a -q "$needle"; then
+      return 0
+    fi
+    local now
+    now="$(date +%s)"
+    if [ $((now - start)) -ge "$timeout" ]; then
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
+wait_for_sock() {
+  local sock="$1"
+  local timeout="$2"
+  local start
+  start="$(date +%s)"
+  while true; do
+    if [ -S "$sock" ]; then
+      return 0
+    fi
+    local now
+    now="$(date +%s)"
+    if [ $((now - start)) -ge "$timeout" ]; then
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+
+wait_for_sock_gone() {
+  local sock="$1"
+  local timeout="$2"
+  local start
+  start="$(date +%s)"
+  while true; do
+    if [ ! -S "$sock" ]; then
       return 0
     fi
     local now
@@ -81,8 +112,7 @@ s.close()
 PY
 }
 
-echo "[e2e] Starting RayOS headless QEMU..." >&2
-echo "[e2e] WORK_DIR=$WORK_DIR" >&2
+echo "[show-hide-show] WORK_DIR=$WORK_DIR" >&2
 (
   cd "$ROOT_DIR"
   WORK_DIR="$WORK_DIR" \
@@ -92,77 +122,59 @@ echo "[e2e] WORK_DIR=$WORK_DIR" >&2
   ENABLE_HOST_DESKTOP_BRIDGE=1 \
   LINUX_DESKTOP_GLOBAL_LOCK="$WORK_DIR/rayos-linux-desktop-auto.lock" \
   AUTO_GENERATE_MODEL_BIN=0 \
+  INJECT_ACK_TO_GUEST=0 \
   ./scripts/test-boot.sh
 ) &
-RAYOS_TEST_PID="$!"
+RAYOS_PID="$!"
 
 cleanup() {
   quit_rayos_qemu
-  kill "$RAYOS_TEST_PID" 2>/dev/null || true
+  kill "$RAYOS_PID" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-echo "[e2e] Waiting for RayOS prompt..." >&2
+echo "[show-hide-show] Waiting for RayOS prompt..." >&2
 if ! wait_for_log "RayOS bicameral loop ready" "$TIMEOUT_SECS"; then
   echo "FAIL: RayOS did not reach prompt readiness within ${TIMEOUT_SECS}s" >&2
   tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
   exit 1
 fi
 
-echo "[e2e] Requesting Linux desktop..." >&2
+echo "[show-hide-show] show linux desktop..." >&2
 send_to_rayos "show linux desktop"
 if ! wait_for_log "RAYOS_HOST_ACK:SHOW_LINUX_DESKTOP:ok" "$TIMEOUT_SECS"; then
-  echo "FAIL: missing SHOW_LINUX_DESKTOP ACK" >&2
+  echo "FAIL: missing SHOW_LINUX_DESKTOP ok ACK" >&2
   tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
   exit 1
 fi
-
-echo "[e2e] Waiting for Linux desktop monitor socket..." >&2
-start="$(date +%s)"
-while [ ! -S "$DESKTOP_MON_SOCK" ]; do
-  now="$(date +%s)"
-  if [ $((now - start)) -ge "$TIMEOUT_SECS" ]; then
-    echo "FAIL: linux desktop monitor socket not created: $DESKTOP_MON_SOCK" >&2
-    tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
-    exit 1
-  fi
-  sleep 0.1
-done
-
-echo "[e2e] Typing into Linux desktop via RayOS bridge..." >&2
-send_to_rayos "type echo ok"
-if ! wait_for_log "RAYOS_HOST_ACK:LINUX_SENDTEXT:ok:sent" "$TIMEOUT_SECS"; then
-  echo "FAIL: missing LINUX_SENDTEXT ACK" >&2
-  tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
+if ! wait_for_sock "$DESKTOP_MON_SOCK" "$TIMEOUT_SECS"; then
+  echo "FAIL: desktop monitor sock not created: $DESKTOP_MON_SOCK" >&2
   exit 1
 fi
 
-send_to_rayos "press enter"
-if ! wait_for_log "RAYOS_HOST_ACK:LINUX_SENDKEY:ok:sent" "$TIMEOUT_SECS"; then
-  echo "FAIL: missing LINUX_SENDKEY ACK" >&2
+echo "[show-hide-show] hide linux desktop..." >&2
+send_to_rayos "hide linux desktop"
+if ! wait_for_log "RAYOS_HOST_ACK:HIDE_LINUX_DESKTOP:ok:stopped" "$TIMEOUT_SECS"; then
+  echo "FAIL: missing HIDE_LINUX_DESKTOP ok ACK" >&2
   tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
   exit 1
 fi
-
-echo "[e2e] Shutting down Linux desktop..." >&2
-send_to_rayos "shutdown linux"
-if ! wait_for_log "RAYOS_HOST_ACK:LINUX_SHUTDOWN:ok" "$TIMEOUT_SECS"; then
-  echo "FAIL: missing LINUX_SHUTDOWN ACK" >&2
-  tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
+if ! wait_for_sock_gone "$DESKTOP_MON_SOCK" "$TIMEOUT_SECS"; then
+  echo "FAIL: desktop monitor sock did not disappear after hide" >&2
   exit 1
 fi
 
-echo "[e2e] Quitting RayOS QEMU..." >&2
-quit_rayos_qemu
-
-set +e
-wait "$RAYOS_TEST_PID"
-rc=$?
-set -e
-
-if [ "$rc" -ne 0 ]; then
-  echo "WARN: RayOS test process exited with rc=$rc (continuing)" >&2
+echo "[show-hide-show] show linux desktop again..." >&2
+send_to_rayos "show linux desktop"
+if ! wait_for_log "RAYOS_HOST_ACK:SHOW_LINUX_DESKTOP:ok" "$TIMEOUT_SECS"; then
+  echo "FAIL: missing SHOW_LINUX_DESKTOP ok ACK (second)" >&2
+  tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
+  exit 1
+fi
+if ! wait_for_sock "$DESKTOP_MON_SOCK" "$TIMEOUT_SECS"; then
+  echo "FAIL: desktop monitor sock not created on second show" >&2
+  exit 1
 fi
 
-echo "PASS: desktop control e2e markers observed" >&2
+echo "PASS: show→hide→show worked" >&2
 exit 0
