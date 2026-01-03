@@ -82,6 +82,8 @@ tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
 
 NEED1="RAYOS_VMM:VMX:INIT_BEGIN"
 NEED2="RAYOS_VMM:VMX:VMLAUNCH_ATTEMPT"
+NEED3="RAYOS_LINUX_DESKTOP_PRESENTED"
+NEED4="RAYOS_LINUX_DESKTOP_FIRST_FRAME"
 
 if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM"; then
   echo "PASS: hypervisor init path executed (markers present)" >&2
@@ -93,6 +95,15 @@ if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM
       echo "NOTE: VM-instruction error printed (see serial log)" >&2
     fi
   fi
+
+  # Check virtio-gpu selftest markers when present in this build.
+  if grep -F -a -q "$NEED3" "$SERIAL_NORM" && grep -F -a -q "$NEED4" "$SERIAL_NORM"; then
+    echo "PASS: virtio-gpu selftest published scanout + first-frame markers" >&2
+  else
+    echo "NOTE: virtio-gpu selftest markers missing; check build features" >&2
+    # Non-fatal; the hypervisor init still counts as success for general CI.
+  fi
+
   echo "Serial log: $SERIAL_LOG" >&2
   exit 0
 fi

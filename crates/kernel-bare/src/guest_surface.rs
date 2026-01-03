@@ -102,7 +102,11 @@ pub fn surface_snapshot() -> Option<GuestSurface> {
 
         let seq2 = SURFACE_SEQ.load(Ordering::Acquire);
         if seq1 == seq2 {
-            return if surface.is_valid() { Some(surface) } else { None };
+            return if surface.is_valid() {
+                Some(surface)
+            } else {
+                None
+            };
         }
     }
     None

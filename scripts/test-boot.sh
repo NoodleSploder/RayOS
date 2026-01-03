@@ -342,6 +342,7 @@ PY
 
         if [ "$ready" -eq 1 ]; then
             emit_host_ack "LINUX_DESKTOP_HIDDEN_READY" "ok" "vnc_ready"
+            emit_host_marker "LINUX_DESKTOP_HIDDEN" "running" "vnc_ready"
 
             # Best-effort single-frame capture for determinism/diagnostics.
             local framebuffer_out="$WORK_DIR/framebuffer-hidden.raw"
@@ -355,6 +356,7 @@ PY
             fi
         else
             emit_host_ack "LINUX_DESKTOP_HIDDEN_READY" "err" "vnc_timeout"
+            emit_host_marker "LINUX_DESKTOP_HIDDEN" "stopped" "vnc_timeout"
         fi
     ) >/dev/null 2>&1 &
 
@@ -366,6 +368,7 @@ PY
     LINUX_DESKTOP_GLOBAL_LOCK="$WORK_DIR/.linux-desktop-auto.global.lock" \
     LINUX_DESKTOP_GLOBAL_LOCK_DIR="$WORK_DIR/.linux-desktop-auto.global.lockdir" \
     LINUX_DESKTOP_MONITOR_SOCK="$HIDDEN_DESKTOP_MON_SOCK" \
+    RAYOS_SERIAL_LOG="$SERIAL_LOG" \
     "$ROOT_DIR/scripts/run-linux-subsystem-desktop-auto.sh" >"$WORK_DIR/linux-desktop-hidden-launch.log" 2>&1 </dev/null &
     echo "$!" >"$HIDDEN_DESKTOP_PID_FILE"
 
@@ -523,6 +526,15 @@ emit_host_ack() {
     fi
 }
 
+emit_host_marker() {
+    local op="$1"
+    local status="$2"
+    local detail="${3:-}"
+    if [ -n "$SERIAL_LOG" ]; then
+        printf "RAYOS_HOST_MARKER:%s:%s:%s\n" "$op" "$status" "$detail" >>"$SERIAL_LOG"
+    fi
+}
+
 desktop_running() {
     # Returns 0 if the desktop VM is running and sets DESKTOP_QEMU_PID.
     # Returns 1 otherwise.
@@ -646,6 +658,7 @@ cleanup_bridge() {
         fi
         rm -f "$HIDDEN_DESKTOP_PID_FILE" 2>/dev/null || true
         rm -f "$WORK_DIR/.linux-desktop-hidden.state" 2>/dev/null || true
+        emit_host_marker "LINUX_DESKTOP_HIDDEN" "stopped" "cleanup"
     fi
 
     if [ -f "$VNC_VIEWER_PID_FILE" ]; then
@@ -761,6 +774,7 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE" != "0" ]; then
                         vnc_viewer_pid="$(cat "$VNC_VIEWER_PID_FILE" 2>/dev/null || true)"
                         if [ -n "$vnc_viewer_pid" ] && kill -0 "$vnc_viewer_pid" 2>/dev/null; then
                             emit_host_ack "SHOW_LINUX_DESKTOP" "ok" "already_showing_vnc"
+                            emit_host_marker "LINUX_DESKTOP_PRESENTED" "ok" "already_showing_vnc"
                             continue
                         fi
                     fi
@@ -775,6 +789,7 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE" != "0" ]; then
                             fi
                             if launch_vnc_viewer_linux "$target"; then
                                 emit_host_ack "SHOW_LINUX_DESKTOP" "ok" "showing_vnc"
+                                emit_host_marker "LINUX_DESKTOP_PRESENTED" "ok" "showing_vnc"
                                 continue
                             else
                                 # Last-resort fallback: stop the hidden VM and launch a visible desktop.
@@ -782,6 +797,7 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE" != "0" ]; then
                                 echo "[host] No VNC viewer found; falling back to launching a visible Linux desktop VM." >&2
                                 emit_host_ack "SHOW_LINUX_DESKTOP" "err" "no_vnc_viewer_fallback_visible"
                                 kill "$hidden_pid" 2>/dev/null || true
+                                emit_host_marker "LINUX_DESKTOP_HIDDEN" "stopped" "viewer_missing"
                                 # Give the process a moment to exit so per-WORK_DIR locks release.
                                 for _ in $(seq 1 50); do
                                     if ! kill -0 "$hidden_pid" 2>/dev/null; then
@@ -807,6 +823,7 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE" != "0" ]; then
                                 fi
                                 if launch_vnc_viewer_linux "$target"; then
                                     emit_host_ack "SHOW_LINUX_DESKTOP" "ok" "showing_vnc"
+                                    emit_host_marker "LINUX_DESKTOP_PRESENTED" "ok" "showing_vnc"
                                     continue
                                 fi
                             fi

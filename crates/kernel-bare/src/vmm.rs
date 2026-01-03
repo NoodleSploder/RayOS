@@ -14,10 +14,26 @@ impl GuestScanoutPublisher {
 
     pub fn publish_scanout(&self, surface: GuestSurface) {
         guest_surface::publish_surface(surface);
+        // Emit a deterministic marker when the in-kernel VMM publishes a guest scanout.
+        crate::serial_write_str("RAYOS_LINUX_DESKTOP_PRESENTED:ok:");
+        crate::serial_write_hex_u64(surface.width as u64);
+        crate::serial_write_str("x");
+        crate::serial_write_hex_u64(surface.height as u64);
+        crate::serial_write_str("\n");
     }
 
     pub fn frame_ready(&self) {
+        // Bump the monotonic guest frame sequence and emit a first-frame marker
+        // when the sequence transitions from 0 -> 1.
+        let prev = guest_surface::frame_seq();
         guest_surface::bump_frame_seq();
+        let now = guest_surface::frame_seq();
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:FRAME_READY:");
+        crate::serial_write_hex_u64(now);
+        crate::serial_write_str("\n");
+        if prev == 0 && now != 0 {
+            crate::serial_write_str("RAYOS_LINUX_DESKTOP_FIRST_FRAME:ok:\n");
+        }
     }
 }
 
@@ -36,18 +52,21 @@ pub mod virtio_gpu {
 
     #[inline(always)]
     unsafe fn phys_read_unaligned<T: Copy>(phys: u64) -> T {
-        let p = phys as *const T;
+        let p = crate::phys_to_virt(phys) as *const T;
         ptr::read_unaligned(p)
     }
 
     #[inline(always)]
     unsafe fn phys_write_unaligned<T: Copy>(phys: u64, v: T) {
-        let p = phys as *mut T;
+        let p = crate::phys_to_virt(phys) as *mut T;
         ptr::write_unaligned(p, v)
     }
 
     #[inline(always)]
-    fn init_resp_hdr_from_req(req: &proto::VirtioGpuCtrlHdr, resp_type: u32) -> proto::VirtioGpuCtrlHdr {
+    fn init_resp_hdr_from_req(
+        req: &proto::VirtioGpuCtrlHdr,
+        resp_type: u32,
+    ) -> proto::VirtioGpuCtrlHdr {
         // Preserve fence and ctx fields when present; flags are not echoed.
         proto::VirtioGpuCtrlHdr {
             type_: resp_type,
@@ -86,7 +105,9 @@ pub mod virtio_gpu {
             resp_phys: u64,
             resp_len: usize,
         ) -> usize {
-            if req_len < mem::size_of::<proto::VirtioGpuCtrlHdr>() || resp_len < mem::size_of::<proto::VirtioGpuCtrlHdr>() {
+            if req_len < mem::size_of::<proto::VirtioGpuCtrlHdr>()
+                || resp_len < mem::size_of::<proto::VirtioGpuCtrlHdr>()
+            {
                 let hdr = proto::VirtioGpuCtrlHdr {
                     type_: proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
                     flags: 0,
@@ -102,92 +123,129 @@ pub mod virtio_gpu {
             match req_hdr.type_ {
                 proto::VIRTIO_GPU_CMD_GET_DISPLAY_INFO => {
                     if resp_len < mem::size_of::<proto::VirtioGpuRespDisplayInfo>() {
-                        let hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
+                        let hdr = init_resp_hdr_from_req(
+                            &req_hdr,
+                            proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                        );
                         phys_write_unaligned(resp_phys, hdr);
                         return mem::size_of::<proto::VirtioGpuCtrlHdr>();
                     }
 
                     let mut out: proto::VirtioGpuRespDisplayInfo = mem::zeroed();
                     // Ensure fence propagation.
-                    out.hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_DISPLAY_INFO);
+                    out.hdr =
+                        init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_DISPLAY_INFO);
                     self.model.handle_get_display_info(&mut out);
-                    out.hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_DISPLAY_INFO);
+                    out.hdr =
+                        init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_DISPLAY_INFO);
                     phys_write_unaligned(resp_phys, out);
                     mem::size_of::<proto::VirtioGpuRespDisplayInfo>()
                 }
                 proto::VIRTIO_GPU_CMD_RESOURCE_CREATE_2D => {
                     if req_len < mem::size_of::<proto::VirtioGpuResourceCreate2d>() {
-                        let hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
+                        let hdr = init_resp_hdr_from_req(
+                            &req_hdr,
+                            proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                        );
                         phys_write_unaligned(resp_phys, hdr);
                         return mem::size_of::<proto::VirtioGpuCtrlHdr>();
                     }
                     let req: proto::VirtioGpuResourceCreate2d = phys_read_unaligned(req_phys);
-                    let mut hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
+                    let mut hdr =
+                        init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
                     self.model.handle_resource_create_2d(&req, &mut hdr);
                     phys_write_unaligned(resp_phys, hdr);
                     mem::size_of::<proto::VirtioGpuCtrlHdr>()
                 }
                 proto::VIRTIO_GPU_CMD_RESOURCE_UNREF => {
                     if req_len < mem::size_of::<proto::VirtioGpuResourceUnref>() {
-                        let hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
+                        let hdr = init_resp_hdr_from_req(
+                            &req_hdr,
+                            proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                        );
                         phys_write_unaligned(resp_phys, hdr);
                         return mem::size_of::<proto::VirtioGpuCtrlHdr>();
                     }
                     let req: proto::VirtioGpuResourceUnref = phys_read_unaligned(req_phys);
-                    let mut hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
+                    let mut hdr =
+                        init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
                     self.model.handle_resource_unref(&req, &mut hdr);
                     phys_write_unaligned(resp_phys, hdr);
                     mem::size_of::<proto::VirtioGpuCtrlHdr>()
                 }
                 proto::VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING => {
-                    if req_len < mem::size_of::<proto::VirtioGpuResourceAttachBackingHdr>() + mem::size_of::<proto::VirtioGpuMemEntry>() {
-                        let hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
+                    if req_len
+                        < mem::size_of::<proto::VirtioGpuResourceAttachBackingHdr>()
+                            + mem::size_of::<proto::VirtioGpuMemEntry>()
+                    {
+                        let hdr = init_resp_hdr_from_req(
+                            &req_hdr,
+                            proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                        );
                         phys_write_unaligned(resp_phys, hdr);
                         return mem::size_of::<proto::VirtioGpuCtrlHdr>();
                     }
-                    let base: proto::VirtioGpuResourceAttachBackingHdr = phys_read_unaligned(req_phys);
+                    let base: proto::VirtioGpuResourceAttachBackingHdr =
+                        phys_read_unaligned(req_phys);
                     // Milestone-1: accept only the first entry.
-                    let entry_phys = req_phys + mem::size_of::<proto::VirtioGpuResourceAttachBackingHdr>() as u64;
+                    let entry_phys = req_phys
+                        + mem::size_of::<proto::VirtioGpuResourceAttachBackingHdr>() as u64;
                     let entry: proto::VirtioGpuMemEntry = phys_read_unaligned(entry_phys);
 
-                    let mut hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
-                    self.model
-                        .handle_resource_attach_backing_single(base.resource_id, entry, &mut hdr);
+                    let mut hdr =
+                        init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
+                    self.model.handle_resource_attach_backing_single(
+                        base.resource_id,
+                        entry,
+                        &mut hdr,
+                    );
                     phys_write_unaligned(resp_phys, hdr);
                     mem::size_of::<proto::VirtioGpuCtrlHdr>()
                 }
                 proto::VIRTIO_GPU_CMD_SET_SCANOUT => {
                     if req_len < mem::size_of::<proto::VirtioGpuSetScanout>() {
-                        let hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
+                        let hdr = init_resp_hdr_from_req(
+                            &req_hdr,
+                            proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                        );
                         phys_write_unaligned(resp_phys, hdr);
                         return mem::size_of::<proto::VirtioGpuCtrlHdr>();
                     }
                     let req: proto::VirtioGpuSetScanout = phys_read_unaligned(req_phys);
-                    let mut hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
+                    let mut hdr =
+                        init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
                     self.model.handle_set_scanout(&req, &mut hdr);
                     phys_write_unaligned(resp_phys, hdr);
                     mem::size_of::<proto::VirtioGpuCtrlHdr>()
                 }
                 proto::VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D => {
                     if req_len < mem::size_of::<proto::VirtioGpuTransferToHost2d>() {
-                        let hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
+                        let hdr = init_resp_hdr_from_req(
+                            &req_hdr,
+                            proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                        );
                         phys_write_unaligned(resp_phys, hdr);
                         return mem::size_of::<proto::VirtioGpuCtrlHdr>();
                     }
                     let req: proto::VirtioGpuTransferToHost2d = phys_read_unaligned(req_phys);
-                    let mut hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
+                    let mut hdr =
+                        init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
                     self.model.handle_transfer_to_host_2d(&req, &mut hdr);
                     phys_write_unaligned(resp_phys, hdr);
                     mem::size_of::<proto::VirtioGpuCtrlHdr>()
                 }
                 proto::VIRTIO_GPU_CMD_RESOURCE_FLUSH => {
                     if req_len < mem::size_of::<proto::VirtioGpuResourceFlush>() {
-                        let hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
+                        let hdr = init_resp_hdr_from_req(
+                            &req_hdr,
+                            proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                        );
                         phys_write_unaligned(resp_phys, hdr);
                         return mem::size_of::<proto::VirtioGpuCtrlHdr>();
                     }
                     let req: proto::VirtioGpuResourceFlush = phys_read_unaligned(req_phys);
-                    let mut hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
+                    let mut hdr =
+                        init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
                     self.model.handle_resource_flush(&req, &mut hdr);
                     phys_write_unaligned(resp_phys, hdr);
                     mem::size_of::<proto::VirtioGpuCtrlHdr>()

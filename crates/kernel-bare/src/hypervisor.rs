@@ -14,7 +14,9 @@ use core::convert::TryInto;
 use core::ptr;
 use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use crate::guest_driver_template::{GUEST_DRIVER_BINARY, GUEST_DRIVER_DESC_DATA_OFFSET, GUEST_DRIVER_DESC_DATA_PTR_OFFSET};
+use crate::guest_driver_template::{
+    GUEST_DRIVER_BINARY, GUEST_DRIVER_DESC_DATA_OFFSET, GUEST_DRIVER_DESC_DATA_PTR_OFFSET,
+};
 
 // MSRs
 const IA32_FEATURE_CONTROL: u32 = 0x3A;
@@ -41,6 +43,10 @@ const VMCS_VMEXIT_INSTRUCTION_LEN: u64 = 0x440C;
 const VMCS_EXIT_QUALIFICATION: u64 = 0x6400;
 const GUEST_LINEAR_ADDRESS: u64 = 0x640A;
 const GUEST_PHYSICAL_ADDRESS: u64 = 0x2400;
+// VM-entry interruption info field (to request an injected interrupt on VM-entry).
+const VMCS_ENTRY_INTERRUPTION_INFO: u64 = 0x4016;
+// Default vector to use for virtio-mmio notifications (pick a free vector in the usable range).
+const VIRTIO_MMIO_IRQ_VECTOR: u8 = 0x20; // IRQ vector 32 (first non-reserved)
 
 // 64-bit control fields
 const VMCS_LINK_POINTER: u64 = 0x2800;
@@ -117,11 +123,8 @@ const GUEST_IDTR_BASE: u64 = 0x6818;
 const GUEST_DR7: u64 = 0x681A;
 const GUEST_GDT_STATIC_ENTRIES: usize = 3;
 const GUEST_GDT_ENTRY_COUNT: usize = GUEST_GDT_STATIC_ENTRIES + 2; // TSS descriptor takes two slots
-const GUEST_GDT_ENTRIES: [u64; GUEST_GDT_STATIC_ENTRIES] = [
-    0,
-    0x00AF9B000000FFFF,
-    0x00CF93000000FFFF,
-];
+const GUEST_GDT_ENTRIES: [u64; GUEST_GDT_STATIC_ENTRIES] =
+    [0, 0x00AF9B000000FFFF, 0x00CF93000000FFFF];
 const GUEST_GDT_LIMIT_VALUE: u64 = (GUEST_GDT_ENTRY_COUNT * 8 - 1) as u64;
 const GUEST_IDTR_LIMIT_VALUE: u64 = 0;
 const GUEST_CODE_SELECTOR: u16 = 1 << 3;
@@ -228,14 +231,23 @@ unsafe fn build_guest_page_tables() {
     let pdpt = crate::phys_to_virt(pdpt_phys) as *mut u64;
     let pd = crate::phys_to_virt(pd_phys) as *mut u64;
 
-    core::ptr::write_volatile(pml4.add(0), (guest_ram_gpa(1) & 0xFFFF_FFFF_FFFF_F000) | PRESENT_RW);
-    core::ptr::write_volatile(pdpt.add(0), (guest_ram_gpa(2) & 0xFFFF_FFFF_FFFF_F000) | PRESENT_RW);
+    core::ptr::write_volatile(
+        pml4.add(0),
+        (guest_ram_gpa(1) & 0xFFFF_FFFF_FFFF_F000) | PRESENT_RW,
+    );
+    core::ptr::write_volatile(
+        pdpt.add(0),
+        (guest_ram_gpa(2) & 0xFFFF_FFFF_FFFF_F000) | PRESENT_RW,
+    );
 
     for pd_idx in 0..GUEST_EPT_PD_COUNT {
         let pt_page = GUEST_PT_PAGE_START + pd_idx;
         let pt_phys = guest_ram_phys(pt_page);
         let pt = crate::phys_to_virt(pt_phys) as *mut u64;
-        core::ptr::write_volatile(pd.add(pd_idx), (guest_ram_gpa(pt_page) & 0xFFFF_FFFF_FFFF_F000) | PRESENT_RW);
+        core::ptr::write_volatile(
+            pd.add(pd_idx),
+            (guest_ram_gpa(pt_page) & 0xFFFF_FFFF_FFFF_F000) | PRESENT_RW,
+        );
 
         let base_index = pd_idx * 512;
         for pt_idx in 0..512 {
@@ -244,7 +256,10 @@ unsafe fn build_guest_page_tables() {
                 break;
             }
             let page_gpa = guest_ram_gpa(page_index);
-            core::ptr::write_volatile(pt.add(pt_idx), (page_gpa & 0xFFFF_FFFF_FFFF_F000) | PRESENT_RW);
+            core::ptr::write_volatile(
+                pt.add(pt_idx),
+                (page_gpa & 0xFFFF_FFFF_FFFF_F000) | PRESENT_RW,
+            );
         }
     }
 }
@@ -344,12 +359,21 @@ unsafe fn build_guest_ram_ept() -> Option<u64> {
     let pdpt_v = crate::phys_to_virt(pdpt) as *mut u64;
     let pd_v = crate::phys_to_virt(pd) as *mut u64;
 
-    core::ptr::write_volatile(pdpt_v.add(0), (pd & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS);
-    core::ptr::write_volatile(pml4_v.add(0), (pdpt & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS);
+    core::ptr::write_volatile(
+        pdpt_v.add(0),
+        (pd & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS,
+    );
+    core::ptr::write_volatile(
+        pml4_v.add(0),
+        (pdpt & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS,
+    );
 
     for pd_idx in 0..GUEST_EPT_PD_COUNT {
         let pt = crate::phys_to_virt(pt_phys[pd_idx]) as *mut u64;
-        core::ptr::write_volatile(pd_v.add(pd_idx), (pt_phys[pd_idx] & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS);
+        core::ptr::write_volatile(
+            pd_v.add(pd_idx),
+            (pt_phys[pd_idx] & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS,
+        );
 
         let base_index = pd_idx * 512;
         for pt_idx in 0..512 {
@@ -358,7 +382,8 @@ unsafe fn build_guest_ram_ept() -> Option<u64> {
                 break;
             }
             let page_phys = guest_ram_phys(page_index);
-            let entry = (page_phys & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS | (EPT_MEMTYPE_WB << 3);
+            let entry =
+                (page_phys & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS | (EPT_MEMTYPE_WB << 3);
             core::ptr::write_volatile(pt.add(pt_idx), entry);
         }
     }
@@ -508,6 +533,8 @@ const VIRTIO_MMIO_VENDOR_ID_VALUE: u32 = 0x1AF4;
 const VIRTIO_MMIO_INT_VRING: u32 = 1;
 
 const VIRTIO_NET_DEVICE_ID: u32 = 0x0101;
+// Standard virtio device ID for virtio-gpu.
+const VIRTIO_GPU_DEVICE_ID: u32 = 16;
 const VIRTIO_NET_TX_QUEUE: u16 = 0;
 const VIRTIO_NET_RX_QUEUE: u16 = 1;
 const VIRTIO_NET_PKT_MAX: usize = 2048;
@@ -610,9 +637,16 @@ struct VirtioMmioState {
 
 impl VirtioMmioState {
     const fn new() -> Self {
-        #[cfg(feature = "vmm_hypervisor_net_test")]
+        // Feature priority: if we're building the virtio-gpu device model, expose it.
+        // Otherwise preserve existing net-test and default behaviors.
+        #[cfg(feature = "vmm_virtio_gpu")]
+        let device_id = VIRTIO_GPU_DEVICE_ID;
+        #[cfg(all(not(feature = "vmm_virtio_gpu"), feature = "vmm_hypervisor_net_test"))]
         let device_id = VIRTIO_NET_DEVICE_ID;
-        #[cfg(not(feature = "vmm_hypervisor_net_test"))]
+        #[cfg(all(
+            not(feature = "vmm_virtio_gpu"),
+            not(feature = "vmm_hypervisor_net_test")
+        ))]
         let device_id = VIRTIO_MMIO_DEVICE_ID_VALUE;
 
         Self {
@@ -634,6 +668,10 @@ impl VirtioMmioState {
 }
 
 static VIRTIO_MMIO_STATE: VirtioMmioState = VirtioMmioState::new();
+
+#[cfg(feature = "vmm_virtio_gpu")]
+static mut VIRTIO_GPU_DEVICE: crate::vmm::virtio_gpu::VirtioGpuDevice =
+    crate::vmm::virtio_gpu::VirtioGpuDevice::new();
 
 struct MmioInstruction {
     kind: MmioAccessKind,
@@ -698,7 +736,11 @@ fn init_hypervisor_mmio() {
     }
 }
 
-fn mmio_counter_handler(_regs: &mut GuestRegs, access: &MmioAccess, value: Option<u64>) -> Option<u64> {
+fn mmio_counter_handler(
+    _regs: &mut GuestRegs,
+    access: &MmioAccess,
+    value: Option<u64>,
+) -> Option<u64> {
     match access.kind {
         MmioAccessKind::Read => {
             let v = MMIO_COUNTER.load(Ordering::Relaxed);
@@ -719,7 +761,11 @@ fn mmio_counter_handler(_regs: &mut GuestRegs, access: &MmioAccess, value: Optio
     }
 }
 
-fn virtio_mmio_handler(_regs: &mut GuestRegs, access: &MmioAccess, value: Option<u64>) -> Option<u64> {
+fn virtio_mmio_handler(
+    _regs: &mut GuestRegs,
+    access: &MmioAccess,
+    value: Option<u64>,
+) -> Option<u64> {
     let mask = match access.size {
         1 => 0xFF,
         2 => 0xFFFF,
@@ -733,46 +779,46 @@ fn virtio_mmio_handler(_regs: &mut GuestRegs, access: &MmioAccess, value: Option
         (VIRTIO_MMIO_MAGIC_VALUE_OFFSET, MmioAccessKind::Read) => {
             Some(VIRTIO_MMIO_MAGIC_VALUE as u64)
         }
-        (VIRTIO_MMIO_VERSION_OFFSET, MmioAccessKind::Read) => Some(VIRTIO_MMIO_VERSION_VALUE as u64),
-        (VIRTIO_MMIO_DEVICE_ID_OFFSET, MmioAccessKind::Read) => Some(
-            VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) as u64
-        ),
-        (VIRTIO_MMIO_VENDOR_ID_OFFSET, MmioAccessKind::Read) => Some(VIRTIO_MMIO_VENDOR_ID_VALUE as u64),
+        (VIRTIO_MMIO_VERSION_OFFSET, MmioAccessKind::Read) => {
+            Some(VIRTIO_MMIO_VERSION_VALUE as u64)
+        }
+        (VIRTIO_MMIO_DEVICE_ID_OFFSET, MmioAccessKind::Read) => {
+            Some(VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) as u64)
+        }
+        (VIRTIO_MMIO_VENDOR_ID_OFFSET, MmioAccessKind::Read) => {
+            Some(VIRTIO_MMIO_VENDOR_ID_VALUE as u64)
+        }
         (VIRTIO_MMIO_DEVICE_FEATURES_OFFSET, MmioAccessKind::Read) => {
             Some(VIRTIO_MMIO_FEATURES_VALUE as u64)
         }
-        (VIRTIO_MMIO_DRIVER_FEATURES_OFFSET, MmioAccessKind::Read) => Some(
-            VIRTIO_MMIO_STATE.driver_features.load(Ordering::Relaxed) as u64,
-        ),
-        (VIRTIO_MMIO_INTERRUPT_STATUS_OFFSET, MmioAccessKind::Read) => Some(
-            VIRTIO_MMIO_STATE.interrupt_status.load(Ordering::Relaxed) as u64,
-        ),
-        (VIRTIO_MMIO_STATUS_OFFSET, MmioAccessKind::Read) => Some(
-            VIRTIO_MMIO_STATE.status.load(Ordering::Relaxed) as u64,
-        ),
-        (VIRTIO_MMIO_QUEUE_SELECT_OFFSET, MmioAccessKind::Read) => Some(
-            VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as u64,
-        ),
+        (VIRTIO_MMIO_DRIVER_FEATURES_OFFSET, MmioAccessKind::Read) => {
+            Some(VIRTIO_MMIO_STATE.driver_features.load(Ordering::Relaxed) as u64)
+        }
+        (VIRTIO_MMIO_INTERRUPT_STATUS_OFFSET, MmioAccessKind::Read) => {
+            Some(VIRTIO_MMIO_STATE.interrupt_status.load(Ordering::Relaxed) as u64)
+        }
+        (VIRTIO_MMIO_STATUS_OFFSET, MmioAccessKind::Read) => {
+            Some(VIRTIO_MMIO_STATE.status.load(Ordering::Relaxed) as u64)
+        }
+        (VIRTIO_MMIO_QUEUE_SELECT_OFFSET, MmioAccessKind::Read) => {
+            Some(VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as u64)
+        }
         (VIRTIO_MMIO_QUEUE_DESC_OFFSET, MmioAccessKind::Read) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             Some(VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed))
         }
-        ,
         (VIRTIO_MMIO_QUEUE_DRIVER_OFFSET, MmioAccessKind::Read) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             Some(VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed))
         }
-        ,
         (VIRTIO_MMIO_QUEUE_USED_OFFSET, MmioAccessKind::Read) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             Some(VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed))
         }
-        ,
         (VIRTIO_MMIO_QUEUE_SIZE_OFFSET, MmioAccessKind::Read) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             Some(VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed) as u64)
         }
-        ,
         (VIRTIO_MMIO_QUEUE_READY_OFFSET, MmioAccessKind::Read) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             Some(VIRTIO_MMIO_STATE.queue_ready[qi].load(Ordering::Relaxed) as u64)
@@ -797,34 +843,31 @@ fn virtio_mmio_handler(_regs: &mut GuestRegs, access: &MmioAccess, value: Option
         }
 
         (VIRTIO_MMIO_QUEUE_SELECT_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE.queue_selected.store((write_value as u32) & 1, Ordering::Relaxed);
+            VIRTIO_MMIO_STATE
+                .queue_selected
+                .store((write_value as u32) & 1, Ordering::Relaxed);
             None
         }
-        ,
         (VIRTIO_MMIO_QUEUE_DESC_OFFSET, MmioAccessKind::Write) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             VIRTIO_MMIO_STATE.queue_desc_address[qi].store(write_value as u64, Ordering::Relaxed);
             None
         }
-        ,
         (VIRTIO_MMIO_QUEUE_DRIVER_OFFSET, MmioAccessKind::Write) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             VIRTIO_MMIO_STATE.queue_driver_address[qi].store(write_value as u64, Ordering::Relaxed);
             None
         }
-        ,
         (VIRTIO_MMIO_QUEUE_USED_OFFSET, MmioAccessKind::Write) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             VIRTIO_MMIO_STATE.queue_used_address[qi].store(write_value as u64, Ordering::Relaxed);
             None
         }
-        ,
         (VIRTIO_MMIO_QUEUE_SIZE_OFFSET, MmioAccessKind::Write) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             VIRTIO_MMIO_STATE.queue_size[qi].store(write_value as u32, Ordering::Relaxed);
             None
         }
-        ,
         (VIRTIO_MMIO_QUEUE_READY_OFFSET, MmioAccessKind::Write) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             VIRTIO_MMIO_STATE.queue_ready[qi].store((write_value as u32) & 1, Ordering::Relaxed);
@@ -833,7 +876,8 @@ fn virtio_mmio_handler(_regs: &mut GuestRegs, access: &MmioAccess, value: Option
         (VIRTIO_MMIO_QUEUE_NOTIFY_OFFSET, MmioAccessKind::Write) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             let queue_desc_addr = VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed);
-            let queue_driver_addr = VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed);
+            let queue_driver_addr =
+                VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed);
             let queue_used_addr = VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed);
             let queue_size_value = VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed);
             let queue_ready_value = VIRTIO_MMIO_STATE.queue_ready[qi].load(Ordering::Relaxed);
@@ -898,69 +942,69 @@ extern "C" fn vmx_exit_stub() -> ! {
     // Save guest GPRs to the host stack, call into Rust for exit handling,
     // then restore GPRs and resume guest execution.
     core::arch::naked_asm!(
-            "push r15\n\
-             push r14\n\
-             push r13\n\
-             push r12\n\
-             push r11\n\
-             push r10\n\
-             push r9\n\
-             push r8\n\
-             push rdi\n\
-             push rsi\n\
-             push rbp\n\
-             push rdx\n\
-             push rcx\n\
-             push rbx\n\
-             push rax\n\
-             mov rdi, rsp\n\
-             sub rsp, 8\n\
-             call {handler}\n\
-             add rsp, 8\n\
-             test al, al\n\
-             jnz 2f\n\
-             pop rax\n\
-             pop rbx\n\
-             pop rcx\n\
-             pop rdx\n\
-             pop rbp\n\
-             pop rsi\n\
-             pop rdi\n\
-             pop r8\n\
-             pop r9\n\
-             pop r10\n\
-             pop r11\n\
-             pop r12\n\
-             pop r13\n\
-             pop r14\n\
-             pop r15\n\
-             vmresume\n\
-             pushfq\n\
-             pop rdi\n\
-             sub rsp, 8\n\
-             call {resume_fail}\n\
-             ud2\n\
-             2:\n\
-             pop rax\n\
-             pop rbx\n\
-             pop rcx\n\
-             pop rdx\n\
-             pop rbp\n\
-             pop rsi\n\
-             pop rdi\n\
-             pop r8\n\
-             pop r9\n\
-             pop r10\n\
-             pop r11\n\
-             pop r12\n\
-             pop r13\n\
-             pop r14\n\
-             pop r15\n\
-             jmp {halt}\n",
-            handler = sym vmx_exit_handler,
-            resume_fail = sym vmx_vmresume_failed,
-            halt = sym vmx_host_halt,
-        );
+        "push r15\n\
+         push r14\n\
+         push r13\n\
+         push r12\n\
+         push r11\n\
+         push r10\n\
+         push r9\n\
+         push r8\n\
+         push rdi\n\
+         push rsi\n\
+         push rbp\n\
+         push rdx\n\
+         push rcx\n\
+         push rbx\n\
+         push rax\n\
+         mov rdi, rsp\n\
+         sub rsp, 8\n\
+         call {handler}\n\
+         add rsp, 8\n\
+         test al, al\n\
+         jnz 2f\n\
+         pop rax\n\
+         pop rbx\n\
+         pop rcx\n\
+         pop rdx\n\
+         pop rbp\n\
+         pop rsi\n\
+         pop rdi\n\
+         pop r8\n\
+         pop r9\n\
+         pop r10\n\
+         pop r11\n\
+         pop r12\n\
+         pop r13\n\
+         pop r14\n\
+         pop r15\n\
+         vmresume\n\
+         pushfq\n\
+         pop rdi\n\
+         sub rsp, 8\n\
+         call {resume_fail}\n\
+         ud2\n\
+         2:\n\
+         pop rax\n\
+         pop rbx\n\
+         pop rcx\n\
+         pop rdx\n\
+         pop rbp\n\
+         pop rsi\n\
+         pop rdi\n\
+         pop r8\n\
+         pop r9\n\
+         pop r10\n\
+         pop r11\n\
+         pop r12\n\
+         pop r13\n\
+         pop r14\n\
+         pop r15\n\
+         jmp {halt}\n",
+        handler = sym vmx_exit_handler,
+        resume_fail = sym vmx_vmresume_failed,
+        halt = sym vmx_host_halt,
+    );
 }
 
 #[no_mangle]
@@ -1250,7 +1294,9 @@ fn seg_desc_base_from_gdt(selector: u16, gdtr_base: u64) -> u64 {
     let is_system = (d.access & 0x10) == 0;
     if is_system {
         unsafe {
-            let high = core::ptr::read_unaligned((seg_desc_addr(selector, gdtr_base) + 8) as *const u32) as u64;
+            let high =
+                core::ptr::read_unaligned((seg_desc_addr(selector, gdtr_base) + 8) as *const u32)
+                    as u64;
             (high << 32) | (base_low as u64)
         }
     } else {
@@ -1914,7 +1960,11 @@ fn write_identity_descriptors(descs: &[VirtqDesc]) -> bool {
     wrote
 }
 
-fn handle_virtio_blk_chain(header: VirtqDesc, data_descs: &[VirtqDesc], status_desc: Option<VirtqDesc>) {
+fn handle_virtio_blk_chain(
+    header: VirtqDesc,
+    data_descs: &[VirtqDesc],
+    status_desc: Option<VirtqDesc>,
+) {
     if let Some(req) = read_virtio_blk_request(header.addr) {
         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:REQ_TYPE=");
         crate::serial_write_hex_u64(req.req_type as u64);
@@ -1968,17 +2018,28 @@ fn handle_virtio_net_chain(queue_id: u16, data_descs: &[VirtqDesc]) {
     {
         static mut TEST_PACKET_INJECTED: bool = false;
         if !unsafe { TEST_PACKET_INJECTED } && queue_id == VIRTIO_NET_RX_QUEUE {
-            unsafe { TEST_PACKET_INJECTED = true; }
+            unsafe {
+                TEST_PACKET_INJECTED = true;
+            }
             // Create a minimal test Ethernet frame: dest MAC, src MAC, ethertype, payload
             let mut test_pkt = [0u8; 64];
             // Destination MAC: AA:BB:CC:DD:EE:FF
-            test_pkt[0] = 0xAA; test_pkt[1] = 0xBB; test_pkt[2] = 0xCC;
-            test_pkt[3] = 0xDD; test_pkt[4] = 0xEE; test_pkt[5] = 0xFF;
+            test_pkt[0] = 0xAA;
+            test_pkt[1] = 0xBB;
+            test_pkt[2] = 0xCC;
+            test_pkt[3] = 0xDD;
+            test_pkt[4] = 0xEE;
+            test_pkt[5] = 0xFF;
             // Source MAC: 52:55:4F:53:00:01 (RAYOS)
-            test_pkt[6] = 0x52; test_pkt[7] = 0x55; test_pkt[8] = 0x4F;
-            test_pkt[9] = 0x53; test_pkt[10] = 0x00; test_pkt[11] = 0x01;
+            test_pkt[6] = 0x52;
+            test_pkt[7] = 0x55;
+            test_pkt[8] = 0x4F;
+            test_pkt[9] = 0x53;
+            test_pkt[10] = 0x00;
+            test_pkt[11] = 0x01;
             // EtherType: 0x0800 (IPv4)
-            test_pkt[12] = 0x08; test_pkt[13] = 0x00;
+            test_pkt[12] = 0x08;
+            test_pkt[13] = 0x00;
             // Payload: pattern
             for i in 14..64 {
                 test_pkt[i] = 0x42; // 'B'
@@ -2062,7 +2123,8 @@ fn handle_virtio_net_chain(queue_id: u16, data_descs: &[VirtqDesc]) {
                 if (desc.flags & VIRTQ_DESC_F_WRITE) != 0 {
                     // This is a writable descriptor (good for RX)
                     let to_write = cmp::min(pkt_len_to_inject, desc.len as usize);
-                    if write_guest_bytes(desc.addr, &unsafe { VIRTIO_NET_LOOPBACK_PKT }[..to_write]) {
+                    if write_guest_bytes(desc.addr, &unsafe { VIRTIO_NET_LOOPBACK_PKT }[..to_write])
+                    {
                         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:NET_RX_INJECT len=");
                         crate::serial_write_hex_u64(to_write as u64);
                         crate::serial_write_str("\n");
@@ -2092,7 +2154,6 @@ fn handle_virtio_net_chain(queue_id: u16, data_descs: &[VirtqDesc]) {
         }
     }
 }
-
 
 fn read_virtq_descriptor(base: u64, index: u32) -> Option<VirtqDesc> {
     let offset = base.wrapping_add((index as u64) * VIRTQ_DESC_SIZE);
@@ -2140,7 +2201,23 @@ fn log_virtq_descriptors(base: u64, queue_size: u32) {
 
 // debug memory dump removed
 
-fn log_descriptor_chain(base: u64, queue_size: u32, start_index: u32, queue_index: u64) -> Option<u32> {
+fn inject_guest_interrupt(vector: u8) -> bool {
+    // Format VM-entry interruption info: valid bit (31) + vector in low bits.
+    let val = (1u64 << 31) | (vector as u64 & 0xFF);
+    if unsafe { vmwrite(VMCS_ENTRY_INTERRUPTION_INFO, val) } {
+        true
+    } else {
+        crate::serial_write_str("RAYOS_VMM:VMX:VMWRITE_INJECT_FAIL\n");
+        false
+    }
+}
+
+fn log_descriptor_chain(
+    base: u64,
+    queue_size: u32,
+    start_index: u32,
+    queue_index: u64,
+) -> Option<u32> {
     if queue_size == 0 {
         return None;
     }
@@ -2176,10 +2253,7 @@ fn log_descriptor_chain(base: u64, queue_size: u32, start_index: u32, queue_inde
         log_descriptor_payload(desc.addr, desc.len);
         if header_desc.is_none() {
             header_desc = Some(desc);
-        } else if status_desc.is_none()
-            && (desc.flags & VIRTQ_DESC_F_WRITE) != 0
-            && desc.len == 1
-        {
+        } else if status_desc.is_none() && (desc.flags & VIRTQ_DESC_F_WRITE) != 0 && desc.len == 1 {
             status_desc = Some(desc);
         } else if data_desc_count < MAX_VIRTIO_DATA_DESCS {
             data_descs[data_desc_count] = desc;
@@ -2190,25 +2264,53 @@ fn log_descriptor_chain(base: u64, queue_size: u32, start_index: u32, queue_inde
         total_len = total_len.wrapping_add(desc.len);
         if desc.flags & VIRTQ_DESC_F_NEXT == 0 {
             if let Some(header) = header_desc {
-                    // If the chain only contains a single non-writable header descriptor
-                    // that actually holds packet payload (guest may not split header/data),
-                    // treat it as a data descriptor so handlers see the packet bytes.
-                    if data_desc_count == 0 {
-                        data_descs[0] = header;
-                        data_desc_count = 1;
-                    }
-                    // Dispatch to handler based on active device ID
-                    let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
-                    // dispatching device (silent)
-                    match device_id {
+                // Dispatch to handler based on active device ID
+                let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+                // dispatching device (silent)
+                match device_id {
                     VIRTIO_MMIO_DEVICE_ID_VALUE => {
                         // Block device (0x0105)
-                        handle_virtio_blk_chain(header, &data_descs[..data_desc_count], status_desc);
+                        // If the chain only contains a single non-writable header descriptor
+                        // that actually holds payload (guest may not split header/data),
+                        // treat it as a data descriptor so handlers see the bytes.
+                        if data_desc_count == 0 {
+                            data_descs[0] = header;
+                            data_desc_count = 1;
+                        }
+                        handle_virtio_blk_chain(
+                            header,
+                            &data_descs[..data_desc_count],
+                            status_desc,
+                        );
                     }
                     VIRTIO_NET_DEVICE_ID => {
                         // Network device (0x0101) - dispatch based on queue index
-                        let qid = if queue_index == 1 { VIRTIO_NET_RX_QUEUE } else { VIRTIO_NET_TX_QUEUE };
+                        // If the chain only contains a single non-writable descriptor
+                        // that actually holds packet payload, treat it as data.
+                        if data_desc_count == 0 {
+                            data_descs[0] = header;
+                            data_desc_count = 1;
+                        }
+                        let qid = if queue_index == 1 {
+                            VIRTIO_NET_RX_QUEUE
+                        } else {
+                            VIRTIO_NET_TX_QUEUE
+                        };
                         handle_virtio_net_chain(qid, &data_descs[..data_desc_count]);
+                    }
+                    VIRTIO_GPU_DEVICE_ID => {
+                        #[cfg(feature = "vmm_virtio_gpu")]
+                        {
+                            let used_len = unsafe {
+                                handle_virtio_gpu_chain(header, &data_descs[..data_desc_count])
+                            };
+                            return Some(used_len);
+                        }
+
+                        #[cfg(not(feature = "vmm_virtio_gpu"))]
+                        {
+                            crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:FEATURE_DISABLED\n");
+                        }
                     }
                     _ => {
                         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:UNKNOWN_DEVICE\n");
@@ -2221,6 +2323,101 @@ fn log_descriptor_chain(base: u64, queue_size: u32, start_index: u32, queue_inde
     }
     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:CHAIN_TOO_LONG\n");
     None
+}
+
+#[cfg(feature = "vmm_virtio_gpu")]
+unsafe fn handle_virtio_gpu_chain(header: VirtqDesc, descs: &[VirtqDesc]) -> u32 {
+    // virtio-gpu controlq: request buffer(s) are device-readable, response buffer is device-writable.
+    // We accept the common 2-descriptor layout: OUT req + IN resp.
+    let req = header;
+    let mut resp: Option<VirtqDesc> = None;
+
+    // Some guests may place the response buffer in the following descriptors.
+    for d in descs {
+        if (d.flags & VIRTQ_DESC_F_WRITE) != 0 {
+            resp = Some(*d);
+            break;
+        }
+
+        // If the header is writable (unusual), treat it as the response.
+        if (req.flags & VIRTQ_DESC_F_WRITE) != 0 {
+            resp = Some(req);
+            break;
+        }
+    }
+
+    let Some(resp_desc) = resp else {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:NO_RESP_DESC\n");
+        return 0;
+    };
+
+    // Run the controlq handler and log result; the device model will publish
+    // scanout/meta updates and call GuestScanoutPublisher.frame_ready() which
+    // emits the first-frame marker on transition.
+    let written = VIRTIO_GPU_DEVICE.handle_controlq(
+        req.addr,
+        req.len as usize,
+        resp_desc.addr,
+        resp_desc.len as usize,
+    );
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:CONTROLQ_DONE\n");
+    written as u32
+}
+
+// Self-test / smoke routine to exercise the virtio-gpu model without a real
+// guest driver. Allocates a few guest-physical pages and performs GET_DISPLAY_INFO
+// -> RESOURCE_CREATE_2D -> RESOURCE_ATTACH_BACKING -> SET_SCANOUT -> RESOURCE_FLUSH
+// which should trigger scanout publish and a frame-ready marker.
+#[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_hypervisor_smoke"))]
+unsafe fn run_virtio_gpu_selftest() {
+    use crate::virtio_gpu_proto as proto;
+    use core::mem;
+
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:alloc_pages\n");
+    let req_phys = match crate::phys_alloc_page() { Some(p) => p, None => { crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:ALLOC_REQ_FAIL\n"); return; } };
+    let resp_phys = match crate::phys_alloc_page() { Some(p) => p, None => { crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:ALLOC_RESP_FAIL\n"); return; } };
+    let backing_phys = match crate::phys_alloc_page() { Some(p) => p, None => { crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:ALLOC_BACKING_FAIL\n"); return; } };
+
+    // Zero backing page and write a recognizable pattern so developers can inspect.
+    core::ptr::write_bytes(crate::phys_to_virt(backing_phys) as *mut u8, 0xAA, 4096);
+
+    // 1) GET_DISPLAY_INFO
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:GET_DISPLAY_INFO\n");
+    let hdr = proto::VirtioGpuCtrlHdr { type_: proto::VIRTIO_GPU_CMD_GET_DISPLAY_INFO, flags: 0, fence_id: 0, ctx_id: 0, padding: 0 };
+    core::ptr::write_unaligned(crate::phys_to_virt(req_phys) as *mut proto::VirtioGpuCtrlHdr, hdr);
+    let _ = VIRTIO_GPU_DEVICE.handle_controlq(req_phys, mem::size_of::<proto::VirtioGpuCtrlHdr>(), resp_phys, mem::size_of::<proto::VirtioGpuRespDisplayInfo>());
+    let resp: proto::VirtioGpuRespDisplayInfo = core::ptr::read_unaligned(crate::phys_to_virt(resp_phys) as *const proto::VirtioGpuRespDisplayInfo);
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:GET_DISPLAY_INFO_RESP=");
+    crate::serial_write_hex_u64(resp.hdr.type_ as u64);
+    crate::serial_write_str("\n");
+
+    // 2) RESOURCE_CREATE_2D (resource id = 1)
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:CREATE_2D\n");
+    let create = proto::VirtioGpuResourceCreate2d { hdr: proto::VirtioGpuCtrlHdr { type_: proto::VIRTIO_GPU_CMD_RESOURCE_CREATE_2D, flags: 0, fence_id: 0, ctx_id: 0, padding: 0 }, resource_id: 1, format: proto::VIRTIO_GPU_FORMAT_R8G8B8A8_UNORM, width: 64, height: 64 };
+    core::ptr::write_unaligned(crate::phys_to_virt(req_phys) as *mut proto::VirtioGpuResourceCreate2d, create);
+    let _ = VIRTIO_GPU_DEVICE.handle_controlq(req_phys, mem::size_of::<proto::VirtioGpuResourceCreate2d>(), resp_phys, mem::size_of::<proto::VirtioGpuCtrlHdr>());
+
+    // 3) RESOURCE_ATTACH_BACKING (hdr + one entry)
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:ATTACH_BACKING\n");
+    let attach_hdr = proto::VirtioGpuResourceAttachBackingHdr { hdr: proto::VirtioGpuCtrlHdr { type_: proto::VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING, flags: 0, fence_id: 0, ctx_id: 0, padding: 0 }, resource_id: 1, nr_entries: 1 };
+    core::ptr::write_unaligned(crate::phys_to_virt(req_phys) as *mut proto::VirtioGpuResourceAttachBackingHdr, attach_hdr);
+    let entry_ptr = (crate::phys_to_virt(req_phys) as u64 + mem::size_of::<proto::VirtioGpuResourceAttachBackingHdr>() as u64) as *mut proto::VirtioGpuMemEntry;
+    core::ptr::write_unaligned(entry_ptr, proto::VirtioGpuMemEntry { addr: backing_phys, length: 4096u32, padding: 0 });
+    let _ = VIRTIO_GPU_DEVICE.handle_controlq(req_phys, mem::size_of::<proto::VirtioGpuResourceAttachBackingHdr>() + mem::size_of::<proto::VirtioGpuMemEntry>(), resp_phys, mem::size_of::<proto::VirtioGpuCtrlHdr>());
+
+    // 4) SET_SCANOUT (scanout -> resource 1)
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:SET_SCANOUT\n");
+    let setscan = proto::VirtioGpuSetScanout { hdr: proto::VirtioGpuCtrlHdr { type_: proto::VIRTIO_GPU_CMD_SET_SCANOUT, flags: 0, fence_id: 0, ctx_id: 0, padding: 0 }, rect: proto::VirtioGpuRect { x: 0, y: 0, width: 64, height: 64 }, scanout_id: 0, resource_id: 1 };
+    core::ptr::write_unaligned(crate::phys_to_virt(req_phys) as *mut proto::VirtioGpuSetScanout, setscan);
+    let _ = VIRTIO_GPU_DEVICE.handle_controlq(req_phys, mem::size_of::<proto::VirtioGpuSetScanout>(), resp_phys, mem::size_of::<proto::VirtioGpuCtrlHdr>());
+
+    // 5) RESOURCE_FLUSH (should trigger frame_ready)
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:RESOURCE_FLUSH\n");
+    let flush = proto::VirtioGpuResourceFlush { hdr: proto::VirtioGpuCtrlHdr { type_: proto::VIRTIO_GPU_CMD_RESOURCE_FLUSH, flags: 0, fence_id: 0, ctx_id: 0, padding: 0 }, rect: proto::VirtioGpuRect { x: 0, y: 0, width: 64, height: 64 }, resource_id: 1, padding: 0 };
+    core::ptr::write_unaligned(crate::phys_to_virt(req_phys) as *mut proto::VirtioGpuResourceFlush, flush);
+    let _ = VIRTIO_GPU_DEVICE.handle_controlq(req_phys, mem::size_of::<proto::VirtioGpuResourceFlush>(), resp_phys, mem::size_of::<proto::VirtioGpuCtrlHdr>());
+
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST:END\n");
 }
 
 fn log_descriptor_payload(addr: u64, len: u32) {
@@ -2337,15 +2534,23 @@ fn decode_mmio_instruction(bytes: &[u8], ilen: usize, gpa: u64) -> Option<MmioIn
     if ilen >= 5 {
         match bytes[0] {
             0xA1 => {
-                let imm = u32::from_le_bytes(bytes[1..5].try_into().ok()? ) as u64;
+                let imm = u32::from_le_bytes(bytes[1..5].try_into().ok()?) as u64;
                 if imm == gpa {
-                    return Some(MmioInstruction { kind: MmioAccessKind::Read, size: 4, address: imm });
+                    return Some(MmioInstruction {
+                        kind: MmioAccessKind::Read,
+                        size: 4,
+                        address: imm,
+                    });
                 }
             }
             0xA3 => {
-                let imm = u32::from_le_bytes(bytes[1..5].try_into().ok()? ) as u64;
+                let imm = u32::from_le_bytes(bytes[1..5].try_into().ok()?) as u64;
                 if imm == gpa {
-                    return Some(MmioInstruction { kind: MmioAccessKind::Write, size: 4, address: imm });
+                    return Some(MmioInstruction {
+                        kind: MmioAccessKind::Write,
+                        size: 4,
+                        address: imm,
+                    });
                 }
             }
             _ => {}
@@ -2354,13 +2559,21 @@ fn decode_mmio_instruction(bytes: &[u8], ilen: usize, gpa: u64) -> Option<MmioIn
     if ilen >= 10 && bytes[0] == 0x48 && bytes[1] == 0xA1 {
         let imm = u64::from_le_bytes(bytes[2..10].try_into().ok()?);
         if imm == gpa {
-            return Some(MmioInstruction { kind: MmioAccessKind::Read, size: 8, address: imm });
+            return Some(MmioInstruction {
+                kind: MmioAccessKind::Read,
+                size: 8,
+                address: imm,
+            });
         }
     }
     if ilen >= 10 && bytes[0] == 0x48 && bytes[1] == 0xA3 {
         let imm = u64::from_le_bytes(bytes[2..10].try_into().ok()?);
         if imm == gpa {
-            return Some(MmioInstruction { kind: MmioAccessKind::Write, size: 8, address: imm });
+            return Some(MmioInstruction {
+                kind: MmioAccessKind::Write,
+                size: 8,
+                address: imm,
+            });
         }
     }
     None
@@ -2526,7 +2739,9 @@ unsafe fn setup_vmcs_minimal_host_and_controls() {
     // Some control bits imply additional VMCS fields must be valid.
     // Program IA32_PAT fields if requested by the adjusted controls.
     // (We mirror the host PAT into the guest for bring-up.)
-    if (exit_ctl & (EXIT_CTL_SAVE_IA32_PAT | EXIT_CTL_LOAD_IA32_PAT)) != 0 || (entry_ctl & ENTRY_CTL_LOAD_IA32_PAT) != 0 {
+    if (exit_ctl & (EXIT_CTL_SAVE_IA32_PAT | EXIT_CTL_LOAD_IA32_PAT)) != 0
+        || (entry_ctl & ENTRY_CTL_LOAD_IA32_PAT) != 0
+    {
         let pat = crate::rdmsr(IA32_PAT);
         let _ = vmcs_write_or_log(HOST_IA32_PAT, pat);
         let _ = vmcs_write_or_log(GUEST_IA32_PAT, pat);
@@ -2761,7 +2976,11 @@ fn process_virtq_queue(
     }
     let queue_size_u64 = queue_size as u64;
     // Index into per-queue arrays (cap to available queues)
-    let qi = if queue_index as usize >= 2 { 0 } else { queue_index as usize };
+    let qi = if queue_index as usize >= 2 {
+        0
+    } else {
+        queue_index as usize
+    };
     let mut avail_processed: u16 = VIRTIO_MMIO_STATE.queue_avail_index[qi].load(Ordering::Relaxed);
     let mut used_idx: u16 = VIRTIO_MMIO_STATE.queue_used_index[qi].load(Ordering::Relaxed);
     let avail_idx = match read_u16(driver_base + VIRTQ_AVAIL_INDEX_OFFSET) {
@@ -2773,7 +2992,8 @@ fn process_virtq_queue(
     };
     while avail_processed != avail_idx {
         let ring_pos = (avail_processed as u64) % queue_size_u64;
-        let entry_offset = driver_base + VIRTQ_AVAIL_RING_OFFSET + ring_pos * VIRTQ_AVAIL_ENTRY_SIZE;
+        let entry_offset =
+            driver_base + VIRTQ_AVAIL_RING_OFFSET + ring_pos * VIRTQ_AVAIL_ENTRY_SIZE;
         let desc_index = match read_u16(entry_offset) {
             Some(v) => v,
             None => {
@@ -2785,12 +3005,14 @@ fn process_virtq_queue(
             crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:AVAIL_DESC_OOB\n");
             break;
         }
-        let total_len = match log_descriptor_chain(desc_base, queue_size, desc_index as u32, queue_index) {
-            Some(len) => len,
-            None => break,
-        };
+        let total_len =
+            match log_descriptor_chain(desc_base, queue_size, desc_index as u32, queue_index) {
+                Some(len) => len,
+                None => break,
+            };
         let used_ring_pos = (used_idx as u64) % queue_size_u64;
-        let used_entry_offset = used_base + VIRTQ_USED_RING_OFFSET + used_ring_pos * VIRTQ_USED_ENTRY_SIZE;
+        let used_entry_offset =
+            used_base + VIRTQ_USED_RING_OFFSET + used_ring_pos * VIRTQ_USED_ENTRY_SIZE;
         if !write_u32(used_entry_offset, desc_index as u32) {
             crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:USED_ENTRY_WRITE_FAIL\n");
             break;
@@ -2826,6 +3048,18 @@ fn process_virtq_queue(
         crate::serial_write_str(" new=");
         crate::serial_write_hex_u64((old_int | VIRTIO_MMIO_INT_VRING) as u64);
         crate::serial_write_str("\n");
+
+        // If this VRING interrupt bit was newly set, inject a VM-entry interrupt
+        // so the guest will observe the IRQ (minimal injection path for P0).
+        if (old_int & VIRTIO_MMIO_INT_VRING) == 0 {
+            if inject_guest_interrupt(VIRTIO_MMIO_IRQ_VECTOR) {
+                crate::serial_write_str("RAYOS_VMM:VMX:INJECT_IRQ_VEC=0x");
+                crate::serial_write_hex_u64(VIRTIO_MMIO_IRQ_VECTOR as u64);
+                crate::serial_write_str("\n");
+            } else {
+                crate::serial_write_str("RAYOS_VMM:VMX:INJECT_IRQ_FAIL\n");
+            }
+        }
         let mut idx_buf = [0u8; 2];
         if read_guest_bytes(used_base + VIRTQ_USED_IDX_OFFSET, &mut idx_buf) {
             let verified_idx = u16::from_le_bytes(idx_buf);
@@ -2844,12 +3078,8 @@ fn process_virtq_queue(
         crate::serial_write_str("\n");
         avail_processed = avail_processed.wrapping_add(1);
     }
-    VIRTIO_MMIO_STATE
-        .queue_avail_index[qi]
-        .store(avail_processed, Ordering::Relaxed);
-    VIRTIO_MMIO_STATE
-        .queue_used_index[qi]
-        .store(used_idx, Ordering::Relaxed);
+    VIRTIO_MMIO_STATE.queue_avail_index[qi].store(avail_processed, Ordering::Relaxed);
+    VIRTIO_MMIO_STATE.queue_used_index[qi].store(used_idx, Ordering::Relaxed);
 }
 
 #[inline(always)]
@@ -2982,6 +3212,15 @@ pub fn try_init_vmx_skeleton() -> bool {
 
     crate::serial_write_str("RAYOS_VMM:VMX:VMCS_READY\n");
 
+    // Run quick virtio-gpu selftest early after VMX is ready so logs appear
+    // deterministically even if later VM entry paths encounter faults.
+    #[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_hypervisor_smoke"))]
+    {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST_BEGIN_EARLY\n");
+        unsafe { run_virtio_gpu_selftest(); }
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST_DONE_EARLY\n");
+    }
+
     unsafe {
         setup_vmcs_minimal_host_and_controls();
     }
@@ -3019,6 +3258,17 @@ pub fn try_init_vmx_skeleton() -> bool {
     #[cfg(not(any(feature = "vmm_hypervisor_smoke", feature = "vmm_hypervisor_net_test")))]
     {
         crate::serial_write_str("RAYOS_VMM:VMX:SMOKE_DISABLED\n");
+    }
+
+    // If virtio-gpu is present in this build, run a deterministic self-test that
+    // exercises the controlq handler and validates scanout publish / first frame
+    // markers. This helps catch regressions as we wire the device to a real
+    // Guest virtqueue transport.
+    #[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_hypervisor_smoke"))]
+    {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST_BEGIN\n");
+        unsafe { run_virtio_gpu_selftest(); }
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SELFTEST_DONE\n");
     }
 
     // Skeleton ends here for now.

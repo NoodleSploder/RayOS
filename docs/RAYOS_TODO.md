@@ -184,6 +184,39 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	- Prerequisites (blockers):
 		- A real in-OS VM supervisor (or hypervisor layer) that can run the Linux VM on hardware (VMX/SVM + EPT/NPT) and expose virtio devices.
 		- ✅ RayOS compositor/presentation can ingest guest scanout buffers (kernel-bare `guest_surface` publish/snapshot + native blit path exist; needs a real producer).
+
+	**Hypervisor track: fastest path to “Linux Subsystem under RayOS VMM” (execution checklist)**
+
+	This is the shortest, most testable sequence to replace the host-QEMU desktop bridge with an in-OS supervisor.
+	Treat these as *hard gates* that unlock each next stage.
+
+	P0 (Must-have): run *any* guest code under RayOS VMM
+	- [✅] VMX/SVM bring-up is robust and repeatable (VM-entry succeeds; deterministic VM-exits; clean VMXOFF/teardown on failure).
+	- [✅] EPT/NPT mapping is sufficient for a minimal guest RAM region (read/write; no panics; clear `EPT_VIOLATION` diagnostics).
+	- [✅] Minimal interrupt/exit handling path exists for timer/interrupts needed by a real guest (even if initial guest is single-core + polling).  
+		- Note: Added VM-entry interrupt injection (writes VMCS `VM_ENTRY_INTERRUPTION_INFO`) when virtio-MMIO sets VRING interrupt status so guests observe IRQs (vector 0x20).
+	- [✅] Add/keep a headless smoke test that proves: boot → enter guest → exit loop deterministically (existing `test-vmm-hypervisor-boot.sh` is the baseline; it now also validates virtio-gpu selftest + IRQ injection markers).
+
+	P1 (Must-have): boot Linux headless under RayOS VMM
+	- [ ] Virtqueue transport plumbing is “real” (not only a scripted guest driver blob): guest can drive virtqueues with correct notifications and interrupts.
+	- [ ] Virtio-blk backed by a real persistent image (not only in-memory) so a Linux rootfs can persist across RayOS boots.
+	- [ ] Virtio-console or minimal serial transport for guest logs/markers (so boot readiness is observable without a GUI).
+	- [ ] Linux boots to a deterministic “guest ready” marker under RayOS (analogue of `RAYOS_LINUX_GUEST_READY`, but in-OS path).
+	- [ ] Add a headless test: boot RayOS → boot Linux headless under VMM → assert guest-ready marker → shutdown.
+
+	P2 (Must-have for desktop): single-surface scanout into RayOS compositor
+	- [ ] Wire virtio-gpu device model to the *real* virtqueue transport (controlq + cursorq if needed; start with scanout-only).
+	- [ ] Choose scanout backing (start CPU-visible shared backing: guest writes, RayOS blits).
+	- [ ] Produce a `GuestSurface` from the virtio-gpu scanout and present it as a single RayOS-owned surface/window.
+	- [ ] Add deterministic markers:
+		- `RAYOS_LINUX_DESKTOP_PRESENTED` when the surface is visible
+		- `RAYOS_LINUX_DESKTOP_FIRST_FRAME` when the first frame arrives
+	- [ ] Add a headless test that validates the in-OS presentation path (no host VNC): boot → present → first-frame marker.
+
+	P3 (Must-have for usability): input routing + lifecycle
+	- [ ] Virtio-input device model + event injection from RayOS pointer/keyboard to the presented guest surface.
+	- [ ] Present/Hide semantics do not kill the VM by default (presentation is UI-only; lifecycle is policy-controlled).
+	- [ ] Reboot persistence test: boot → (Linux running hidden) → present → write marker on disk → reboot RayOS → marker persists.
 	- TODOs (milestone 1: single full-desktop surface):
 		- ⏳ Implement hypervisor runtime skeleton (VMX/SVM detection + enable + VMXON/VMCS + minimal VM-exit loop stub).
 			- Milestone reached: VM-entry succeeds; deterministic VM-exits for `HLT` and port I/O; guest debug output via `out 0xE9` is trapped and printed (`RAYOS_GUEST_E9:<byte>`). See `scripts/test-vmm-hypervisor-boot.sh` markers `RAYOS_VMM:VMX:VMEXIT` + `RAYOS_GUEST_E9:`.
@@ -234,10 +267,8 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 		- Either (A) set `PRELAUNCH_HIDDEN_DESKTOPS=1` (and `ENABLE_HOST_DESKTOP_BRIDGE=1`) by default in `./scripts/test-boot.sh`, or (B) add a documented wrapper command (keep `test-boot.sh` minimal if desired).
 	- ⏳ Make presentation not depend on one specific viewer:
 		- If `gvncviewer` is absent, fall back to `remote-viewer` or print an explicit instruction marker telling the developer what command to run.
-	- ⏳ Add a deterministic marker proving “Linux is running hidden”:
-		- Example: host writes `RAYOS_HOST_MARKER:LINUX_DESKTOP_HIDDEN:<running|stopped>` into the RayOS serial log once the hidden VM is ready.
-	- ⏳ Add a deterministic marker proving “Linux is presented”:
-		- Example: `RAYOS_HOST_ACK:SHOW_LINUX_DESKTOP:ok:showing_vnc` already exists; ensure RayOS UI surfaces this ACK.
+	- ✅ Emit a deterministic `RAYOS_HOST_MARKER:LINUX_DESKTOP_HIDDEN` for `running` once the VNC endpoint is ready and `stopped` when the hidden VM is torn down; the hidden launcher now routes these markers into the main serial log via `RAYOS_SERIAL_LOG`.
+	- ✅ Emit `RAYOS_HOST_MARKER:LINUX_DESKTOP_PRESENTED:ok:<detail>` whenever the host actually opens (or already has) the Linux desktop viewer, giving automation a deterministic presentation signal alongside the existing ACK.
 	- ⏳ Ensure `show linux desktop` never spawns duplicates:
 		- If hidden VM exists, present it.
 		- If not, launch once and record state, then present.

@@ -47,7 +47,11 @@ fn init_idt() {
         idt_set_gate(UD_VECTOR, isr_invalid_opcode as *const () as u64);
         idt_set_gate(PF_VECTOR, isr_page_fault as *const () as u64);
         idt_set_gate(GP_VECTOR, isr_general_protection as *const () as u64);
-        idt_set_gate_ist(DF_VECTOR, isr_double_fault as *const () as u64, DF_IST_INDEX);
+        idt_set_gate_ist(
+            DF_VECTOR,
+            isr_double_fault as *const () as u64,
+            DF_IST_INDEX,
+        );
 
         lidt();
     }
@@ -69,28 +73,26 @@ fn init_interrupts() {
     sti();
 }
 
-
-
-
 // Core prelude for no_std
-use core::option::Option::{self, Some, None};
-use core::result::Result::{self, Ok, Err};
-use core::marker::{Sync, Send};
-use core::ops::Drop;
-use core::iter::Iterator;
 use core::cmp::Ord;
+use core::iter::Iterator;
+use core::marker::{Send, Sync};
+use core::ops::Drop;
+use core::option::Option::{self, None, Some};
+use core::result::Result::{self, Err, Ok};
 
-use core::cell::UnsafeCell;
 use core::arch::{asm, global_asm};
+use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use libm::{expf, sqrtf};
 
 mod acpi;
-mod pci;
-mod guest_surface;
-mod vmm;
 mod guest_driver_template;
+mod guest_surface;
+mod pci;
+mod rayapp;
+mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
 mod hypervisor;
@@ -206,7 +208,7 @@ fn serial_write_byte(byte: u8) {
     }
 }
 
-fn serial_write_str(s: &str) {
+pub(crate) fn serial_write_str(s: &str) {
     for b in s.bytes() {
         if b == b'\n' {
             serial_write_byte(b'\r');
@@ -215,13 +217,13 @@ fn serial_write_str(s: &str) {
     }
 }
 
-fn serial_write_bytes(buf: &[u8]) {
+pub(crate) fn serial_write_bytes(buf: &[u8]) {
     for &b in buf {
         serial_write_byte(b);
     }
 }
 
-fn serial_write_hex_u64(mut value: u64) {
+pub(crate) fn serial_write_hex_u64(mut value: u64) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut buf = [0u8; 16];
     for i in (0..16).rev() {
@@ -427,19 +429,20 @@ static MODEL_SIZE: AtomicU64 = AtomicU64::new(0);
 
 #[repr(C)]
 struct TinyLmHeader {
-    magic: [u8; 8],   // b"RAYTLM01"
-    version: u32,     // 1
-    vocab: u32,       // expected 95 (printable ASCII 0x20..0x7E)
-    ctx: u32,         // context window (chars)
-    top_k: u32,       // recommended top-k
-    rows: u32,        // vocab
-    cols: u32,        // vocab
+    magic: [u8; 8], // b"RAYTLM01"
+    version: u32,   // 1
+    vocab: u32,     // expected 95 (printable ASCII 0x20..0x7E)
+    ctx: u32,       // context window (chars)
+    top_k: u32,     // recommended top-k
+    rows: u32,      // vocab
+    cols: u32,      // vocab
     _reserved: [u32; 2],
     // Followed by rows*cols u16 bigram weights.
 }
 
 fn tinylm_available() -> bool {
-    MODEL_PHYS.load(Ordering::Relaxed) != 0 && MODEL_SIZE.load(Ordering::Relaxed) >= core::mem::size_of::<TinyLmHeader>() as u64
+    MODEL_PHYS.load(Ordering::Relaxed) != 0
+        && MODEL_SIZE.load(Ordering::Relaxed) >= core::mem::size_of::<TinyLmHeader>() as u64
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -505,10 +508,10 @@ fn tinylm_reply(prompt: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
 
     let hdr = unsafe { &*(base as *const TinyLmHeader) };
     if &hdr.magic != b"RAYTLM01" {
-        return copy_ascii(out, b"Local LLM: model invalid (bad magic)." );
+        return copy_ascii(out, b"Local LLM: model invalid (bad magic).");
     }
     if hdr.version != 1 || hdr.vocab != 95 || hdr.rows != 95 || hdr.cols != 95 {
-        return copy_ascii(out, b"Local LLM: model unsupported." );
+        return copy_ascii(out, b"Local LLM: model unsupported.");
     }
 
     let table_off = core::mem::size_of::<TinyLmHeader>();
@@ -516,13 +519,15 @@ fn tinylm_reply(prompt: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
         .saturating_mul(hdr.cols as usize)
         .saturating_mul(core::mem::size_of::<u16>());
     if len < table_off + table_bytes {
-        return copy_ascii(out, b"Local LLM: model truncated." );
+        return copy_ascii(out, b"Local LLM: model truncated.");
     }
     let table_ptr = unsafe { base.add(table_off) as *const u16 };
 
     // Seed RNG from prompt + timer ticks.
     let mut seed = fnv1a64(0xcbf29ce484222325, prompt);
-    seed ^= TIMER_TICKS.load(Ordering::Relaxed).wrapping_mul(0x9e3779b97f4a7c15);
+    seed ^= TIMER_TICKS
+        .load(Ordering::Relaxed)
+        .wrapping_mul(0x9e3779b97f4a7c15);
     let mut rng = seed;
 
     let ctx = if hdr.ctx == 0 { 64 } else { hdr.ctx as usize };
@@ -546,13 +551,21 @@ fn tinylm_reply(prompt: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
     let mut out_i = 0usize;
     out_append(out, &mut out_i, b"LLM: ");
 
-    let top_k = if hdr.top_k == 0 { 8usize } else { hdr.top_k as usize };
+    let top_k = if hdr.top_k == 0 {
+        8usize
+    } else {
+        hdr.top_k as usize
+    };
     for _step in 0..max_gen {
         // Collect top-k candidates from row = last_tok
         let row_base = last_tok * 95;
         let mut best_ids = [0usize; 16];
         let mut best_w = [0u16; 16];
-        let k = if top_k > best_ids.len() { best_ids.len() } else { top_k };
+        let k = if top_k > best_ids.len() {
+            best_ids.len()
+        } else {
+            top_k
+        };
 
         for j in 0..k {
             best_ids[j] = j;
@@ -620,14 +633,14 @@ fn tinylm_reply(prompt: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
 #[repr(C)]
 struct RayGptHeader {
     magic: [u8; 8],
-    version: u32,   // 1
-    vocab: u32,     // 95
-    ctx: u32,       // <= 64
-    d_model: u32,   // 64
-    n_layers: u32,  // 1
-    n_heads: u32,   // 4
-    d_ff: u32,      // 0 (unused)
-    top_k: u32,     // recommended top-k
+    version: u32,  // 1
+    vocab: u32,    // 95
+    ctx: u32,      // <= 64
+    d_model: u32,  // 64
+    n_layers: u32, // 1
+    n_heads: u32,  // 4
+    d_ff: u32,     // 0 (unused)
+    top_k: u32,    // recommended top-k
     _reserved: [u32; 3],
     // Followed by f32 weights in a fixed layout (see tools/gen_raygpt_model.py)
 }
@@ -734,11 +747,13 @@ fn raygpt_v1_available() -> bool {
         return false;
     }
 
-    let floats_needed: usize =
-        (GPT1_VOCAB * GPT_D_MODEL) + (GPT_CTX * GPT_D_MODEL)
+    let floats_needed: usize = (GPT1_VOCAB * GPT_D_MODEL)
+        + (GPT_CTX * GPT_D_MODEL)
         + 4 * (GPT_D_MODEL * GPT_D_MODEL + GPT_D_MODEL)
-        + (GPT_D_MODEL * GPT1_VOCAB) + GPT1_VOCAB;
-    let bytes_needed = core::mem::size_of::<RayGptHeader>() + floats_needed * core::mem::size_of::<f32>();
+        + (GPT_D_MODEL * GPT1_VOCAB)
+        + GPT1_VOCAB;
+    let bytes_needed =
+        core::mem::size_of::<RayGptHeader>() + floats_needed * core::mem::size_of::<f32>();
     len >= bytes_needed
 }
 
@@ -802,7 +817,12 @@ fn gpt_softmax_in_place(scores: &mut [f32; GPT_CTX], n: usize) {
     }
 }
 
-fn gpt_matvec64(w: *const f32, x: &[f32; GPT_D_MODEL], b: *const f32, out: &mut [f32; GPT_D_MODEL]) {
+fn gpt_matvec64(
+    w: *const f32,
+    x: &[f32; GPT_D_MODEL],
+    b: *const f32,
+    out: &mut [f32; GPT_D_MODEL],
+) {
     // Training uses y = x @ W + b where W is [in,out] (row-major).
     // So y[c] = sum_r x[r] * W[r,c] + b[c].
     for c in 0..GPT_D_MODEL {
@@ -815,7 +835,12 @@ fn gpt_matvec64(w: *const f32, x: &[f32; GPT_D_MODEL], b: *const f32, out: &mut 
     }
 }
 
-fn gpt_logits95(wout: *const f32, bout: *const f32, x: &[f32; GPT_D_MODEL], logits: &mut [f32; GPT1_VOCAB]) {
+fn gpt_logits95(
+    wout: *const f32,
+    bout: *const f32,
+    x: &[f32; GPT_D_MODEL],
+    logits: &mut [f32; GPT1_VOCAB],
+) {
     // wout is row-major [d, vocab]
     for v in 0..GPT1_VOCAB {
         let mut acc = unsafe { gpt_read_f32(bout, v) };
@@ -870,7 +895,8 @@ fn raygpt_forward_step(
     let te = tok * GPT_D_MODEL;
     let pe = pos * GPT_D_MODEL;
     for i in 0..GPT_D_MODEL {
-        x[i] = unsafe { gpt_read_f32(token_emb, te + i) } + unsafe { gpt_read_f32(pos_emb, pe + i) };
+        x[i] =
+            unsafe { gpt_read_f32(token_emb, te + i) } + unsafe { gpt_read_f32(pos_emb, pe + i) };
     }
 
     // q,k,v
@@ -957,7 +983,8 @@ fn raygpt2_forward_step(
     let te = tok * GPT_D_MODEL;
     let pe = pos * GPT_D_MODEL;
     for i in 0..GPT_D_MODEL {
-        x[i] = unsafe { gpt_read_f32(token_emb, te + i) } + unsafe { gpt_read_f32(pos_emb, pe + i) };
+        x[i] =
+            unsafe { gpt_read_f32(token_emb, te + i) } + unsafe { gpt_read_f32(pos_emb, pe + i) };
     }
 
     let inv_sqrt = 1.0f32 / sqrtf(GPT_DH as f32);
@@ -1037,7 +1064,12 @@ fn raygpt2_forward_step(
     gpt_logits_256(wout, bout, &x, logits_out);
 }
 
-fn gpt_logits_256(wout: *const f32, bout: *const f32, x: &[f32; GPT_D_MODEL], logits: &mut [f32; GPT2_VOCAB]) {
+fn gpt_logits_256(
+    wout: *const f32,
+    bout: *const f32,
+    x: &[f32; GPT_D_MODEL],
+    logits: &mut [f32; GPT2_VOCAB],
+) {
     for v in 0..GPT2_VOCAB {
         let mut acc = unsafe { gpt_read_f32(bout, v) };
         for d in 0..GPT_D_MODEL {
@@ -1108,7 +1140,12 @@ fn gpt2_tokenize_prompt(
     take
 }
 
-fn gpt2_decode_token(tok: usize, pairs: *const u8, out: &mut [u8; CHAT_MAX_COLS], out_i: &mut usize) {
+fn gpt2_decode_token(
+    tok: usize,
+    pairs: *const u8,
+    out: &mut [u8; CHAT_MAX_COLS],
+    out_i: &mut usize,
+) {
     if *out_i >= CHAT_MAX_COLS {
         return;
     }
@@ -1140,24 +1177,35 @@ fn raygpt_reply(prompt: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
 
     let (base, len, hdr) = match raygpt_ptr_and_header() {
         Some(v) => v,
-        None => return copy_ascii(out, b"Local LLM: model missing/invalid (EFI/RAYOS/model.bin)."),
+        None => {
+            return copy_ascii(
+                out,
+                b"Local LLM: model missing/invalid (EFI/RAYOS/model.bin).",
+            )
+        }
     };
     if hdr.version != 1 {
-        return copy_ascii(out, b"Local LLM: model unsupported." );
+        return copy_ascii(out, b"Local LLM: model unsupported.");
     }
     let ctx = (hdr.ctx as usize).min(GPT_CTX);
-    let top_k = if hdr.top_k == 0 { 12usize } else { (hdr.top_k as usize).min(GPT1_VOCAB) };
+    let top_k = if hdr.top_k == 0 {
+        12usize
+    } else {
+        (hdr.top_k as usize).min(GPT1_VOCAB)
+    };
 
     // Weights start right after header.
     let weights_off = core::mem::size_of::<RayGptHeader>();
     if len < weights_off {
-        return copy_ascii(out, b"Local LLM: model truncated." );
+        return copy_ascii(out, b"Local LLM: model truncated.");
     }
     let weights = unsafe { base.add(weights_off) as *const f32 };
 
     // Seed RNG from prompt + timer ticks.
     let mut seed = fnv1a64(0xcbf29ce484222325, prompt);
-    seed ^= TIMER_TICKS.load(Ordering::Relaxed).wrapping_mul(0x9e3779b97f4a7c15);
+    seed ^= TIMER_TICKS
+        .load(Ordering::Relaxed)
+        .wrapping_mul(0x9e3779b97f4a7c15);
     let mut rng = seed;
 
     // Extract up to ctx printable ASCII tokens from the end of the prompt.
@@ -1217,7 +1265,11 @@ fn raygpt_reply(prompt: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
         // Find top-k indices by logit.
         let mut best_ids = [0usize; 16];
         let mut best_vals = [-1.0e30f32; 16];
-        let k = if top_k > best_ids.len() { best_ids.len() } else { top_k };
+        let k = if top_k > best_ids.len() {
+            best_ids.len()
+        } else {
+            top_k
+        };
         for i in 0..k {
             best_ids[i] = i;
             best_vals[i] = logits[i];
@@ -1303,15 +1355,24 @@ fn raygpt2_reply(prompt: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
 
     let (base, len, hdr) = match raygpt_v2_ptr_and_header() {
         Some(v) => v,
-        None => return copy_ascii(out, b"Local LLM: model missing/invalid (EFI/RAYOS/model.bin)."),
+        None => {
+            return copy_ascii(
+                out,
+                b"Local LLM: model missing/invalid (EFI/RAYOS/model.bin).",
+            )
+        }
     };
     if !raygpt_v2_available() {
-        return copy_ascii(out, b"Local LLM: model unsupported." );
+        return copy_ascii(out, b"Local LLM: model unsupported.");
     }
 
     let ctx = (hdr.ctx as usize).min(GPT_CTX);
     let layers = hdr.n_layers as usize;
-    let top_k = if hdr.top_k == 0 { 24usize } else { (hdr.top_k as usize).min(GPT2_VOCAB) };
+    let top_k = if hdr.top_k == 0 {
+        24usize
+    } else {
+        (hdr.top_k as usize).min(GPT2_VOCAB)
+    };
 
     let tables_off = core::mem::size_of::<RayGptV2Header>();
     let bigram_map = unsafe { base.add(tables_off) as *const u8 };
@@ -1319,7 +1380,7 @@ fn raygpt2_reply(prompt: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
     let bigram_pairs = unsafe { base.add(pairs_off) as *const u8 };
     let weights_off = align_up_4(pairs_off + (GPT2_BIGRAM_MAX * 2));
     if len < weights_off {
-        return copy_ascii(out, b"Local LLM: model truncated." );
+        return copy_ascii(out, b"Local LLM: model truncated.");
     }
     let weights = unsafe { base.add(weights_off) as *const f32 };
 
@@ -1341,7 +1402,9 @@ fn raygpt2_reply(prompt: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
 
     // Seed RNG.
     let mut seed = fnv1a64(0xcbf29ce484222325, prompt);
-    seed ^= TIMER_TICKS.load(Ordering::Relaxed).wrapping_mul(0x9e3779b97f4a7c15);
+    seed ^= TIMER_TICKS
+        .load(Ordering::Relaxed)
+        .wrapping_mul(0x9e3779b97f4a7c15);
     let mut rng = seed;
 
     // Prime cache.
@@ -1366,7 +1429,11 @@ fn raygpt2_reply(prompt: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
         // Top-k by logits.
         let mut best_ids = [0usize; 32];
         let mut best_vals = [-1.0e30f32; 32];
-        let k = if top_k > best_ids.len() { best_ids.len() } else { top_k };
+        let k = if top_k > best_ids.len() {
+            best_ids.len()
+        } else {
+            top_k
+        };
         for i in 0..k {
             best_ids[i] = i;
             best_vals[i] = logits[i];
@@ -1582,12 +1649,18 @@ fn local_ai_reply(input: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
     // Greetings / small talk.
     let (first, _) = first_word_lower(sn);
     if first == b'h' {
-        if starts_with_word(sn, b"hi") || starts_with_word(sn, b"hello") || starts_with_word(sn, b"hey") {
+        if starts_with_word(sn, b"hi")
+            || starts_with_word(sn, b"hello")
+            || starts_with_word(sn, b"hey")
+        {
             return copy_ascii(out, b"Hi. Local AI is online.");
         }
     }
     if first == b't' {
-        if starts_with_word(sn, b"thanks") || starts_with_word(sn, b"thank") || starts_with_word(sn, b"thx") {
+        if starts_with_word(sn, b"thanks")
+            || starts_with_word(sn, b"thank")
+            || starts_with_word(sn, b"thx")
+        {
             return copy_ascii(out, b"You're welcome.");
         }
     }
@@ -1600,17 +1673,26 @@ fn local_ai_reply(input: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
     // Help / capabilities.
     if first == b'h' {
         if starts_with_word(sn, b"help") {
-            return copy_ascii(out, b"Local AI: chat + guidance. For shell commands, type :help.");
+            return copy_ascii(
+                out,
+                b"Local AI: chat + guidance. For shell commands, type :help.",
+            );
         }
     }
     if first == b'w' {
         if bytes_contains_ci(sn, b"what can you do") {
-            return copy_ascii(out, b"I can answer questions and guide debugging. Type :help for shell.");
+            return copy_ascii(
+                out,
+                b"I can answer questions and guide debugging. Type :help for shell.",
+            );
         }
     }
     if first == b'c' {
         if bytes_contains_ci(sn, b"capabilities") {
-            return copy_ascii(out, b"Capabilities: chat, basic troubleshooting, and guidance. Try :help.");
+            return copy_ascii(
+                out,
+                b"Capabilities: chat, basic troubleshooting, and guidance. Try :help.",
+            );
         }
     }
 
@@ -1633,7 +1715,10 @@ fn local_ai_reply(input: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
         out_append(out, &mut i, b").");
         return i;
     }
-    if bytes_contains_ci(sn, b"version") || bytes_contains_ci(sn, b"what are you") || bytes_contains_ci(sn, b"who are you") {
+    if bytes_contains_ci(sn, b"version")
+        || bytes_contains_ci(sn, b"what are you")
+        || bytes_contains_ci(sn, b"who are you")
+    {
         let mut i = 0usize;
         out_append(out, &mut i, RAYOS_VERSION_TEXT);
         out_append(out, &mut i, b" local AI (in-guest). Type help.");
@@ -1644,12 +1729,20 @@ fn local_ai_reply(input: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
     if bytes_contains_ci(sn, b"status") || bytes_contains_ci(sn, b"health") {
         let ticks = TIMER_TICKS.load(Ordering::Relaxed);
         let secs = ticks / PIT_HZ;
-        let s1_run = if SYSTEM1_RUNNING.load(Ordering::Relaxed) { 1u64 } else { 0u64 };
+        let s1_run = if SYSTEM1_RUNNING.load(Ordering::Relaxed) {
+            1u64
+        } else {
+            0u64
+        };
         let qd = rayq_depth() as u64;
         let done = SYSTEM1_PROCESSED.load(Ordering::Relaxed);
         let op = SYSTEM2_LAST_OP.load(Ordering::Relaxed);
         let pr = SYSTEM2_LAST_PRIO.load(Ordering::Relaxed);
-        let vol = if VOLUME_READY.load(Ordering::Relaxed) { 1u64 } else { 0u64 };
+        let vol = if VOLUME_READY.load(Ordering::Relaxed) {
+            1u64
+        } else {
+            0u64
+        };
 
         let mut i = 0usize;
         out_append(out, &mut i, b"Status: up~");
@@ -1729,8 +1822,12 @@ fn local_ai_reply(input: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
     }
 
     // Hardware / device inventory (grounded).
-    if bytes_contains_ci(sn, b"devices") || bytes_contains_ci(sn, b"device") || bytes_contains_ci(sn, b"hardware") {
-        let fb_ok = unsafe { FB_BASE } != 0 && unsafe { FB_WIDTH } != 0 && unsafe { FB_HEIGHT } != 0;
+    if bytes_contains_ci(sn, b"devices")
+        || bytes_contains_ci(sn, b"device")
+        || bytes_contains_ci(sn, b"hardware")
+    {
+        let fb_ok =
+            unsafe { FB_BASE } != 0 && unsafe { FB_WIDTH } != 0 && unsafe { FB_HEIGHT } != 0;
         let lapic_ok = unsafe { LAPIC_MMIO } != 0;
         let ioapic_ok = unsafe { IOAPIC_MMIO } != 0;
         let vol_ok = VOLUME_READY.load(Ordering::Relaxed);
@@ -1751,7 +1848,10 @@ fn local_ai_reply(input: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
     // Volume Q&A (grounded in actual device detection).
     if bytes_contains_ci(sn, b"volume") {
         if !VOLUME_READY.load(Ordering::Relaxed) {
-            return copy_ascii(out, b"Volume is missing: no virtio-blk device detected in this boot.");
+            return copy_ascii(
+                out,
+                b"Volume is missing: no virtio-blk device detected in this boot.",
+            );
         }
         let cap = VOLUME_CAPACITY_SECTORS.load(Ordering::Relaxed);
         let mut i = 0usize;
@@ -1773,7 +1873,11 @@ fn local_ai_reply(input: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
         }
         let cap = VOLUME_CAPACITY_SECTORS.load(Ordering::Relaxed);
         let mut i = 0usize;
-        out_append(out, &mut i, b"Files: I can't count files yet (no filesystem layer). Volume is present; capacity=");
+        out_append(
+            out,
+            &mut i,
+            b"Files: I can't count files yet (no filesystem layer). Volume is present; capacity=",
+        );
         out_append_u64_dec(out, &mut i, cap);
         out_append(out, &mut i, b" sectors.");
         return i;
@@ -1781,29 +1885,53 @@ fn local_ai_reply(input: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
 
     // Tiny local FAQ for subsystem concepts (non-generative but helpful).
     if bytes_contains_ci(sn, b"system 1") {
-        return copy_ascii(out, b"System 1: fast loop that processes logic rays each tick (reflex engine)." );
+        return copy_ascii(
+            out,
+            b"System 1: fast loop that processes logic rays each tick (reflex engine).",
+        );
     }
     if bytes_contains_ci(sn, b"system 2") {
-        return copy_ascii(out, b"System 2: parses your text into logic rays (cognitive engine stub)." );
+        return copy_ascii(
+            out,
+            b"System 2: parses your text into logic rays (cognitive engine stub).",
+        );
     }
     if bytes_contains_ci(sn, b"conductor") {
-        return copy_ascii(out, b"Conductor: orchestrates work by feeding System 2 when idle." );
+        return copy_ascii(
+            out,
+            b"Conductor: orchestrates work by feeding System 2 when idle.",
+        );
     }
     if bytes_contains_ci(sn, b"intent") {
-        return copy_ascii(out, b"Intent: lightweight parser that classifies your input (chat vs task)." );
+        return copy_ascii(
+            out,
+            b"Intent: lightweight parser that classifies your input (chat vs task).",
+        );
     }
 
     // Frustration marker.
-    if bytes_contains_ci(sn, b"sucks") || bytes_contains_ci(sn, b"broken") || bytes_contains_ci(sn, b"wtf") {
-        return copy_ascii(out, b"Got it. What did you expect, and what happened instead?");
+    if bytes_contains_ci(sn, b"sucks")
+        || bytes_contains_ci(sn, b"broken")
+        || bytes_contains_ci(sn, b"wtf")
+    {
+        return copy_ascii(
+            out,
+            b"Got it. What did you expect, and what happened instead?",
+        );
     }
 
     // Task-like keywords we can't execute locally (yet).
     if starts_with_word(sn, b"search ") || starts_with_word(sn, b"find ") {
-        return copy_ascii(out, b"Local AI can't search files yet. Tell me what to look for.");
+        return copy_ascii(
+            out,
+            b"Local AI can't search files yet. Tell me what to look for.",
+        );
     }
     if starts_with_word(sn, b"index ") {
-        return copy_ascii(out, b"Local AI can't index yet. Tell me your goal, and I'll suggest steps.");
+        return copy_ascii(
+            out,
+            b"Local AI can't index yet. Tell me your goal, and I'll suggest steps.",
+        );
     }
 
     // Default: if a learned model is available, use it for a non-canned reply.
@@ -1843,7 +1971,10 @@ fn local_ai_reply(input: &[u8], out: &mut [u8; CHAT_MAX_COLS]) -> usize {
     }
 
     // Fallback: short OS-like prompt.
-    copy_ascii(out, b"OK. Ask a question or describe the issue. Type help for options.")
+    copy_ascii(
+        out,
+        b"OK. Ask a question or describe the issue. Type help for options.",
+    )
 }
 
 fn copy_ascii(out: &mut [u8; CHAT_MAX_COLS], text: &[u8]) -> usize {
@@ -2667,7 +2798,10 @@ fn virtio_blk_init() -> bool {
     // Feature negotiation (minimal)
     let _host_features = virtio_read32(VIO_HOST_FEATURES);
     virtio_write32(VIO_GUEST_FEATURES, 0);
-    virtio_write8(VIO_STATUS, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK);
+    virtio_write8(
+        VIO_STATUS,
+        VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK,
+    );
     let st = virtio_read8(VIO_STATUS);
     if (st & VIRTIO_STATUS_FEATURES_OK) == 0 {
         virtio_write8(VIO_STATUS, st | VIRTIO_STATUS_FAILED);
@@ -2728,7 +2862,13 @@ fn virtio_blk_init() -> bool {
         VIRTIO_BLK_LAST_USED_IDX = 0;
     }
 
-    virtio_write8(VIO_STATUS, VIRTIO_STATUS_ACK | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK);
+    virtio_write8(
+        VIO_STATUS,
+        VIRTIO_STATUS_ACK
+            | VIRTIO_STATUS_DRIVER
+            | VIRTIO_STATUS_FEATURES_OK
+            | VIRTIO_STATUS_DRIVER_OK,
+    );
 
     // Read capacity from device-specific config (u64 sectors at offset 0)
     let cap_lo = virtio_read32(VIO_DEVICE_CFG);
@@ -2757,7 +2897,11 @@ fn virtio_blk_rw_sector(lba: u64, write: bool, data: &mut [u8; VOLUME_SECTOR_SIZ
         core::ptr::write_volatile(
             hdr_ptr,
             VirtioBlkReq {
-                type_: if write { VIRTIO_BLK_T_OUT } else { VIRTIO_BLK_T_IN },
+                type_: if write {
+                    VIRTIO_BLK_T_OUT
+                } else {
+                    VIRTIO_BLK_T_IN
+                },
                 reserved: 0,
                 sector: lba,
             },
@@ -3335,7 +3479,10 @@ fn rag_try_hnsw_search_topk(
         return false;
     }
 
-    let needed = count.checked_mul(m).and_then(|x| x.checked_mul(4)).unwrap_or(usize::MAX);
+    let needed = count
+        .checked_mul(m)
+        .and_then(|x| x.checked_mul(4))
+        .unwrap_or(usize::MAX);
     if off + needed > idx.len() {
         return false;
     }
@@ -3462,7 +3609,15 @@ fn rag_print_topk(query: &[u8], k: usize) {
     let qv = embed_text_8d(query);
 
     // Track top-K in fixed arrays.
-    let kk = if k == 0 { 1 } else { if k > 3 { 3 } else { k } };
+    let kk = if k == 0 {
+        1
+    } else {
+        if k > 3 {
+            3
+        } else {
+            k
+        }
+    };
     let mut best_score = [-1.0e30f32; 3];
     let mut best_text_off = [0usize; 3];
     let mut best_text_len = [0usize; 3];
@@ -4598,10 +4753,18 @@ fn cortex_handle_line(line: &[u8]) {
 
     if bytes_eq(ty, b"GAZE") {
         CORTEX_LAST_TYPE.store(1, Ordering::Relaxed);
-        let x = cortex_kv_find(&tokens, tokc, b"x").and_then(parse_u32_decimal).unwrap_or(0);
-        let y = cortex_kv_find(&tokens, tokc, b"y").and_then(parse_u32_decimal).unwrap_or(0);
-        let conf = cortex_kv_find(&tokens, tokc, b"conf").and_then(parse_u32_decimal).unwrap_or(0);
-        let ts = cortex_kv_find(&tokens, tokc, b"ts").and_then(parse_u32_decimal).unwrap_or(0) as u64;
+        let x = cortex_kv_find(&tokens, tokc, b"x")
+            .and_then(parse_u32_decimal)
+            .unwrap_or(0);
+        let y = cortex_kv_find(&tokens, tokc, b"y")
+            .and_then(parse_u32_decimal)
+            .unwrap_or(0);
+        let conf = cortex_kv_find(&tokens, tokc, b"conf")
+            .and_then(parse_u32_decimal)
+            .unwrap_or(0);
+        let ts = cortex_kv_find(&tokens, tokc, b"ts")
+            .and_then(parse_u32_decimal)
+            .unwrap_or(0) as u64;
         CORTEX_LAST_TS_MS.store(ts, Ordering::Relaxed);
 
         serial_write_str("cortex gaze x=");
@@ -4618,12 +4781,24 @@ fn cortex_handle_line(line: &[u8]) {
 
     if bytes_eq(ty, b"OBJ") {
         CORTEX_LAST_TYPE.store(2, Ordering::Relaxed);
-        let conf = cortex_kv_find(&tokens, tokc, b"conf").and_then(parse_u32_decimal).unwrap_or(0);
-        let x = cortex_kv_find(&tokens, tokc, b"x").and_then(parse_u32_decimal).unwrap_or(0);
-        let y = cortex_kv_find(&tokens, tokc, b"y").and_then(parse_u32_decimal).unwrap_or(0);
-        let w = cortex_kv_find(&tokens, tokc, b"w").and_then(parse_u32_decimal).unwrap_or(0);
-        let h = cortex_kv_find(&tokens, tokc, b"h").and_then(parse_u32_decimal).unwrap_or(0);
-        let ts = cortex_kv_find(&tokens, tokc, b"ts").and_then(parse_u32_decimal).unwrap_or(0) as u64;
+        let conf = cortex_kv_find(&tokens, tokc, b"conf")
+            .and_then(parse_u32_decimal)
+            .unwrap_or(0);
+        let x = cortex_kv_find(&tokens, tokc, b"x")
+            .and_then(parse_u32_decimal)
+            .unwrap_or(0);
+        let y = cortex_kv_find(&tokens, tokc, b"y")
+            .and_then(parse_u32_decimal)
+            .unwrap_or(0);
+        let w = cortex_kv_find(&tokens, tokc, b"w")
+            .and_then(parse_u32_decimal)
+            .unwrap_or(0);
+        let h = cortex_kv_find(&tokens, tokc, b"h")
+            .and_then(parse_u32_decimal)
+            .unwrap_or(0);
+        let ts = cortex_kv_find(&tokens, tokc, b"ts")
+            .and_then(parse_u32_decimal)
+            .unwrap_or(0) as u64;
         CORTEX_LAST_TS_MS.store(ts, Ordering::Relaxed);
 
         serial_write_str("cortex obj label=");
@@ -4838,7 +5013,11 @@ fn shell_execute(line: &[u8]) {
             return;
         }
         if bytes_eq(argv[1], b"stats") {
-            let running = if SYSTEM1_RUNNING.load(Ordering::Relaxed) { 1u64 } else { 0u64 };
+            let running = if SYSTEM1_RUNNING.load(Ordering::Relaxed) {
+                1u64
+            } else {
+                0u64
+            };
             let depth = rayq_depth() as u64;
             let enq = SYSTEM1_ENQUEUED.load(Ordering::Relaxed);
             let drop = SYSTEM1_DROPPED.load(Ordering::Relaxed);
@@ -4950,8 +5129,16 @@ fn shell_execute(line: &[u8]) {
         }
 
         if bytes_eq(argv[1], b"snapshot") {
-            let running = if SYSTEM1_RUNNING.load(Ordering::Relaxed) { 1u64 } else { 0u64 };
-            let conductor_running = if CONDUCTOR_RUNNING.load(Ordering::Relaxed) { 1u64 } else { 0u64 };
+            let running = if SYSTEM1_RUNNING.load(Ordering::Relaxed) {
+                1u64
+            } else {
+                0u64
+            };
+            let conductor_running = if CONDUCTOR_RUNNING.load(Ordering::Relaxed) {
+                1u64
+            } else {
+                0u64
+            };
             let depth = rayq_depth() as u64;
             let tq_depth = taskq_depth() as u64;
             let c_sub = CONDUCTOR_SUBMITTED.load(Ordering::Relaxed);
@@ -5125,7 +5312,11 @@ fn shell_execute(line: &[u8]) {
 
         if bytes_eq(argv[1], b"stats") {
             serial_write_str("vol stats ready=0x");
-            serial_write_hex_u64(if VOLUME_READY.load(Ordering::Relaxed) { 1 } else { 0 });
+            serial_write_hex_u64(if VOLUME_READY.load(Ordering::Relaxed) {
+                1
+            } else {
+                0
+            });
             serial_write_str(" cap=0x");
             serial_write_hex_u64(VOLUME_CAPACITY_SECTORS.load(Ordering::Relaxed));
             serial_write_str(" write_idx=0x");
@@ -5162,7 +5353,11 @@ fn shell_execute(line: &[u8]) {
                 return;
             }
             // If we've wrapped, we can't reconstruct overwritten history; just bound the scan.
-            let available = if write_seq > log_cap { log_cap } else { write_seq };
+            let available = if write_seq > log_cap {
+                log_cap
+            } else {
+                write_seq
+            };
             let start = if available > n { available - n } else { 0 };
             let mut sector = [0u8; VOLUME_SECTOR_SIZE];
             let mut seq = start;
@@ -5210,59 +5405,341 @@ fn scancode_set1_to_ascii(sc: u8, shift: bool, caps: bool) -> Option<u8> {
     let letter_upper = shift ^ caps;
     let ch = match sc {
         // Numbers row
-        0x02 => if shift { b'!' } else { b'1' },
-        0x03 => if shift { b'@' } else { b'2' },
-        0x04 => if shift { b'#' } else { b'3' },
-        0x05 => if shift { b'$' } else { b'4' },
-        0x06 => if shift { b'%' } else { b'5' },
-        0x07 => if shift { b'^' } else { b'6' },
-        0x08 => if shift { b'&' } else { b'7' },
-        0x09 => if shift { b'*' } else { b'8' },
-        0x0A => if shift { b'(' } else { b'9' },
-        0x0B => if shift { b')' } else { b'0' },
-        0x0C => if shift { b'_' } else { b'-' },
-        0x0D => if shift { b'+' } else { b'=' },
+        0x02 => {
+            if shift {
+                b'!'
+            } else {
+                b'1'
+            }
+        }
+        0x03 => {
+            if shift {
+                b'@'
+            } else {
+                b'2'
+            }
+        }
+        0x04 => {
+            if shift {
+                b'#'
+            } else {
+                b'3'
+            }
+        }
+        0x05 => {
+            if shift {
+                b'$'
+            } else {
+                b'4'
+            }
+        }
+        0x06 => {
+            if shift {
+                b'%'
+            } else {
+                b'5'
+            }
+        }
+        0x07 => {
+            if shift {
+                b'^'
+            } else {
+                b'6'
+            }
+        }
+        0x08 => {
+            if shift {
+                b'&'
+            } else {
+                b'7'
+            }
+        }
+        0x09 => {
+            if shift {
+                b'*'
+            } else {
+                b'8'
+            }
+        }
+        0x0A => {
+            if shift {
+                b'('
+            } else {
+                b'9'
+            }
+        }
+        0x0B => {
+            if shift {
+                b')'
+            } else {
+                b'0'
+            }
+        }
+        0x0C => {
+            if shift {
+                b'_'
+            } else {
+                b'-'
+            }
+        }
+        0x0D => {
+            if shift {
+                b'+'
+            } else {
+                b'='
+            }
+        }
 
         // Top row
-        0x10 => if letter_upper { b'Q' } else { b'q' },
-        0x11 => if letter_upper { b'W' } else { b'w' },
-        0x12 => if letter_upper { b'E' } else { b'e' },
-        0x13 => if letter_upper { b'R' } else { b'r' },
-        0x14 => if letter_upper { b'T' } else { b't' },
-        0x15 => if letter_upper { b'Y' } else { b'y' },
-        0x16 => if letter_upper { b'U' } else { b'u' },
-        0x17 => if letter_upper { b'I' } else { b'i' },
-        0x18 => if letter_upper { b'O' } else { b'o' },
-        0x19 => if letter_upper { b'P' } else { b'p' },
-        0x1A => if shift { b'{' } else { b'[' },
-        0x1B => if shift { b'}' } else { b']' },
+        0x10 => {
+            if letter_upper {
+                b'Q'
+            } else {
+                b'q'
+            }
+        }
+        0x11 => {
+            if letter_upper {
+                b'W'
+            } else {
+                b'w'
+            }
+        }
+        0x12 => {
+            if letter_upper {
+                b'E'
+            } else {
+                b'e'
+            }
+        }
+        0x13 => {
+            if letter_upper {
+                b'R'
+            } else {
+                b'r'
+            }
+        }
+        0x14 => {
+            if letter_upper {
+                b'T'
+            } else {
+                b't'
+            }
+        }
+        0x15 => {
+            if letter_upper {
+                b'Y'
+            } else {
+                b'y'
+            }
+        }
+        0x16 => {
+            if letter_upper {
+                b'U'
+            } else {
+                b'u'
+            }
+        }
+        0x17 => {
+            if letter_upper {
+                b'I'
+            } else {
+                b'i'
+            }
+        }
+        0x18 => {
+            if letter_upper {
+                b'O'
+            } else {
+                b'o'
+            }
+        }
+        0x19 => {
+            if letter_upper {
+                b'P'
+            } else {
+                b'p'
+            }
+        }
+        0x1A => {
+            if shift {
+                b'{'
+            } else {
+                b'['
+            }
+        }
+        0x1B => {
+            if shift {
+                b'}'
+            } else {
+                b']'
+            }
+        }
 
         // Home row
-        0x1E => if letter_upper { b'A' } else { b'a' },
-        0x1F => if letter_upper { b'S' } else { b's' },
-        0x20 => if letter_upper { b'D' } else { b'd' },
-        0x21 => if letter_upper { b'F' } else { b'f' },
-        0x22 => if letter_upper { b'G' } else { b'g' },
-        0x23 => if letter_upper { b'H' } else { b'h' },
-        0x24 => if letter_upper { b'J' } else { b'j' },
-        0x25 => if letter_upper { b'K' } else { b'k' },
-        0x26 => if letter_upper { b'L' } else { b'l' },
-        0x27 => if shift { b':' } else { b';' },
-        0x28 => if shift { b'"' } else { b'\'' },
-        0x29 => if shift { b'~' } else { b'`' },
+        0x1E => {
+            if letter_upper {
+                b'A'
+            } else {
+                b'a'
+            }
+        }
+        0x1F => {
+            if letter_upper {
+                b'S'
+            } else {
+                b's'
+            }
+        }
+        0x20 => {
+            if letter_upper {
+                b'D'
+            } else {
+                b'd'
+            }
+        }
+        0x21 => {
+            if letter_upper {
+                b'F'
+            } else {
+                b'f'
+            }
+        }
+        0x22 => {
+            if letter_upper {
+                b'G'
+            } else {
+                b'g'
+            }
+        }
+        0x23 => {
+            if letter_upper {
+                b'H'
+            } else {
+                b'h'
+            }
+        }
+        0x24 => {
+            if letter_upper {
+                b'J'
+            } else {
+                b'j'
+            }
+        }
+        0x25 => {
+            if letter_upper {
+                b'K'
+            } else {
+                b'k'
+            }
+        }
+        0x26 => {
+            if letter_upper {
+                b'L'
+            } else {
+                b'l'
+            }
+        }
+        0x27 => {
+            if shift {
+                b':'
+            } else {
+                b';'
+            }
+        }
+        0x28 => {
+            if shift {
+                b'"'
+            } else {
+                b'\''
+            }
+        }
+        0x29 => {
+            if shift {
+                b'~'
+            } else {
+                b'`'
+            }
+        }
 
         // Bottom row
-        0x2C => if letter_upper { b'Z' } else { b'z' },
-        0x2D => if letter_upper { b'X' } else { b'x' },
-        0x2E => if letter_upper { b'C' } else { b'c' },
-        0x2F => if letter_upper { b'V' } else { b'v' },
-        0x30 => if letter_upper { b'B' } else { b'b' },
-        0x31 => if letter_upper { b'N' } else { b'n' },
-        0x32 => if letter_upper { b'M' } else { b'm' },
-        0x33 => if shift { b'<' } else { b',' },
-        0x34 => if shift { b'>' } else { b'.' },
-        0x35 => if shift { b'?' } else { b'/' },
-        0x2B => if shift { b'|' } else { b'\\' },
+        0x2C => {
+            if letter_upper {
+                b'Z'
+            } else {
+                b'z'
+            }
+        }
+        0x2D => {
+            if letter_upper {
+                b'X'
+            } else {
+                b'x'
+            }
+        }
+        0x2E => {
+            if letter_upper {
+                b'C'
+            } else {
+                b'c'
+            }
+        }
+        0x2F => {
+            if letter_upper {
+                b'V'
+            } else {
+                b'v'
+            }
+        }
+        0x30 => {
+            if letter_upper {
+                b'B'
+            } else {
+                b'b'
+            }
+        }
+        0x31 => {
+            if letter_upper {
+                b'N'
+            } else {
+                b'n'
+            }
+        }
+        0x32 => {
+            if letter_upper {
+                b'M'
+            } else {
+                b'm'
+            }
+        }
+        0x33 => {
+            if shift {
+                b'<'
+            } else {
+                b','
+            }
+        }
+        0x34 => {
+            if shift {
+                b'>'
+            } else {
+                b'.'
+            }
+        }
+        0x35 => {
+            if shift {
+                b'?'
+            } else {
+                b'/'
+            }
+        }
+        0x2B => {
+            if shift {
+                b'|'
+            } else {
+                b'\\'
+            }
+        }
 
         // Whitespace / editing
         0x1C => b'\n',
@@ -5404,7 +5881,8 @@ fn acpi_find_madt(rsdp_addr: u64) -> Option<(*const Madt, u64, u64, u32, u16, u3
                         if len >= 10 {
                             let source = unsafe { core::ptr::read_volatile(p.add(3)) };
                             let gsi = unsafe { core::ptr::read_unaligned(p.add(4) as *const u32) };
-                            let flags = unsafe { core::ptr::read_unaligned(p.add(8) as *const u16) };
+                            let flags =
+                                unsafe { core::ptr::read_unaligned(p.add(8) as *const u16) };
                             if source == 0 {
                                 irq0_gsi = gsi;
                                 irq0_flags = flags;
@@ -5424,7 +5902,11 @@ fn acpi_find_madt(rsdp_addr: u64) -> Option<(*const Madt, u64, u64, u32, u16, u3
                 madt as *const Madt,
                 madt.lapic_addr as u64,
                 ioapic_addr,
-                if irq0_gsi != 0 { irq0_gsi } else { ioapic_gsi_base },
+                if irq0_gsi != 0 {
+                    irq0_gsi
+                } else {
+                    ioapic_gsi_base
+                },
                 irq0_flags,
                 irq1_gsi,
                 irq1_flags,
@@ -5514,10 +5996,7 @@ fn phys_alloc_init_from_bootinfo(bi: &BootInfo) {
     let kernel_start = unsafe { &__kernel_start as *const u8 as u64 };
     let kernel_end = unsafe { &__kernel_end as *const u8 as u64 };
     let fb_start = bi.fb_base;
-    let fb_end = bi.fb_base
-        + (bi.fb_height as u64)
-            * (bi.fb_stride as u64)
-            * 4;
+    let fb_end = bi.fb_base + (bi.fb_height as u64) * (bi.fb_stride as u64) * 4;
 
     let min_phys: u64 = 0x10_0000; // 1MiB
 
@@ -5585,7 +6064,9 @@ fn bootinfo_max_phys_end(bi: &BootInfo) -> Option<u64> {
         if d.ty == EFI_MEMORY_TYPE_MMIO || d.ty == EFI_MEMORY_TYPE_MMIO_PORT {
             continue;
         }
-        let end = d.phys_start.saturating_add(d.page_count.saturating_mul(4096));
+        let end = d
+            .phys_start
+            .saturating_add(d.page_count.saturating_mul(4096));
         if end > max_end {
             max_end = end;
         }
@@ -5848,7 +6329,8 @@ fn init_paging() {
         // PDPT_LOW entries -> selectively allocated PDs
         for i in 0..4 {
             if low_pds[i] != 0 {
-                *(pdpt_low as *mut u64).add(i) = (low_pds[i] & 0x000f_ffff_ffff_f000) | PTE_P | PTE_W;
+                *(pdpt_low as *mut u64).add(i) =
+                    (low_pds[i] & 0x000f_ffff_ffff_f000) | PTE_P | PTE_W;
             }
         }
 
@@ -5907,7 +6389,6 @@ fn init_paging_final_no_identity() {
         hhdm_gib_count = 512;
     }
 
-
     unsafe {
         let pml4_ptr = phys_as_mut_ptr::<u64>(pml4);
         // Low identity slot (first 512GiB). We only populate the first PDPT entry.
@@ -5931,7 +6412,8 @@ fn init_paging_final_no_identity() {
             };
             zero_page_hhdm(pd_low);
             unsafe {
-                *(phys_as_mut_ptr::<u64>(pdpt_low)).add(0) = (pd_low & 0x000f_ffff_ffff_f000) | PTE_P | PTE_W;
+                *(phys_as_mut_ptr::<u64>(pdpt_low)).add(0) =
+                    (pd_low & 0x000f_ffff_ffff_f000) | PTE_P | PTE_W;
             }
 
             let pd_ptr = phys_as_mut_ptr::<u64>(pd_low);
@@ -5954,7 +6436,8 @@ fn init_paging_final_no_identity() {
         };
         zero_page_hhdm(pd);
         unsafe {
-            *(phys_as_mut_ptr::<u64>(pdpt_hhdm)).add(i) = (pd & 0x000f_ffff_ffff_f000) | PTE_P | PTE_W;
+            *(phys_as_mut_ptr::<u64>(pdpt_hhdm)).add(i) =
+                (pd & 0x000f_ffff_ffff_f000) | PTE_P | PTE_W;
         }
 
         let pd_ptr = phys_as_mut_ptr::<u64>(pd);
@@ -5965,7 +6448,6 @@ fn init_paging_final_no_identity() {
             }
         }
     }
-
 
     // Map kernel at KERNEL_BASE
     let kernel_start = KERNEL_PHYS_START_ALIGNED.load(Ordering::Relaxed);
@@ -6074,7 +6556,11 @@ fn split_2mib_pde_to_pt(pd_phys: u64, pde_index: usize, pde: u64, virt_any: u64)
 
     // Non-leaf PDE flags: keep RW/US/PWT/PCD; clear PS and NX.
     let nonleaf_flags = pde & (PTE_W | PTE_U | PTE_PWT | PTE_PCD);
-    write_table_entry(pd_phys, pde_index, (pt_phys & PTE_ADDR_MASK) | nonleaf_flags | PTE_P);
+    write_table_entry(
+        pd_phys,
+        pde_index,
+        (pt_phys & PTE_ADDR_MASK) | nonleaf_flags | PTE_P,
+    );
 
     // Flush any cached 2MiB translation.
     invlpg(virt_any & !0x1f_ffff);
@@ -6082,13 +6568,22 @@ fn split_2mib_pde_to_pt(pd_phys: u64, pde_index: usize, pde: u64, virt_any: u64)
     Some(pt_phys)
 }
 
-fn ensure_table_hhdm(parent_table_phys: u64, index: usize, level: TableLevel, virt_for_split: u64) -> Option<u64> {
+fn ensure_table_hhdm(
+    parent_table_phys: u64,
+    index: usize,
+    level: TableLevel,
+    virt_for_split: u64,
+) -> Option<u64> {
     let entry = read_table_entry(parent_table_phys, index);
 
     if (entry & PTE_P) == 0 {
         let new_table = phys_alloc_page()?;
         zero_page_hhdm(new_table);
-        write_table_entry(parent_table_phys, index, (new_table & PTE_ADDR_MASK) | PTE_P | PTE_W);
+        write_table_entry(
+            parent_table_phys,
+            index,
+            (new_table & PTE_ADDR_MASK) | PTE_P | PTE_W,
+        );
         return Some(new_table);
     }
 
@@ -6361,7 +6856,11 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
         idt_set_gate(UD_VECTOR, isr_invalid_opcode as *const () as u64);
         idt_set_gate(PF_VECTOR, isr_page_fault as *const () as u64);
         idt_set_gate(GP_VECTOR, isr_general_protection as *const () as u64);
-        idt_set_gate_ist(DF_VECTOR, isr_double_fault as *const () as u64, DF_IST_INDEX);
+        idt_set_gate_ist(
+            DF_VECTOR,
+            isr_double_fault as *const () as u64,
+            DF_IST_INDEX,
+        );
 
         lidt();
     }
@@ -6435,36 +6934,108 @@ fn kernel_main() -> ! {
 
     // System status
     draw_text_bg(50, 100, "Hardware Initialization:", 0xff_ff_88, panel_bg);
-    draw_text_bg(70, 130, "[OK] IDT: Interrupt Descriptor Table", 0x88_ff_88, panel_bg);
-    draw_text_bg(70, 160, "[OK] GDT: Global Descriptor Table", 0x88_ff_88, panel_bg);
+    draw_text_bg(
+        70,
+        130,
+        "[OK] IDT: Interrupt Descriptor Table",
+        0x88_ff_88,
+        panel_bg,
+    );
+    draw_text_bg(
+        70,
+        160,
+        "[OK] GDT: Global Descriptor Table",
+        0x88_ff_88,
+        panel_bg,
+    );
     draw_text_bg(70, 190, "[OK] Memory Manager: Active", 0x88_ff_88, panel_bg);
     draw_text_bg(70, 220, "[OK] Framebuffer: Active", 0x88_ff_88, panel_bg);
 
     draw_text_bg(50, 270, "Subsystems:", 0xff_ff_88, panel_bg);
     clear_text_line(70, 300, 48, panel_bg);
-    draw_text_bg(70, 300, "[ ] System 1: GPU Reflex Engine", 0xaa_aa_aa, panel_bg);
-    draw_text_bg(70, 330, "[ ] System 2: LLM Cognitive Engine", 0xaa_aa_aa, panel_bg);
-    draw_text_bg(70, 360, "[ ] Conductor: Task Orchestration", 0xaa_aa_aa, panel_bg);
-    draw_text_bg(70, 390, "[ ] Volume: Persistent Storage", 0xaa_aa_aa, panel_bg);
-    draw_text_bg(70, 420, "[ ] Intent: Natural Language Parser", 0xaa_aa_aa, panel_bg);
+    draw_text_bg(
+        70,
+        300,
+        "[ ] System 1: GPU Reflex Engine",
+        0xaa_aa_aa,
+        panel_bg,
+    );
+    draw_text_bg(
+        70,
+        330,
+        "[ ] System 2: LLM Cognitive Engine",
+        0xaa_aa_aa,
+        panel_bg,
+    );
+    draw_text_bg(
+        70,
+        360,
+        "[ ] Conductor: Task Orchestration",
+        0xaa_aa_aa,
+        panel_bg,
+    );
+    draw_text_bg(
+        70,
+        390,
+        "[ ] Volume: Persistent Storage",
+        0xaa_aa_aa,
+        panel_bg,
+    );
+    draw_text_bg(
+        70,
+        420,
+        "[ ] Intent: Natural Language Parser",
+        0xaa_aa_aa,
+        panel_bg,
+    );
 
     // IDT/GDT are initialized during early boot in `_start`.
-    draw_text_bg(70, 130, "[OK] IDT: Interrupt Descriptor Table", 0x00_ff_00, panel_bg);
-    draw_text_bg(70, 160, "[OK] GDT: Global Descriptor Table", 0x00_ff_00, panel_bg);
+    draw_text_bg(
+        70,
+        130,
+        "[OK] IDT: Interrupt Descriptor Table",
+        0x00_ff_00,
+        panel_bg,
+    );
+    draw_text_bg(
+        70,
+        160,
+        "[OK] GDT: Global Descriptor Table",
+        0x00_ff_00,
+        panel_bg,
+    );
     draw_text_bg(70, 190, "[OK] Memory Manager: Active", 0x00_ff_00, panel_bg);
 
     // Test the allocator
     let test_alloc = kalloc(4096, 4096);
     if test_alloc.is_some() {
-        draw_text_bg(70, 220, "[OK] Zero-Copy Allocator: VERIFIED", 0x00_ff_00, panel_bg);
+        draw_text_bg(
+            70,
+            220,
+            "[OK] Zero-Copy Allocator: VERIFIED",
+            0x00_ff_00,
+            panel_bg,
+        );
     } else {
-        draw_text_bg(70, 220, "[!!] Zero-Copy Allocator: FAILED", 0xff_00_00, panel_bg);
+        draw_text_bg(
+            70,
+            220,
+            "[!!] Zero-Copy Allocator: FAILED",
+            0xff_00_00,
+            panel_bg,
+        );
     }
 
     // GPU INITIALIZATION - System 1
     // Temporarily disabled until we verify kernel stability
     clear_text_line(70, 300, 48, panel_bg);
-    draw_text_bg(70, 300, "[..] System 1: GPU Init (stub)", 0xff_ff_00, panel_bg);
+    draw_text_bg(
+        70,
+        300,
+        "[..] System 1: GPU Init (stub)",
+        0xff_ff_00,
+        panel_bg,
+    );
 
     // Safe bring-up signal:
     // - Log raw PCI display presence (for debugging)
@@ -6487,17 +7058,41 @@ fn kernel_main() -> ! {
 
     clear_text_line(70, 300, 48, panel_bg);
     if gpu_init_ok {
-        draw_text_bg(70, 300, "[OK] System 1: GPU Detected (reflex loop)", 0x00_ff_88, panel_bg);
+        draw_text_bg(
+            70,
+            300,
+            "[OK] System 1: GPU Detected (reflex loop)",
+            0x00_ff_88,
+            panel_bg,
+        );
     } else {
-        draw_text_bg(70, 300, "[--] System 1: No PCI GPU (reflex loop)", 0xaa_aa_aa, panel_bg);
+        draw_text_bg(
+            70,
+            300,
+            "[--] System 1: No PCI GPU (reflex loop)",
+            0xaa_aa_aa,
+            panel_bg,
+        );
     }
     // System 2 starts as a deterministic parser stub integrated with System 1 via the ray queue.
     clear_text_line(70, 330, 48, panel_bg);
-    draw_text_bg(70, 330, "[OK] System 2: Ready (parser stub)", 0xff_88_00, panel_bg);
+    draw_text_bg(
+        70,
+        330,
+        "[OK] System 2: Ready (parser stub)",
+        0xff_88_00,
+        panel_bg,
+    );
 
     // Intent is provided by System 2 in the current kernel build (deterministic NL parser stub).
     clear_text_line(70, 420, 48, panel_bg);
-    draw_text_bg(70, 420, "[OK] Intent: Natural Language Parser", 0x00_ff_00, panel_bg);
+    draw_text_bg(
+        70,
+        420,
+        "[OK] Intent: Natural Language Parser",
+        0x00_ff_00,
+        panel_bg,
+    );
 
     fn linux_state_label(state: u8) -> (&'static str, u32) {
         match state {
@@ -6528,7 +7123,13 @@ fn kernel_main() -> ! {
     // This feeds System 2, which enqueues rays for System 1 to process.
     let _ = conductor_enqueue(b"find now");
     clear_text_line(70, 360, 48, panel_bg);
-    draw_text_bg(70, 360, "[OK] Conductor: Task Orchestration", 0x00_ff_00, panel_bg);
+    draw_text_bg(
+        70,
+        360,
+        "[OK] Conductor: Task Orchestration",
+        0x00_ff_00,
+        panel_bg,
+    );
 
     // Host-side Ouroboros runs outside the guest; show a small badge when the host bridge is actually active.
     draw_box(520, 360, 200, 20, panel_bg);
@@ -6551,7 +7152,13 @@ fn kernel_main() -> ! {
     let vol_ok = volume_init();
     clear_text_line(70, 390, 48, panel_bg);
     if vol_ok {
-        draw_text_bg(70, 390, "[OK] Volume: Persistent Storage", 0x00_ff_00, panel_bg);
+        draw_text_bg(
+            70,
+            390,
+            "[OK] Volume: Persistent Storage",
+            0x00_ff_00,
+            panel_bg,
+        );
     } else {
         draw_text_bg(70, 390, "[!!] Volume: Not Found", 0xff_00_00, panel_bg);
     }
@@ -6652,7 +7259,9 @@ fn kernel_main() -> ! {
         const TICKS_PER_SEC: u64 = 100;
 
         match option_env!("RAYOS_DEV_SCANOUT_AUTOHIDE_SECS") {
-            Some(s) => parse_u64_ascii(s).unwrap_or(0).saturating_mul(TICKS_PER_SEC),
+            Some(s) => parse_u64_ascii(s)
+                .unwrap_or(0)
+                .saturating_mul(TICKS_PER_SEC),
             None => 0,
         }
     }
@@ -6764,7 +7373,12 @@ fn kernel_main() -> ! {
         }
 
         // Look for a target suffix.
-        let suffixes: [&[u8]; 4] = [b" to linux desktop", b" to linux", b" to linux vm", b" to linux subsystem"];
+        let suffixes: [&[u8]; 4] = [
+            b" to linux desktop",
+            b" to linux",
+            b" to linux vm",
+            b" to linux subsystem",
+        ];
         let mut cut = None;
         let mut si = 0usize;
         while si < suffixes.len() {
@@ -6977,6 +7591,36 @@ fn kernel_main() -> ! {
             return None;
         }
         Some(rest)
+    }
+
+    fn parse_run_rayapp(line: &[u8]) -> Option<(&[u8], &[u8])> {
+        let s = trim_ascii_spaces(line);
+        const P: &[u8] = b"run ";
+        if !starts_with_ignore_ascii_case(s, P) {
+            return None;
+        }
+
+        let rest = trim_ascii_spaces(&s[P.len()..]);
+        if rest.is_empty() {
+            return None;
+        }
+
+        let name_end = rest
+            .iter()
+            .position(|&b| b == b' ' || b == b'\t')
+            .unwrap_or(rest.len());
+        let name = trim_ascii_spaces(&rest[..name_end]);
+        if name.is_empty() {
+            return None;
+        }
+
+        let payload = if name_end < rest.len() {
+            trim_ascii_spaces(&rest[name_end..])
+        } else {
+            &[]
+        };
+
+        Some((name, payload))
     }
 
     fn is_show_windows_desktop(line: &[u8]) -> bool {
@@ -7475,14 +8119,20 @@ fn kernel_main() -> ! {
             {
                 // Dev-only: press ` (backtick) to toggle the presented guest panel.
                 if b == b'`' {
-                    if guest_surface::presentation_state() == guest_surface::PresentationState::Presented {
-                        guest_surface::set_presentation_state(guest_surface::PresentationState::Hidden);
+                    if guest_surface::presentation_state()
+                        == guest_surface::PresentationState::Presented
+                    {
+                        guest_surface::set_presentation_state(
+                            guest_surface::PresentationState::Hidden,
+                        );
                         serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:HIDDEN\n");
                         serial_write_str("DEV_SCANOUT: toggle hidden\n");
                         chat.push_line(b"SYS: ", b"dev_scanout: hide guest panel");
                         render_chat_log(&chat);
                     } else {
-                        guest_surface::set_presentation_state(guest_surface::PresentationState::Presented);
+                        guest_surface::set_presentation_state(
+                            guest_surface::PresentationState::Presented,
+                        );
                         serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n");
                         serial_write_str("DEV_SCANOUT: toggle presented\n");
                         dev_present_start_tick = TIMER_TICKS.load(Ordering::Relaxed);
@@ -7535,7 +8185,8 @@ fn kernel_main() -> ! {
                                         if starts_with_ignore_ascii_case(detail, b"hiding") {
                                             // Viewer hidden; VM still running.
                                             LINUX_DESKTOP_STATE.store(2, Ordering::Relaxed);
-                                        } else if starts_with_ignore_ascii_case(detail, b"stopped") {
+                                        } else if starts_with_ignore_ascii_case(detail, b"stopped")
+                                        {
                                             // VM stopped.
                                             LINUX_DESKTOP_STATE.store(0, Ordering::Relaxed);
                                         }
@@ -7596,16 +8247,23 @@ fn kernel_main() -> ! {
                                 let cur = LINUX_DESKTOP_STATE.load(Ordering::Relaxed);
                                 if cur != last_linux_state {
                                     last_linux_state = cur;
-                                    if guest_surface::presentation_state() == guest_surface::PresentationState::Hidden {
+                                    if guest_surface::presentation_state()
+                                        == guest_surface::PresentationState::Hidden
+                                    {
                                         render_linux_state(panel_bg, cur);
                                     }
                                 }
                             } else if is_hide_linux_desktop(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:HIDE_LINUX_DESKTOP\n");
-                                guest_surface::set_presentation_state(guest_surface::PresentationState::Hidden);
+                                guest_surface::set_presentation_state(
+                                    guest_surface::PresentationState::Hidden,
+                                );
                                 serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:HIDDEN\n");
                                 LINUX_DESKTOP_STATE.store(4, Ordering::Relaxed);
-                                chat.push_line(b"SYS: ", b"hiding Linux desktop (host will stop VM)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"hiding Linux desktop (host will stop VM)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "hiding Linux desktop...", 0xff_ff_88);
@@ -7620,7 +8278,10 @@ fn kernel_main() -> ! {
                                 // Update lifecycle state first so the status line reflects the action
                                 // even if we switch into Presented mode immediately afterward.
                                 LINUX_DESKTOP_STATE.store(1, Ordering::Relaxed);
-                                chat.push_line(b"SYS: ", b"requesting Linux desktop (host will launch)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"requesting Linux desktop (host will launch)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "launching Linux desktop...", 0xff_ff_88);
@@ -7635,7 +8296,10 @@ fn kernel_main() -> ! {
                                 if guest_surface::surface_snapshot().is_none() {
                                     #[cfg(feature = "dev_scanout")]
                                     {
-                                        chat.push_line(b"SYS: ", b"no scanout yet; waiting for dev_scanout producer");
+                                        chat.push_line(
+                                            b"SYS: ",
+                                            b"no scanout yet; waiting for dev_scanout producer",
+                                        );
                                         serial_write_str("SYS: no scanout yet; waiting for dev_scanout producer\n");
                                     }
                                     #[cfg(not(feature = "dev_scanout"))]
@@ -7646,49 +8310,87 @@ fn kernel_main() -> ! {
                                     render_chat_log(&chat);
                                 }
 
-                                guest_surface::set_presentation_state(guest_surface::PresentationState::Presented);
-                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n");
+                                guest_surface::set_presentation_state(
+                                    guest_surface::PresentationState::Presented,
+                                );
+                                serial_write_str(
+                                    "RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n",
+                                );
                             } else if is_show_windows_desktop(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:SHOW_WINDOWS_DESKTOP\n");
-                                chat.push_line(b"SYS: ", b"requesting Windows desktop (host will launch)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"requesting Windows desktop (host will launch)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "launching Windows desktop...", 0xff_ff_88);
-                            } else if let Some((payload, is_key)) = parse_send_to_linux(&line_buf[..len]) {
+                            } else if let Some((payload, is_key)) =
+                                parse_send_to_linux(&line_buf[..len])
+                            {
                                 if is_key {
                                     serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDKEY:");
                                     serial_write_bytes(payload);
                                     serial_write_str("\n");
-                                    chat.push_line(b"SYS: ", b"sending key to Linux desktop (host inject)");
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"sending key to Linux desktop (host inject)",
+                                    );
                                     render_chat_log(&chat);
                                     draw_box(140, 560, 590, 20, 0x1a_1a_2e);
-                                    draw_text(140, 560, "sending key to Linux desktop...", 0xff_ff_88);
+                                    draw_text(
+                                        140,
+                                        560,
+                                        "sending key to Linux desktop...",
+                                        0xff_ff_88,
+                                    );
                                 } else {
                                     serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDTEXT:");
                                     serial_write_bytes(payload);
                                     serial_write_str("\n");
-                                    chat.push_line(b"SYS: ", b"typing into Linux desktop (host inject)");
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"typing into Linux desktop (host inject)",
+                                    );
                                     render_chat_log(&chat);
                                     draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                     draw_text(140, 560, "typing into Linux desktop...", 0xff_ff_88);
                                 }
-                            } else if let Some((payload, is_key)) = parse_send_to_windows(&line_buf[..len]) {
+                            } else if let Some((payload, is_key)) =
+                                parse_send_to_windows(&line_buf[..len])
+                            {
                                 if is_key {
                                     serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SENDKEY:");
                                     serial_write_bytes(payload);
                                     serial_write_str("\n");
-                                    chat.push_line(b"SYS: ", b"sending key to Windows desktop (host inject)");
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"sending key to Windows desktop (host inject)",
+                                    );
                                     render_chat_log(&chat);
                                     draw_box(140, 560, 590, 20, 0x1a_1a_2e);
-                                    draw_text(140, 560, "sending key to Windows desktop...", 0xff_ff_88);
+                                    draw_text(
+                                        140,
+                                        560,
+                                        "sending key to Windows desktop...",
+                                        0xff_ff_88,
+                                    );
                                 } else {
                                     serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SENDTEXT:");
                                     serial_write_bytes(payload);
                                     serial_write_str("\n");
-                                    chat.push_line(b"SYS: ", b"typing into Windows desktop (host inject)");
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"typing into Windows desktop (host inject)",
+                                    );
                                     render_chat_log(&chat);
                                     draw_box(140, 560, 590, 20, 0x1a_1a_2e);
-                                    draw_text(140, 560, "typing into Windows desktop...", 0xff_ff_88);
+                                    draw_text(
+                                        140,
+                                        560,
+                                        "typing into Windows desktop...",
+                                        0xff_ff_88,
+                                    );
                                 }
                             } else if let Some(text) = parse_linux_sendtext(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDTEXT:");
@@ -7696,15 +8398,41 @@ fn kernel_main() -> ! {
                                     serial_write_byte(b);
                                 }
                                 serial_write_str("\n");
-                                chat.push_line(b"SYS: ", b"typing into Linux desktop (host inject)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"typing into Linux desktop (host inject)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "typing into Linux desktop...", 0xff_ff_88);
+                            } else if let Some((app, payload)) = parse_run_rayapp(&line_buf[..len])
+                            {
+                                if rayapp::rayapp_service().allocate(app).is_some() {
+                                    serial_write_str("RAYOS_HOST_EVENT_V0:RUN_RAYAPP:");
+                                    serial_write_bytes(app);
+                                    if !payload.is_empty() {
+                                        serial_write_str(":");
+                                        serial_write_bytes(payload);
+                                    }
+                                    serial_write_str("\n");
+                                    chat.push_line(b"SYS: ", b"launching RayApp");
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(140, 560, "launching RayApp...", 0xff_ff_88);
+                                } else {
+                                    chat.push_line(b"SYS: ", b"RayApp registry full");
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(140, 560, "rayapp registry full", 0xff_88_88);
+                                }
                             } else if let Some(app) = parse_linux_launch_app(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_LAUNCH_APP:");
                                 serial_write_bytes(app);
                                 serial_write_str("\n");
-                                chat.push_line(b"SYS: ", b"launching app in Linux desktop (host inject)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"launching app in Linux desktop (host inject)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "launching Linux app...", 0xff_ff_88);
@@ -7712,19 +8440,28 @@ fn kernel_main() -> ! {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SENDTEXT:");
                                 serial_write_bytes(text);
                                 serial_write_str("\n");
-                                chat.push_line(b"SYS: ", b"typing into Windows desktop (host inject)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"typing into Windows desktop (host inject)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "typing into Windows desktop...", 0xff_ff_88);
                             } else if is_linux_shutdown(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SHUTDOWN\n");
-                                chat.push_line(b"SYS: ", b"requesting Linux shutdown (host will stop VM)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"requesting Linux shutdown (host will stop VM)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "shutting down Linux desktop...", 0xff_ff_88);
                             } else if is_windows_shutdown(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SHUTDOWN\n");
-                                chat.push_line(b"SYS: ", b"requesting Windows shutdown (host will stop VM)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"requesting Windows shutdown (host will stop VM)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "shutting down Windows desktop...", 0xff_ff_88);
@@ -7732,7 +8469,10 @@ fn kernel_main() -> ! {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDKEY:");
                                 serial_write_bytes(keyspec);
                                 serial_write_str("\n");
-                                chat.push_line(b"SYS: ", b"sending key to Linux desktop (host inject)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"sending key to Linux desktop (host inject)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "sending key to Linux desktop...", 0xff_ff_88);
@@ -7740,79 +8480,100 @@ fn kernel_main() -> ! {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SENDKEY:");
                                 serial_write_bytes(keyspec);
                                 serial_write_str("\n");
-                                chat.push_line(b"SYS: ", b"sending key to Windows desktop (host inject)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"sending key to Windows desktop (host inject)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
-                                draw_text(140, 560, "sending key to Windows desktop...", 0xff_ff_88);
+                                draw_text(
+                                    140,
+                                    560,
+                                    "sending key to Windows desktop...",
+                                    0xff_ff_88,
+                                );
                             } else if let Some((x, y)) = parse_linux_mouse_abs(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_MOUSE_ABS:");
                                 serial_write_bytes(x);
                                 serial_write_byte(b':');
                                 serial_write_bytes(y);
                                 serial_write_str("\n");
-                                chat.push_line(b"SYS: ", b"moving pointer in Linux desktop (host inject)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"moving pointer in Linux desktop (host inject)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
-                                draw_text(140, 560, "moving pointer in Linux desktop...", 0xff_ff_88);
+                                draw_text(
+                                    140,
+                                    560,
+                                    "moving pointer in Linux desktop...",
+                                    0xff_ff_88,
+                                );
                             } else if let Some(btn) = parse_linux_click(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_CLICK:");
                                 serial_write_bytes(btn);
                                 serial_write_str("\n");
-                                chat.push_line(b"SYS: ", b"clicking in Linux desktop (host inject)");
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"clicking in Linux desktop (host inject)",
+                                );
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "clicking in Linux desktop...", 0xff_ff_88);
                             } else {
-                            // Update transcript with the user's line.
-                            chat.push_line(b"YOU: ", &line_buf[..len]);
+                                // Update transcript with the user's line.
+                                chat.push_line(b"YOU: ", &line_buf[..len]);
 
-                            // If host bridge mode is enabled, emit the request tagged with a message id.
-                            // Otherwise, answer locally.
-                            let msg_id = next_msg_id;
-                            next_msg_id = next_msg_id.wrapping_add(1);
+                                // If host bridge mode is enabled, emit the request tagged with a message id.
+                                // Otherwise, answer locally.
+                                let msg_id = next_msg_id;
+                                next_msg_id = next_msg_id.wrapping_add(1);
 
-                            if HOST_AI_ENABLED {
-                                serial_write_tagged_input(msg_id, &line_buf[..len]);
-                                pending_id = msg_id;
-                                pending_thinking = true;
-                                chat.push_line(b"AI: ", b"(thinking...)");
-                                render_chat_log(&chat);
-                            }
-
-                            if LOCAL_AI_ENABLED {
-                                let mut reply_buf = [0u8; CHAT_MAX_COLS];
-                                let reply_len = local_ai_reply(&line_buf[..len], &mut reply_buf);
-                                let reply = &reply_buf[..reply_len];
-
-                                // Also print to serial so headless logs can see local replies.
-                                serial_write_str("AI_LOCAL:");
-                                for &b in reply {
-                                    serial_write_byte(b);
+                                if HOST_AI_ENABLED {
+                                    serial_write_tagged_input(msg_id, &line_buf[..len]);
+                                    pending_id = msg_id;
+                                    pending_thinking = true;
+                                    chat.push_line(b"AI: ", b"(thinking...)");
+                                    render_chat_log(&chat);
                                 }
+
+                                if LOCAL_AI_ENABLED {
+                                    let mut reply_buf = [0u8; CHAT_MAX_COLS];
+                                    let reply_len =
+                                        local_ai_reply(&line_buf[..len], &mut reply_buf);
+                                    let reply = &reply_buf[..reply_len];
+
+                                    // Also print to serial so headless logs can see local replies.
+                                    serial_write_str("AI_LOCAL:");
+                                    for &b in reply {
+                                        serial_write_byte(b);
+                                    }
+                                    serial_write_str("\n");
+
+                                    // Render immediately.
+                                    chat.push_line(b"AI: ", reply);
+                                    render_chat_log(&chat);
+                                    render_ai_text_line(reply);
+                                }
+
+                                let (count, pushed, op, prio, hash) =
+                                    system2_submit_text(&line_buf[..len]);
+                                serial_write_str("s2 submit count=0x");
+                                serial_write_hex_u64(count as u64);
+                                serial_write_str(" pushed=0x");
+                                serial_write_hex_u64(pushed);
+                                serial_write_str(" op=0x");
+                                serial_write_hex_u64(op as u64);
+                                serial_write_str(" prio=0x");
+                                serial_write_hex_u64(prio as u64);
+                                serial_write_str(" hash=0x");
+                                serial_write_hex_u64(hash);
                                 serial_write_str("\n");
 
-                                // Render immediately.
-                                chat.push_line(b"AI: ", reply);
-                                render_chat_log(&chat);
-                                render_ai_text_line(reply);
-                            }
-
-                            let (count, pushed, op, prio, hash) = system2_submit_text(&line_buf[..len]);
-                            serial_write_str("s2 submit count=0x");
-                            serial_write_hex_u64(count as u64);
-                            serial_write_str(" pushed=0x");
-                            serial_write_hex_u64(pushed);
-                            serial_write_str(" op=0x");
-                            serial_write_hex_u64(op as u64);
-                            serial_write_str(" prio=0x");
-                            serial_write_hex_u64(prio as u64);
-                            serial_write_str(" hash=0x");
-                            serial_write_hex_u64(hash);
-                            serial_write_str("\n");
-
-                            // Provide human-readable feedback in the framebuffer UI.
-                            let _ = count; // keep serial print; avoid unused warnings in some configs
-                            render_response_line(&line_buf[..len], pushed, op, prio, hash);
+                                // Provide human-readable feedback in the framebuffer UI.
+                                let _ = count; // keep serial print; avoid unused warnings in some configs
+                                render_response_line(&line_buf[..len], pushed, op, prio, hash);
                             }
                         }
                     }
@@ -7859,7 +8620,9 @@ fn kernel_main() -> ! {
                     if dev_autohide_after_ticks != 0
                         && tick.saturating_sub(dev_present_start_tick) >= dev_autohide_after_ticks
                     {
-                        guest_surface::set_presentation_state(guest_surface::PresentationState::Hidden);
+                        guest_surface::set_presentation_state(
+                            guest_surface::PresentationState::Hidden,
+                        );
                         serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:HIDDEN\n");
                         serial_write_str("DEV_SCANOUT: auto-hide\n");
                         chat.push_line(b"SYS: ", b"dev_scanout: auto-hide guest panel");
@@ -7882,13 +8645,13 @@ fn kernel_main() -> ! {
                     // Entering Presented: render the current scanout immediately
                     // (even if no new frame_seq has been bumped yet).
                     if let Some(surface) = guest_surface::surface_snapshot() {
-                        blit_guest_surface_panel(surface);
+                        present_guest_surface(surface, fs);
                     }
                     last_guest_frame_seq = fs;
                 } else if fs != last_guest_frame_seq {
                     last_guest_frame_seq = fs;
                     if let Some(surface) = guest_surface::surface_snapshot() {
-                        blit_guest_surface_panel(surface);
+                        present_guest_surface(surface, fs);
                     }
                 }
                 // Avoid drawing UI elements that would scribble over the guest panel.
@@ -7917,14 +8680,29 @@ fn kernel_main() -> ! {
             draw_text(520, 300, "q:", 0xaa_aa_aa);
             draw_number(545, 300, rayq_depth(), 0x88_ff_88);
             draw_text(590, 300, "done:", 0xaa_aa_aa);
-            draw_number(640, 300, SYSTEM1_PROCESSED.load(Ordering::Relaxed) as usize, 0x88_ff_88);
+            draw_number(
+                640,
+                300,
+                SYSTEM1_PROCESSED.load(Ordering::Relaxed) as usize,
+                0x88_ff_88,
+            );
 
             // System 2 quick stats on the right side of the System 2 line.
             draw_box(520, 330, 200, 20, panel_bg);
             draw_text(520, 330, "op:", 0xaa_aa_aa);
-            draw_number(555, 330, SYSTEM2_LAST_OP.load(Ordering::Relaxed) as usize, 0xff_aa_88);
+            draw_number(
+                555,
+                330,
+                SYSTEM2_LAST_OP.load(Ordering::Relaxed) as usize,
+                0xff_aa_88,
+            );
             draw_text(590, 330, "prio:", 0xaa_aa_aa);
-            draw_number(640, 330, SYSTEM2_LAST_PRIO.load(Ordering::Relaxed) as usize, 0xff_aa_88);
+            draw_number(
+                640,
+                330,
+                SYSTEM2_LAST_PRIO.load(Ordering::Relaxed) as usize,
+                0xff_aa_88,
+            );
 
             // Host bridge / Ouroboros badge next to Conductor.
             draw_box(520, 360, 200, 20, panel_bg);
@@ -7980,7 +8758,11 @@ fn kernel_main() -> ! {
                             pending_id = 0;
                             pending_thinking = false;
                         }
-                    } else if ai_len >= 3 && ai_buf[0] == b'A' && ai_buf[1] == b'I' && ai_buf[2] == b':' {
+                    } else if ai_len >= 3
+                        && ai_buf[0] == b'A'
+                        && ai_buf[1] == b'I'
+                        && ai_buf[2] == b':'
+                    {
                         // Try parse id prefix.
                         let mut i = 3usize;
                         while i < ai_len && ai_buf[i] != b':' {
@@ -8030,7 +8812,9 @@ fn kernel_main() -> ! {
         }
 
         // Idle until the next interrupt (timer/keyboard).
-        unsafe { asm!("hlt", options(nomem, nostack, preserves_flags)); }
+        unsafe {
+            asm!("hlt", options(nomem, nostack, preserves_flags));
+        }
     }
 }
 
@@ -8152,7 +8936,11 @@ fn parse_u32_decimal(buf: &[u8]) -> Option<u32> {
         any = true;
         v = v.saturating_mul(10).saturating_add((b - b'0') as u32);
     }
-    if any { Some(v) } else { None }
+    if any {
+        Some(v)
+    } else {
+        None
+    }
 }
 
 fn init_memory() {
@@ -8164,7 +8952,10 @@ fn init_memory() {
 
 /// Public allocation function for kernel use
 pub fn kalloc(size: usize, align: usize) -> Option<*mut u8> {
-    HEAP_ALLOCATOR.lock().allocate(size, align).map(|addr| addr as *mut u8)
+    HEAP_ALLOCATOR
+        .lock()
+        .allocate(size, align)
+        .map(|addr| addr as *mut u8)
 }
 
 /// Get memory statistics
@@ -8286,6 +9077,11 @@ fn blit_guest_surface_panel(surface: guest_surface::GuestSurface) {
             core::ptr::copy_nonoverlapping(src.add(src_off), fb.add(dst_off), src_w);
         }
     }
+}
+
+fn present_guest_surface(surface: guest_surface::GuestSurface, frame_seq: u64) {
+    blit_guest_surface_panel(surface);
+    rayapp::rayapp_service().record_surface(surface, frame_seq);
 }
 
 fn draw_text_bg(x: usize, y: usize, text: &str, fg: u32, bg: u32) {
