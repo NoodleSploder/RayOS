@@ -629,6 +629,8 @@ struct VirtioMmioState {
     // Retry counter tracks how many retry attempts we've made.
     interrupt_pending: AtomicU32,
     interrupt_pending_attempts: AtomicU32,
+    // Last retry tick (TIMER_TICKS) used for exponential backoff scheduling.
+    interrupt_pending_last_tick: AtomicU64,
     device_id: AtomicU32,
     queue_notify_count: AtomicU32,
     queue_desc_address: [AtomicU64; 2],
