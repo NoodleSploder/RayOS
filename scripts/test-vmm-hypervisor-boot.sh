@@ -125,9 +125,34 @@ if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM
   tr -d '\r' < "$SERIAL_LOG_FORCE" > "$SERIAL_NORM_FORCE" 2>/dev/null || true
   if grep -F -a -q "RAYOS_VMM:VMX:FORCED_VMWRITE_FAIL" "$SERIAL_NORM_FORCE" && \
      (grep -F -a -q "RAYOS_VMM:VMX:INJECT_VIA_LAPIC_SIM" "$SERIAL_NORM_FORCE" || grep -F -a -q "RAYOS_VMM:VMX:INJECT_VIA_LAPIC" "$SERIAL_NORM_FORCE" || grep -F -a -q "RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_PENDING" "$SERIAL_NORM_FORCE"); then
-    echo "PASS: IRQ injection fallback exercised" >&2
+    echo "PASS: IRQ injection fallback exercised (LAPIC)" >&2
   else
     echo "NOTE: IRQ injection fallback not exercised; check LAPIC mapping or test flags" >&2
+  fi
+
+  # Forced MSI run: exercise the MSI fallback path (when supported by test flags).
+  SERIAL_LOG_FORCE_MSI="$WORK_DIR/serial-vmm-hypervisor-boot.force-msi.log"
+  SERIAL_NORM_FORCE_MSI="$WORK_DIR/serial-vmm-hypervisor-boot.force-msi.norm.log"
+  RAYOS_KERNEL_FEATURES_FORCE_MSI="${RAYOS_KERNEL_FEATURES},vmm_inject_force_fail,vmm_inject_force_msi_fail"
+  echo "Running forced-MSI test features: $RAYOS_KERNEL_FEATURES_FORCE_MSI" >&2
+  pushd "$ROOT_DIR/crates/kernel-bare" >/dev/null
+  RUSTC="$(rustup which rustc)" cargo build \
+    -Z build-std=core,alloc \
+    -Z build-std-features=compiler-builtins-mem \
+    --release \
+    --target x86_64-unknown-none \
+    --features "$RAYOS_KERNEL_FEATURES_FORCE_MSI" \
+    >/dev/null
+  popd >/dev/null
+
+  # Run a headless boot with forced-MSI features; keep old SERIAL_LOG untouched.
+  (SERIAL_LOG="$SERIAL_LOG_FORCE_MSI" BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless) || true
+  tr -d '\r' < "$SERIAL_LOG_FORCE_MSI" > "$SERIAL_NORM_FORCE_MSI" 2>/dev/null || true
+  if grep -F -a -q "RAYOS_VMM:VMX:FORCED_MSI_INJECT" "$SERIAL_NORM_FORCE_MSI" && \
+     (grep -F -a -q "RAYOS_VMM:VMX:INJECT_VIA_MSI_SIM" "$SERIAL_NORM_FORCE_MSI" || grep -F -a -q "RAYOS_VMM:VMX:INJECT_VIA_MSI" "$SERIAL_NORM_FORCE_MSI"); then
+    echo "PASS: IRQ injection MSI fallback exercised" >&2
+  else
+    echo "NOTE: IRQ injection MSI fallback not exercised; check MSI mapping or test flags" >&2
   fi
 
   echo "Serial log: $SERIAL_LOG" >&2

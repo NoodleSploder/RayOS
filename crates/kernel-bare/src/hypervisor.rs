@@ -2240,13 +2240,18 @@ fn inject_guest_interrupt(vector: u8) -> bool {
 
     unsafe {
         if LAPIC_MMIO != 0 {
-            // In test mode we simulate a successful IPI so tests don't trigger PF when
-            // LAPIC MMIO is not mapped in the HHDM. This avoids crashes in CI while
-            // still validating our fallback logic.
-            #[cfg(feature = "vmm_inject_force_fail")]
+            // In test mode we may *either* simulate a successful LAPIC injection (default),
+            // or, when the MSI-forcing feature is enabled too, skip LAPIC simulation so
+            // we can exercise the MSI fallback path.
+            #[cfg(all(feature = "vmm_inject_force_fail", not(feature = "vmm_inject_force_msi_fail")))]
             {
                 crate::serial_write_str("RAYOS_VMM:VMX:INJECT_VIA_LAPIC_SIM\n");
                 return true;
+            }
+
+            #[cfg(all(feature = "vmm_inject_force_fail", feature = "vmm_inject_force_msi_fail"))]
+            {
+                crate::serial_write_str("RAYOS_VMM:VMX:SKIP_LAPIC_SIM_TO_EXERCISE_MSI\n");
             }
 
             // For self-delivery, write high (0) then low with dest-shorthand=SELF (1 << 18).
@@ -2261,6 +2266,30 @@ fn inject_guest_interrupt(vector: u8) -> bool {
             crate::serial_write_str("RAYOS_VMM:VMX:INJECT_VIA_LAPIC\n");
             return true;
         }
+    }
+
+    // Try an MSI-style delivery: write to the canonical MSI target (local APIC address).
+    crate::serial_write_str("RAYOS_VMM:VMX:VMWRITE_INJECT_FAIL, trying MSI fallback\n");
+
+    // Allow forced test-mode MSI injection to be simulated (avoid PF in CI when APIC isn't mapped).
+    #[cfg(feature = "vmm_inject_force_msi_fail")]
+    {
+        crate::serial_write_str("RAYOS_VMM:VMX:FORCED_MSI_INJECT\n");
+        crate::serial_write_str("RAYOS_VMM:VMX:INJECT_VIA_MSI_SIM\n");
+        return true;
+    }
+
+    // Attempt to perform an MSI by writing to the canonical APIC memory region at
+    // phys 0xFEE0_0000 (HHDM_OFFSET + 0xFEE0_0000 -> virtual). This approximates the
+    // effect of a device issuing a message-signaled interrupt.
+    unsafe {
+        let msi_virt = crate::HHDM_OFFSET + 0xFEE0_0000u64;
+        let msi_ptr = msi_virt as *mut u32;
+        core::ptr::write_volatile(msi_ptr, vector as u32);
+        // Read-after-write for posted writes
+        let _ = core::ptr::read_volatile(msi_ptr);
+        crate::serial_write_str("RAYOS_VMM:VMX:INJECT_VIA_MSI\n");
+        return true;
     }
 
     crate::serial_write_str("RAYOS_VMM:VMX:INJECT_FAIL_NO_FALLBACK\n");

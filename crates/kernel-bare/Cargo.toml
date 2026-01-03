@@ -51,6 +51,10 @@ vmm_hypervisor_net_test = []
 # Testing flag: force VMWRITE injection failures to exercise fallback paths (LAPIC, etc.).
 vmm_inject_force_fail = []
 
+# Testing flag: force MSI fallback path (used in combination with vmm_inject_force_fail to
+# force the code path that exercises MSI delivery).
+vmm_inject_force_msi_fail = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"

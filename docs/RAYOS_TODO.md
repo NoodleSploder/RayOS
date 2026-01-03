@@ -196,7 +196,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	- [✅] Minimal interrupt/exit handling path exists for timer/interrupts needed by a real guest (even if initial guest is single-core + polling).
 		- Note: Added VM-entry interrupt injection (writes VMCS `VM_ENTRY_INTERRUPTION_INFO`) when virtio-MMIO sets VRING interrupt status so guests observe IRQs (vector 0x20).
 	- [✅] Add/keep a headless smoke test that proves: boot → enter guest → exit loop deterministically (existing `test-vmm-hypervisor-boot.sh` is the baseline; it now also validates virtio-gpu selftest + IRQ injection markers).
-	- [✅] IRQ delivery: VM-entry injection implemented; **LAPIC fallback path** added and exercised via a forced-inject smoke run (`vmm_inject_force_fail` feature), next: MSI fallback and retry/backoff improvements.
+	- [✅] IRQ delivery: VM-entry injection implemented; **LAPIC fallback path** added and exercised via a forced-inject smoke run (`vmm_inject_force_fail` feature). MSI fallback and retry/backoff improvements have been added and tested (forced-MSI run). Next: tune retry/backoff and add unit tests.
 
 	P1 (Must-have): boot Linux headless under RayOS VMM
 	- [ ] Virtqueue transport plumbing is “real” (not only a scripted guest driver blob): guest can drive virtqueues with correct notifications and interrupts.
