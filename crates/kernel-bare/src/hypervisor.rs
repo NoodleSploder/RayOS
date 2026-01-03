@@ -2467,8 +2467,14 @@ fn log_descriptor_chain(
 
                     #[cfg(feature = "vmm_virtio_console")]
                     VIRTIO_CONSOLE_DEVICE_ID => {
-                        let used_len = unsafe { handle_virtio_console_chain(header, &data_descs[..data_desc_count]) };
-                        return Some(used_len);
+                        // VIRTIO console uses separate queues: data queue (0) and control queue (1).
+                        if queue_index == 0 {
+                            let used_len = unsafe { handle_virtio_console_dataq(header, &data_descs[..data_desc_count]) };
+                            return Some(used_len);
+                        } else {
+                            let used_len = unsafe { handle_virtio_console_ctrlq(header, &data_descs[..data_desc_count]) };
+                            return Some(used_len);
+                        }
                     }
                     _ => {
                         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:UNKNOWN_DEVICE\n");
@@ -2551,14 +2557,102 @@ unsafe fn handle_virtio_console_chain(_header: VirtqDesc, descs: &[VirtqDesc]) -
         crate::serial_write_str("\n");
     }
 
-    // No response bytes written.
+        // No response bytes written.
     0
+}
+
+// Handle virtio-console data queue (guest->device messages and optional device->guest responses)
+#[cfg(feature = "vmm_virtio_console")]
+unsafe fn handle_virtio_console_dataq(_header: VirtqDesc, descs: &[VirtqDesc]) -> u32 {
+    if descs.len() == 0 {
+        return 0;
+    }
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:DATAQ_HANDLED\n");
+    let mut total_consumed: u32 = 0;
+    for d in descs.iter() {
+        // Device-readable (guest->device)
+        if (d.flags & VIRTQ_DESC_F_WRITE) == 0 {
+            let len = d.len as usize;
+            if len == 0 {
+                continue;
+            }
+            let mut buf = [0u8; 256];
+            let to_read = if len > buf.len() { buf.len() } else { len };
+            if read_guest_bytes(d.addr, &mut buf[..to_read]) {
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:RECV:");
+                crate::serial_write_bytes(&buf[..to_read]);
+                crate::serial_write_str("\n");
+                total_consumed = total_consumed.wrapping_add(to_read as u32);
+            } else {
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:RECV_FAIL\n");
+            }
+        } else {
+            // Device-writeable: provide a simple status response (fill zeros and set status 0)
+            if d.len > 0 {
+                if respond_with_status(d.addr, d.len, 0) {
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:RESP_WRITTEN\n");
+                } else {
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:RESP_WRITE_FAIL\n");
+                }
+                total_consumed = total_consumed.wrapping_add(d.len);
+            }
+        }
+    }
+    total_consumed
+}
+
+// Handle virtio-console control queue (control messages + optional responses).
+#[cfg(feature = "vmm_virtio_console")]
+unsafe fn handle_virtio_console_ctrlq(_header: VirtqDesc, descs: &[VirtqDesc]) -> u32 {
+    use crate::virtio_console_proto::VirtioConsoleCtrlHdr;
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:CTRLQ_HANDLED\n");
+    // Expect the header (first readable descriptor) to contain a VirtioConsoleCtrlHdr
+    let mut consumed = 0u32;
+    let mut resp_written = false;
+    for d in descs.iter() {
+        if (d.flags & VIRTQ_DESC_F_WRITE) == 0 {
+            // Read control header if present
+            if d.len as usize >= core::mem::size_of::<VirtioConsoleCtrlHdr>() {
+                let mut buf = [0u8; core::mem::size_of::<VirtioConsoleCtrlHdr>()];
+                if read_guest_bytes(d.addr, &mut buf) {
+                    // parse fields
+                    let type_ = u32::from_le_bytes(buf[0..4].try_into().unwrap());
+                    let flags = u32::from_le_bytes(buf[4..8].try_into().unwrap());
+                    let id = u32::from_le_bytes(buf[8..12].try_into().unwrap());
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:CTRL:type=");
+                    crate::serial_write_hex_u64(type_ as u64);
+                    crate::serial_write_str(" flags=");
+                    crate::serial_write_hex_u64(flags as u64);
+                    crate::serial_write_str(" id=");
+                    crate::serial_write_hex_u64(id as u64);
+                    crate::serial_write_str("\n");
+                } else {
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:CTRL_READ_FAIL\n");
+                }
+            }
+            consumed = consumed.wrapping_add(d.len);
+        } else {
+            // Write a small response: acknowledge with a zero status in the last byte
+            if d.len > 0 {
+                if respond_with_status(d.addr, d.len, 0) {
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:CTRL_RESP_WRITTEN\n");
+                    resp_written = true;
+                } else {
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:CTRL_RESP_FAIL\n");
+                }
+                consumed = consumed.wrapping_add(d.len);
+            }
+        }
+    }
+
+    // If we wrote a response, report it as consumed; otherwise report the bytes read.
+    if resp_written { consumed } else { consumed }
 }
 
 #[cfg(all(feature = "vmm_virtio_console", feature = "vmm_virtio_console_selftest", feature = "vmm_hypervisor_smoke"))]
 unsafe fn run_virtio_console_selftest() {
     // Allocate a page for a small message, write ascii text, craft a single
-    // readable descriptor and invoke the console handler directly.
+    // readable descriptor and invoke the console *data* handler directly.
     crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:SELFTEST:ALLOC_PAGE\n");
     let msg_phys = match crate::phys_alloc_page() {
         Some(p) => p,
@@ -2576,7 +2670,7 @@ unsafe fn run_virtio_console_selftest() {
     // Craft a virtq desc pointing to the message buffer (non-writeable by device)
     let desc = VirtqDesc { addr: msg_phys, len: msg.len() as u32, flags: 0, next: 0 };
     crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:SELFTEST:INVOKE\n");
-    let _ = handle_virtio_console_chain(VirtqDesc { addr: 0, len: 0, flags: 0, next: 0 }, &[desc]);
+    let _ = handle_virtio_console_dataq(VirtqDesc { addr: 0, len: 0, flags: 0, next: 0 }, &[desc]);
 }
 
 
