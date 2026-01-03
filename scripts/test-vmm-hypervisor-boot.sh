@@ -104,6 +104,15 @@ if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM
     # Non-fatal; the hypervisor init still counts as success for general CI.
   fi
 
+  # Optional: check virtio-console dispatch marker when the feature is present.
+  if echo ",${RAYOS_KERNEL_FEATURES}," | grep -q ",vmm_virtio_console,"; then
+    if grep -F -a -q "RAYOS_VMM:VIRTIO_CONSOLE:CHAIN_HANDLED" "$SERIAL_NORM"; then
+      echo "PASS: virtio-console dispatch exercised" >&2
+    else
+      echo "NOTE: virtio-console dispatch not observed; check build features" >&2
+    fi
+  fi
+
   # Optional: exercise IRQ injection fallback path by forcing VMWRITE to fail
   # and verifying we either simulate or perform a LAPIC-based injection.
   SERIAL_LOG_FORCE="$WORK_DIR/serial-vmm-hypervisor-boot.force.log"

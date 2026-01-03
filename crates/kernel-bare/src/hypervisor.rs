@@ -546,6 +546,8 @@ const VIRTIO_MMIO_INT_VRING: u32 = 1;
 const VIRTIO_NET_DEVICE_ID: u32 = 0x0101;
 // Standard virtio device ID for virtio-gpu.
 const VIRTIO_GPU_DEVICE_ID: u32 = 16;
+// Standard virtio device ID for virtio-console (P1)
+const VIRTIO_CONSOLE_DEVICE_ID: u32 = 0x0107;
 const VIRTIO_NET_TX_QUEUE: u16 = 0;
 const VIRTIO_NET_RX_QUEUE: u16 = 1;
 const VIRTIO_NET_PKT_MAX: usize = 2048;
@@ -662,10 +664,13 @@ impl VirtioMmioState {
         // Otherwise preserve existing net-test and default behaviors.
         #[cfg(feature = "vmm_virtio_gpu")]
         let device_id = VIRTIO_GPU_DEVICE_ID;
-        #[cfg(all(not(feature = "vmm_virtio_gpu"), feature = "vmm_hypervisor_net_test"))]
+        #[cfg(all(not(feature = "vmm_virtio_gpu"), feature = "vmm_virtio_console"))]
+        let device_id = VIRTIO_CONSOLE_DEVICE_ID;
+        #[cfg(all(not(feature = "vmm_virtio_gpu"), not(feature = "vmm_virtio_console"), feature = "vmm_hypervisor_net_test"))]
         let device_id = VIRTIO_NET_DEVICE_ID;
         #[cfg(all(
             not(feature = "vmm_virtio_gpu"),
+            not(feature = "vmm_virtio_console"),
             not(feature = "vmm_hypervisor_net_test")
         ))]
         let device_id = VIRTIO_MMIO_DEVICE_ID_VALUE;
@@ -701,6 +706,10 @@ static VIRTIO_MMIO_STATE: VirtioMmioState = VirtioMmioState::new();
 #[cfg(feature = "vmm_virtio_gpu")]
 static mut VIRTIO_GPU_DEVICE: crate::vmm::virtio_gpu::VirtioGpuDevice =
     crate::vmm::virtio_gpu::VirtioGpuDevice::new();
+
+#[cfg(feature = "vmm_virtio_console")]
+static mut VIRTIO_CONSOLE_DEVICE: crate::virtio_console::VirtioConsoleDevice =
+    crate::virtio_console::VirtioConsoleDevice::new();
 
 struct MmioInstruction {
     kind: MmioAccessKind,
@@ -762,6 +771,13 @@ fn init_hypervisor_mmio() {
             crate::serial_write_str("RAYOS_VMM:VMX:MMIO_VIRTIO_FAIL\n");
         }
         MMIO_REGIONS_INITIALIZED = true;
+
+        // Emit a deterministic marker when virtio-console is selected so smoke tests
+        // can detect dispatch readiness without needing guest traffic.
+        let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+        if dev == VIRTIO_CONSOLE_DEVICE_ID {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:ENABLED\n");
+        }
     }
 }
 
@@ -2439,6 +2455,12 @@ fn log_descriptor_chain(
                             crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:FEATURE_DISABLED\n");
                         }
                     }
+
+                    #[cfg(feature = "vmm_virtio_console")]
+                    VIRTIO_CONSOLE_DEVICE_ID => {
+                        let used_len = unsafe { handle_virtio_console_chain(header, &data_descs[..data_desc_count]) };
+                        return Some(used_len);
+                    }
                     _ => {
                         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:UNKNOWN_DEVICE\n");
                     }
@@ -2489,6 +2511,39 @@ unsafe fn handle_virtio_gpu_chain(header: VirtqDesc, descs: &[VirtqDesc]) -> u32
     );
     crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:CONTROLQ_DONE\n");
     written as u32
+}
+
+#[cfg(feature = "vmm_virtio_console")]
+unsafe fn handle_virtio_console_chain(_header: VirtqDesc, descs: &[VirtqDesc]) -> u32 {
+    // Minimal implementation: for each non-writeable descriptor (guest->device),
+    // copy bytes from guest physical memory and emit them on the host serial.
+    if descs.len() == 0 {
+        return 0;
+    }
+
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:CHAIN_HANDLED\n");
+
+    for d in descs.iter() {
+        // If VIRTQ_DESC_F_WRITE is set, the descriptor is device-writeable (host->guest),
+        // skip for now as we don't produce responses yet.
+        if (d.flags & VIRTQ_DESC_F_WRITE) != 0 {
+            continue;
+        }
+        let phys = d.addr;
+        let len = d.len as usize;
+        if len == 0 {
+            continue;
+        }
+        let src = crate::phys_to_virt(phys) as *const u8;
+        let slice = core::slice::from_raw_parts(src, len);
+        // Prefix so CI can detect console output in serial log.
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:RECV:");
+        crate::serial_write_bytes(slice);
+        crate::serial_write_str("\n");
+    }
+
+    // No response bytes written.
+    0
 }
 
 // Self-test / smoke routine to exercise the virtio-gpu model without a real
