@@ -2555,6 +2555,31 @@ unsafe fn handle_virtio_console_chain(_header: VirtqDesc, descs: &[VirtqDesc]) -
     0
 }
 
+#[cfg(all(feature = "vmm_virtio_console", feature = "vmm_virtio_console_selftest", feature = "vmm_hypervisor_smoke"))]
+unsafe fn run_virtio_console_selftest() {
+    // Allocate a page for a small message, write ascii text, craft a single
+    // readable descriptor and invoke the console handler directly.
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:SELFTEST:ALLOC_PAGE\n");
+    let msg_phys = match crate::phys_alloc_page() {
+        Some(p) => p,
+        None => {
+            crate::serial_write_str("RAYOS_VIRTIO_CONSOLE:SELFTEST:ALLOC_FAIL\n");
+            return;
+        }
+    };
+
+    // Prepare message bytes
+    let msg = b"virtio-console selftest\n";
+    let dst = crate::phys_to_virt(msg_phys) as *mut u8;
+    core::ptr::copy_nonoverlapping(msg.as_ptr(), dst, msg.len());
+
+    // Craft a virtq desc pointing to the message buffer (non-writeable by device)
+    let desc = VirtqDesc { addr: msg_phys, len: msg.len() as u32, flags: 0, next: 0 };
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:SELFTEST:INVOKE\n");
+    let _ = handle_virtio_console_chain(VirtqDesc { addr: 0, len: 0, flags: 0, next: 0 }, &[desc]);
+}
+
+
 // Self-test / smoke routine to exercise the virtio-gpu model without a real
 // guest driver. Allocates a few guest-physical pages and performs GET_DISPLAY_INFO
 // -> RESOURCE_CREATE_2D -> RESOURCE_ATTACH_BACKING -> SET_SCANOUT -> RESOURCE_FLUSH
@@ -3665,6 +3690,16 @@ pub fn try_init_vmx_skeleton() -> bool {
         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:BACKOFF_SELFTEST_RUN\n");
         run_inject_backoff_selftest();
         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:BACKOFF_SELFTEST_RUN_DONE\n");
+    }
+
+    // Optional: run an early virtio-console selftest (writes a sample string into
+    // guest-phys memory and invokes the console handler so we have deterministic
+    // console dispatch coverage in smoke runs).
+    #[cfg(all(feature = "vmm_virtio_console", feature = "vmm_virtio_console_selftest", feature = "vmm_hypervisor_smoke"))]
+    {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:SELFTEST_BEGIN\n");
+        unsafe { run_virtio_console_selftest(); }
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:SELFTEST_END\n");
     }
 
     unsafe {

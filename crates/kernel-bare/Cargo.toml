@@ -39,6 +39,9 @@ vmm_virtio_gpu = []
 
 # Scaffolding for virtio-console device model (P1 work).
 vmm_virtio_console = []
+
+# Self-test: run an in-kernel virtio-console selftest at boot to verify console dispatch
+vmm_virtio_console_selftest = []
 # Scaffolding for an in-kernel hypervisor runtime skeleton (VMX-first on x86_64).
 vmm_hypervisor = []
 
