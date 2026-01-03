@@ -186,8 +186,10 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 		- ✅ RayOS compositor/presentation can ingest guest scanout buffers (kernel-bare `guest_surface` publish/snapshot + native blit path exist; needs a real producer).
 	- TODOs (milestone 1: single full-desktop surface):
 		- ⏳ Implement hypervisor runtime skeleton (VMX/SVM detection + enable + VMXON/VMCS + minimal VM-exit loop stub).
-			- Milestone reached: VM-entry succeeds and emits deterministic `HLT` VM-exits (see `scripts/test-vmm-hypervisor-boot.sh` markers `RAYOS_VMM:VMX:VMEXIT`).
+			- Milestone reached: VM-entry succeeds; deterministic VM-exits for `HLT` and port I/O; guest debug output via `out 0xE9` is trapped and printed (`RAYOS_GUEST_E9:<byte>`). See `scripts/test-vmm-hypervisor-boot.sh` markers `RAYOS_VMM:VMX:VMEXIT` + `RAYOS_GUEST_E9:`.
+			- ✅ Handle `EPT_VIOLATION` as a first-class dispatch path so we can emulate MMIO/PCI BARs for virtio devices (MMIO counter region + register/decoder/handler chain exercises the new path in `scripts/test-vmm-hypervisor-boot.sh`).
 		- ⏳ Implement virtqueue transport plumbing (virtio-pci modern or legacy) for in-OS virtio devices.
+			- ✅ Exercise a minimal virtio-MMIO queue by logging descriptor/driver/used addresses, queue-notify events, the first avail/used entries, payload bytes from each descriptor chain, and by tracing descriptor chains into a simple used-ring completion (see [virtio handler](crates/kernel-bare/src/hypervisor.rs#L617-L950) and [guest code emitter](crates/kernel-bare/src/hypervisor.rs#L248-L319)).
 		- ⏳ Implement guest memory mapping (GPA→HPA/EPT) + safe host accessors for device models.
 		- ✅ Implement scanout publication contract in the kernel (kernel-bare `GuestSurface` + `frame_seq` + Presented/Hidden gating).
 		- ✅ Provide a synthetic scanout producer for end-to-end validation (`dev_scanout`).
