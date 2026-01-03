@@ -200,9 +200,15 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 			- ⏳ Implement basic virtio-net device model (TX+RX queues):
 				- ✅ Scaffolding in place: TX queue logs packet lengths + Ethernet types; RX queue marks buffers ready.
 				- ✅ MAC address assignment: device config space (offset 0x100+) exposes MAC address for virtio-net devices (fixed RAYOS MAC).
-				- ✅ Multi-device dispatch: MMIO state tracks device_id; descriptor-chain handler dispatches to device-specific handlers based on configured device type.
-				- ✅ Packet loopback infrastructure: TX handler gathers packet bytes + swaps MAC addresses; RX handler injects looped-back packets into guest buffers (static loopback buffer stores most recent TX packet).
-				- Next: (1) extend guest driver to emit virtio-net TX requests (needs parameterizable network packet generation in `generate_guest_driver.rs`), (2) verify RX injection delivers packet to guest, (3) test end-to-end echo with guest receiving looped packet.
+				- ✅ Multi-device dispatch: MMIO state tracks `device_id`; descriptor-chain handler dispatches to device-specific handlers based on configured device type.
+				- ✅ Packet loopback infrastructure: TX handler gathers packet bytes + swaps src/dst MAC addresses into static buffer; RX handler injects looped-back packets into writable RX descriptors.
+				- ✅ Feature flags: `vmm_hypervisor_net_test` selects virtio-net device at startup (for testing). Default remains virtio-blk.
+				- ✅ Guest driver generator extended: `RAYOS_GUEST_NET_ENABLED=1` produces network-focused blob with Ethernet frame construction (WIP assembly - requires debugging).
+				- ✅ Test packet injection: In network test mode, hypervisor injects synthetic test packet to RX queue on first access for loopback verification.
+				- Remaining work:
+					- Debug x86-64 assembly in generated network guest driver (descriptor ring setup, queue initialization)
+					- OR: implement userspace loopback test tool to validate hypervisor path without guest driver
+					- Verify end-to-end: guest TX → hypervisor loopback → guest RX (full echo test with checksum validation)
 			- ✅ Implement guest memory mapping (GPA→HPA/EPT) + safe host accessors for device models (see [crates/kernel-bare/src/hypervisor.rs](crates/kernel-bare/src/hypervisor.rs#L1528-L1615)).
 		- ✅ Implement scanout publication contract in the kernel (kernel-bare `GuestSurface` + `frame_seq` + Presented/Hidden gating).
 		- ✅ Provide a synthetic scanout producer for end-to-end validation (`dev_scanout`).
