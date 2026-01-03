@@ -626,7 +626,9 @@ struct VirtioMmioState {
     driver_features: AtomicU32,
     interrupt_status: AtomicU32,
     // Pending retry flag: set to 1 when VM-entry injection fails and retries are needed.
+    // Retry counter tracks how many retry attempts we've made.
     interrupt_pending: AtomicU32,
+    interrupt_pending_attempts: AtomicU32,
     device_id: AtomicU32,
     queue_notify_count: AtomicU32,
     queue_desc_address: [AtomicU64; 2],
@@ -658,6 +660,7 @@ impl VirtioMmioState {
             driver_features: AtomicU32::new(0),
             interrupt_status: AtomicU32::new(0),
             interrupt_pending: AtomicU32::new(0),
+            interrupt_pending_attempts: AtomicU32::new(0),
             device_id: AtomicU32::new(device_id),
             queue_notify_count: AtomicU32::new(0),
             queue_desc_address: [AtomicU64::new(0), AtomicU64::new(0)],
@@ -3070,13 +3073,39 @@ fn process_virtq_queue(
     } else {
         queue_index as usize
     };
-    // Attempt retry of pending interrupt injections if needed.
+    // Attempt retry of pending interrupt injections if needed. Uses a bounded retry
+    // counter to avoid tight infinite retries and to provide more deterministic logs.
+    const MAX_INT_INJECT_ATTEMPTS: u32 = 5;
+
     if VIRTIO_MMIO_STATE.interrupt_pending.load(Ordering::Relaxed) != 0 {
-        if inject_guest_interrupt(VIRTIO_MMIO_IRQ_VECTOR) {
+        let attempts = VIRTIO_MMIO_STATE
+            .interrupt_pending_attempts
+            .load(Ordering::Relaxed);
+        if attempts >= MAX_INT_INJECT_ATTEMPTS {
+            // Give up after bounded attempts and clear pending so we don't spin forever.
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_FAILED_MAX\n");
             VIRTIO_MMIO_STATE.interrupt_pending.store(0, Ordering::Relaxed);
-            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_OK\n");
+            VIRTIO_MMIO_STATE
+                .interrupt_pending_attempts
+                .store(0, Ordering::Relaxed);
         } else {
-            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_FAIL\n");
+            // Try again and increment the attempt counter on failure.
+            if inject_guest_interrupt(VIRTIO_MMIO_IRQ_VECTOR) {
+                VIRTIO_MMIO_STATE.interrupt_pending.store(0, Ordering::Relaxed);
+                VIRTIO_MMIO_STATE
+                    .interrupt_pending_attempts
+                    .store(0, Ordering::Relaxed);
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_OK\n");
+            } else {
+                let next = attempts.wrapping_add(1);
+                VIRTIO_MMIO_STATE
+                    .interrupt_pending_attempts
+                    .store(next, Ordering::Relaxed);
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_FAIL\n");
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_ATTEMPT=");
+                crate::serial_write_hex_u64(next as u64);
+                crate::serial_write_str("\n");
+            }
         }
     }
 
@@ -3160,6 +3189,9 @@ fn process_virtq_queue(
                 // Mark pending so retries can be attempted later when VM environment
                 // might be ready (e.g., after APIC is initialized by guest).
                 VIRTIO_MMIO_STATE.interrupt_pending.store(1, Ordering::Relaxed);
+                VIRTIO_MMIO_STATE
+                    .interrupt_pending_attempts
+                    .store(0, Ordering::Relaxed);
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_PENDING\n");
             }
         }

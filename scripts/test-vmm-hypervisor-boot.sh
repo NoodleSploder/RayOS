@@ -124,8 +124,8 @@ if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM
   (SERIAL_LOG="$SERIAL_LOG_FORCE" BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless) || true
   tr -d '\r' < "$SERIAL_LOG_FORCE" > "$SERIAL_NORM_FORCE" 2>/dev/null || true
   if grep -F -a -q "RAYOS_VMM:VMX:FORCED_VMWRITE_FAIL" "$SERIAL_NORM_FORCE" && \
-     (grep -F -a -q "RAYOS_VMM:VMX:INJECT_VIA_LAPIC_SIM" "$SERIAL_NORM_FORCE" || grep -F -a -q "RAYOS_VMM:VMX:INJECT_VIA_LAPIC" "$SERIAL_NORM_FORCE" || grep -F -a -q "RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_PENDING" "$SERIAL_NORM_FORCE"); then
-    echo "PASS: IRQ injection fallback exercised (LAPIC)" >&2
+     (grep -F -a -q "RAYOS_VMM:VMX:INJECT_VIA_LAPIC_SIM" "$SERIAL_NORM_FORCE" || grep -F -a -q "RAYOS_VMM:VMX:INJECT_VIA_LAPIC" "$SERIAL_NORM_FORCE" || grep -F -a -q "RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_PENDING" "$SERIAL_NORM_FORCE" || grep -F -a -q "RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_OK" "$SERIAL_NORM_FORCE" || grep -F -a -q "RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_FAILED_MAX" "$SERIAL_NORM_FORCE"); then
+    echo "PASS: IRQ injection fallback exercised (LAPIC or bounded retry)" >&2
   else
     echo "NOTE: IRQ injection fallback not exercised; check LAPIC mapping or test flags" >&2
   fi
