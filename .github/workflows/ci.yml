@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust: [stable]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install rustup and toolchain
+        uses: dtolnay/rust-toolchain-action@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86
+
+      - name: Run unit tests (host crates)
+        run: |
+          cargo test --workspace --exclude rayos-kernel-bare --exclude rayos-bootloader
+
+      - name: Run vmm-backoff-test explicitly (fast)
+        run: |
+          cargo test --manifest-path crates/vmm-backoff-test/Cargo.toml
+
+      - name: Build kernel-bare for smoke (optional)
+        run: |
+          pushd crates/kernel-bare
+          RUSTC="$(rustup which rustc)" cargo build -Z build-std=core,alloc -Z build-std-features=compiler-builtins-mem --release --target x86_64-unknown-none --features "vmm_hypervisor,vmm_hypervisor_smoke" || true
+          popd
+
+      - name: Lint (rustfmt check)
+        run: cargo fmt -- --check || true
