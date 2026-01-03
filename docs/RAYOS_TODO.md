@@ -273,6 +273,20 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 - Headless: start Linux guest, launch a Wayland client, assert a “surface created” marker, then shut down cleanly
 - Status: ✅ done (desktop auto headless test launches `weston-terminal` via `LAUNCH_APP` and asserts launch + shutdown markers; additional surface/window protocol smoke tests already exist for deterministic surface markers.)
 
+### RayOS-native GUI (app container with embedded surfaces)
+- Goal: deliver an integrated RayOS windowing surface that can host UI-heavy apps (e.g., a VNC client) without depending on host windows.
+- Status: ⏳ in progress
+	- ✅ Surface plumbing: `guest_surface` + compositor scaffolding already publishes RayOS-managed surfaces and receives deterministic `SURFACE_*` markers.
+	- ⏳ Window manager layer: build a RayOS compositor view that can embed multiple `GuestSurface`s as resizable/focusable windows; tie z-order, titlebars, and close/shade controls to host-state.
+	- ⏳ Input routing: route RayOS pointer/keyboard events into the selected window surface and expose a host command channel (e.g., parser for `mouse`, `click`, `type`, etc.) so apps can be manipulated from the RayOS prompt.
+	- ⏳ RayApp abstraction: define `RayApp` surfaces (with lifecycle hooks) and ship a minimal UI framework so we can embed a VNC client as a RayOS app; the client renders into its `GuestSurface` and accepts host-provided input events.
+	- ⏳ App launcher: add RayOS commands (such as `run vnc <address>`) that instantiate RayApps, manage their surfaces, and emit `RAYOS_GUI_APP_READY:<name>` once the UI is ready.
+	- ⏳ Tests/observability: add headless smoke tests that start the VNC RayApp, assert `SURFACE_FRAME` + `RAYOS_GUI_APP_READY` markers, and verify input-handshake ACKs.
+	- Next steps:
+		- Flesh out `RayApp` service/registry + policy schema (window metadata, focus, z-order).
+		- Build the VNC client RayApp and wire it to `guest_surface` subscriptions.
+		- Document UI flow so host automation can launch/close/resume RayApps deterministically.
+
 ---
 
 ## P1b — Windows 11 Subsystem (Windows is a guest)
