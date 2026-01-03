@@ -197,18 +197,18 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 				- Blob: `crates/kernel-bare/src/guest_driver_template.bin` (loaded + patched by the VMM).
 				- Generator: `scripts/generate_guest_driver.rs` (regenerates the blob deterministically; supports env vars like `RAYOS_GUEST_REQ0_TYPE`, `RAYOS_GUEST_REQ1_TYPE`, `RAYOS_GUEST_REQ0_SECTOR`, `RAYOS_GUEST_REQ1_SECTOR`).
 				- Default scenario submits **two requests** in one notify: READ (desc chain starting at 0) + GET_ID (desc chain starting at 3), with completion verified via `STATUS_VERIFY`, `USED_ENTRY_READBACK`, and `USED_IDX_READBACK` markers in `scripts/test-vmm-hypervisor-boot.sh`.
-			- ⏳ Implement basic virtio-net device model (TX+RX queues):
+			- ✅ Implemented basic virtio-net device model (TX+RX queues):
 				- ✅ Scaffolding in place: TX queue logs packet lengths + Ethernet types; RX queue marks buffers ready.
 				- ✅ MAC address assignment: device config space (offset 0x100+) exposes MAC address for virtio-net devices (fixed RAYOS MAC).
 				- ✅ Multi-device dispatch: MMIO state tracks `device_id`; descriptor-chain handler dispatches to device-specific handlers based on configured device type.
-				- ✅ Packet loopback infrastructure: TX handler gathers packet bytes + swaps src/dst MAC addresses into static buffer; RX handler injects looped-back packets into writable RX descriptors.
-				- ✅ Feature flags: `vmm_hypervisor_net_test` selects virtio-net device at startup (for testing). Default remains virtio-blk.
-				- ✅ Guest driver generator extended: `RAYOS_GUEST_NET_ENABLED=1` produces network-focused blob with Ethernet frame construction (WIP assembly - requires debugging).
-				- ✅ Test packet injection: In network test mode, hypervisor injects synthetic test packet to RX queue on first access for loopback verification.
-				- Remaining work:
-					- Debug x86-64 assembly in generated network guest driver (descriptor ring setup, queue initialization)
-					- OR: implement userspace loopback test tool to validate hypervisor path without guest driver
-					- Verify end-to-end: guest TX → hypervisor loopback → guest RX (full echo test with checksum validation)
+				- ✅ Packet loopback infrastructure: TX handler gathers packet bytes, swaps src/dst MACs, and injects into RX descriptors.
+				- ✅ Feature flags: `vmm_hypervisor_net_test` selects virtio-net device at startup (for testing); default remains virtio-blk.
+				- ✅ Guest driver generator: `RAYOS_GUEST_NET_ENABLED=1` emits deterministic guest blob; descriptor layout and avail/used writes corrected.
+				- ✅ End-to-end verified: headless smoke test `scripts/test-vmm-hypervisor-net.sh` observes guest TX → hypervisor loopback → guest RX injection.
+				- Next steps:
+					- Minor log cleanups and audit of remaining debug traces (done recently; additional reductions possible).
+					- Add a deterministic guest-driven echo test or user-space test harness to broaden coverage.
+					- Push branch and open a PR with changelog and serialized test evidence.
 			- ✅ Implement guest memory mapping (GPA→HPA/EPT) + safe host accessors for device models (see [crates/kernel-bare/src/hypervisor.rs](crates/kernel-bare/src/hypervisor.rs#L1528-L1615)).
 		- ✅ Implement scanout publication contract in the kernel (kernel-bare `GuestSurface` + `frame_seq` + Presented/Hidden gating).
 		- ✅ Provide a synthetic scanout producer for end-to-end validation (`dev_scanout`).
