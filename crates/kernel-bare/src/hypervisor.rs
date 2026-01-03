@@ -455,6 +455,7 @@ const VIRTIO_MMIO_DRIVER_FEATURES_OFFSET: u64 = 0x020;
 const VIRTIO_MMIO_INTERRUPT_STATUS_OFFSET: u64 = 0x060;
 const VIRTIO_MMIO_INTERRUPT_ACK_OFFSET: u64 = 0x064;
 const VIRTIO_MMIO_QUEUE_NOTIFY_OFFSET: u64 = 0x050;
+const VIRTIO_MMIO_QUEUE_SELECT_OFFSET: u64 = 0x030;
 const VIRTIO_MMIO_STATUS_OFFSET: u64 = 0x070;
 const VIRTIO_MMIO_QUEUE_DESC_OFFSET: u64 = 0x080;
 const VIRTIO_MMIO_QUEUE_DRIVER_OFFSET: u64 = 0x088;
@@ -597,13 +598,14 @@ struct VirtioMmioState {
     interrupt_status: AtomicU32,
     device_id: AtomicU32,
     queue_notify_count: AtomicU32,
-    queue_desc_address: AtomicU64,
-    queue_driver_address: AtomicU64,
-    queue_used_address: AtomicU64,
-    queue_avail_index: AtomicU16,
-    queue_used_index: AtomicU16,
-    queue_size: AtomicU32,
-    queue_ready: AtomicU32,
+    queue_desc_address: [AtomicU64; 2],
+    queue_driver_address: [AtomicU64; 2],
+    queue_used_address: [AtomicU64; 2],
+    queue_avail_index: [AtomicU16; 2],
+    queue_used_index: [AtomicU16; 2],
+    queue_size: [AtomicU32; 2],
+    queue_ready: [AtomicU32; 2],
+    queue_selected: AtomicU32,
 }
 
 impl VirtioMmioState {
@@ -612,20 +614,21 @@ impl VirtioMmioState {
         let device_id = VIRTIO_NET_DEVICE_ID;
         #[cfg(not(feature = "vmm_hypervisor_net_test"))]
         let device_id = VIRTIO_MMIO_DEVICE_ID_VALUE;
-        
+
         Self {
             status: AtomicU32::new(0),
             driver_features: AtomicU32::new(0),
             interrupt_status: AtomicU32::new(0),
             device_id: AtomicU32::new(device_id),
             queue_notify_count: AtomicU32::new(0),
-            queue_desc_address: AtomicU64::new(0),
-            queue_driver_address: AtomicU64::new(0),
-            queue_used_address: AtomicU64::new(0),
-            queue_avail_index: AtomicU16::new(0),
-            queue_used_index: AtomicU16::new(0),
-            queue_size: AtomicU32::new(0),
-            queue_ready: AtomicU32::new(0),
+            queue_desc_address: [AtomicU64::new(0), AtomicU64::new(0)],
+            queue_driver_address: [AtomicU64::new(0), AtomicU64::new(0)],
+            queue_used_address: [AtomicU64::new(0), AtomicU64::new(0)],
+            queue_avail_index: [AtomicU16::new(0), AtomicU16::new(0)],
+            queue_used_index: [AtomicU16::new(0), AtomicU16::new(0)],
+            queue_size: [AtomicU32::new(0), AtomicU32::new(0)],
+            queue_ready: [AtomicU32::new(0), AtomicU32::new(0)],
+            queue_selected: AtomicU32::new(0),
         }
     }
 }
@@ -747,21 +750,33 @@ fn virtio_mmio_handler(_regs: &mut GuestRegs, access: &MmioAccess, value: Option
         (VIRTIO_MMIO_STATUS_OFFSET, MmioAccessKind::Read) => Some(
             VIRTIO_MMIO_STATE.status.load(Ordering::Relaxed) as u64,
         ),
-        (VIRTIO_MMIO_QUEUE_DESC_OFFSET, MmioAccessKind::Read) => Some(
-            VIRTIO_MMIO_STATE.queue_desc_address.load(Ordering::Relaxed),
+        (VIRTIO_MMIO_QUEUE_SELECT_OFFSET, MmioAccessKind::Read) => Some(
+            VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as u64,
         ),
-        (VIRTIO_MMIO_QUEUE_DRIVER_OFFSET, MmioAccessKind::Read) => Some(
-            VIRTIO_MMIO_STATE.queue_driver_address.load(Ordering::Relaxed),
-        ),
-        (VIRTIO_MMIO_QUEUE_USED_OFFSET, MmioAccessKind::Read) => Some(
-            VIRTIO_MMIO_STATE.queue_used_address.load(Ordering::Relaxed),
-        ),
-        (VIRTIO_MMIO_QUEUE_SIZE_OFFSET, MmioAccessKind::Read) => Some(
-            VIRTIO_MMIO_STATE.queue_size.load(Ordering::Relaxed) as u64,
-        ),
-        (VIRTIO_MMIO_QUEUE_READY_OFFSET, MmioAccessKind::Read) => Some(
-            VIRTIO_MMIO_STATE.queue_ready.load(Ordering::Relaxed) as u64,
-        ),
+        (VIRTIO_MMIO_QUEUE_DESC_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some(VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed))
+        }
+        ,
+        (VIRTIO_MMIO_QUEUE_DRIVER_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some(VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed))
+        }
+        ,
+        (VIRTIO_MMIO_QUEUE_USED_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some(VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed))
+        }
+        ,
+        (VIRTIO_MMIO_QUEUE_SIZE_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some(VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed) as u64)
+        }
+        ,
+        (VIRTIO_MMIO_QUEUE_READY_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some(VIRTIO_MMIO_STATE.queue_ready[qi].load(Ordering::Relaxed) as u64)
+        }
         (VIRTIO_MMIO_DRIVER_FEATURES_OFFSET, MmioAccessKind::Write) => {
             VIRTIO_MMIO_STATE
                 .driver_features
@@ -780,71 +795,49 @@ fn virtio_mmio_handler(_regs: &mut GuestRegs, access: &MmioAccess, value: Option
             crate::serial_write_str("\n");
             None
         }
+
+        (VIRTIO_MMIO_QUEUE_SELECT_OFFSET, MmioAccessKind::Write) => {
+            VIRTIO_MMIO_STATE.queue_selected.store((write_value as u32) & 1, Ordering::Relaxed);
+            None
+        }
+        ,
         (VIRTIO_MMIO_QUEUE_DESC_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE
-                .queue_desc_address
-                .store(write_value, Ordering::Relaxed);
-            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:QUEUE_DESC=");
-            crate::serial_write_hex_u64(write_value);
-            crate::serial_write_str("\n");
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            VIRTIO_MMIO_STATE.queue_desc_address[qi].store(write_value as u64, Ordering::Relaxed);
             None
         }
+        ,
         (VIRTIO_MMIO_QUEUE_DRIVER_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE
-                .queue_driver_address
-                .store(write_value, Ordering::Relaxed);
-            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:QUEUE_DRIVER=");
-            crate::serial_write_hex_u64(write_value);
-            crate::serial_write_str("\n");
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            VIRTIO_MMIO_STATE.queue_driver_address[qi].store(write_value as u64, Ordering::Relaxed);
             None
         }
+        ,
         (VIRTIO_MMIO_QUEUE_USED_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE
-                .queue_used_address
-                .store(write_value, Ordering::Relaxed);
-            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:QUEUE_USED=");
-            crate::serial_write_hex_u64(write_value);
-            crate::serial_write_str("\n");
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            VIRTIO_MMIO_STATE.queue_used_address[qi].store(write_value as u64, Ordering::Relaxed);
             None
         }
+        ,
         (VIRTIO_MMIO_QUEUE_SIZE_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE
-                .queue_size
-                .store(write_value as u32, Ordering::Relaxed);
-            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:QUEUE_SIZE=");
-            crate::serial_write_hex_u64(write_value);
-            crate::serial_write_str("\n");
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            VIRTIO_MMIO_STATE.queue_size[qi].store(write_value as u32, Ordering::Relaxed);
             None
         }
+        ,
         (VIRTIO_MMIO_QUEUE_READY_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE
-                .queue_ready
-                .store(write_value as u32, Ordering::Relaxed);
-            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:QUEUE_READY=");
-            crate::serial_write_hex_u64(write_value);
-            crate::serial_write_str("\n");
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            VIRTIO_MMIO_STATE.queue_ready[qi].store((write_value as u32) & 1, Ordering::Relaxed);
             None
         }
         (VIRTIO_MMIO_QUEUE_NOTIFY_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE.queue_notify_count.fetch_add(1, Ordering::Relaxed);
-            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:QUEUE_NOTIFY=");
-            crate::serial_write_hex_u64(write_value);
-            crate::serial_write_str(" desc=");
-            let queue_desc_addr = VIRTIO_MMIO_STATE.queue_desc_address.load(Ordering::Relaxed);
-            let queue_driver_addr = VIRTIO_MMIO_STATE.queue_driver_address.load(Ordering::Relaxed);
-            let queue_used_addr = VIRTIO_MMIO_STATE.queue_used_address.load(Ordering::Relaxed);
-            let queue_size_value = VIRTIO_MMIO_STATE.queue_size.load(Ordering::Relaxed);
-            let queue_ready_value = VIRTIO_MMIO_STATE.queue_ready.load(Ordering::Relaxed);
-            crate::serial_write_hex_u64(queue_desc_addr);
-            crate::serial_write_str(" driver=");
-            crate::serial_write_hex_u64(queue_driver_addr);
-            crate::serial_write_str(" used=");
-            crate::serial_write_hex_u64(queue_used_addr);
-            crate::serial_write_str(" size=");
-            crate::serial_write_hex_u64(queue_size_value as u64);
-            crate::serial_write_str(" ready=");
-            crate::serial_write_hex_u64(queue_ready_value as u64);
-            crate::serial_write_str("\n");
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let queue_desc_addr = VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed);
+            let queue_driver_addr = VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed);
+            let queue_used_addr = VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed);
+            let queue_size_value = VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed);
+            let queue_ready_value = VIRTIO_MMIO_STATE.queue_ready[qi].load(Ordering::Relaxed);
+            // (debug dumps removed)
             log_virtq_descriptors(queue_desc_addr, queue_size_value);
             log_virtq_avail(queue_driver_addr, queue_size_value);
             log_virtq_used(queue_used_addr, queue_size_value);
@@ -854,6 +847,7 @@ fn virtio_mmio_handler(_regs: &mut GuestRegs, access: &MmioAccess, value: Option
                 queue_used_addr,
                 queue_size_value,
                 queue_ready_value,
+                write_value,
             );
             None
         }
@@ -1996,7 +1990,7 @@ fn handle_virtio_net_chain(queue_id: u16, data_descs: &[VirtqDesc]) {
             crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:NET_TEST_PKT_INJECTED len=64\n");
         }
     }
-    
+
     match queue_id {
         VIRTIO_NET_TX_QUEUE => {
             // TX queue: guest sends packets
@@ -2012,6 +2006,14 @@ fn handle_virtio_net_chain(queue_id: u16, data_descs: &[VirtqDesc]) {
                     let to_copy = cmp::min(desc.len as usize, VIRTIO_NET_PKT_MAX - pkt_off);
                     if read_guest_bytes(desc.addr, &mut pkt_buf[pkt_off..pkt_off + to_copy]) {
                         pkt_off += to_copy;
+                    } else {
+                        crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:NET_TX_READ_FAIL addr=");
+                        crate::serial_write_hex_u64(desc.addr);
+                        crate::serial_write_str(" len=");
+                        crate::serial_write_hex_u64(desc.len as u64);
+                        crate::serial_write_str(" idx=");
+                        crate::serial_write_hex_u64(idx as u64);
+                        crate::serial_write_str("\n");
                     }
                     // Read Ethernet type from first payload segment
                     if idx == 0 && desc.len > 14 {
@@ -2068,6 +2070,12 @@ fn handle_virtio_net_chain(queue_id: u16, data_descs: &[VirtqDesc]) {
                             VIRTIO_NET_LOOPBACK_PKT_LEN = 0; // Clear buffer after injection
                             VIRTIO_NET_RX_PACKETS = VIRTIO_NET_RX_PACKETS.wrapping_add(1);
                         }
+                    } else {
+                        crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:NET_RX_INJECT_FAIL addr=");
+                        crate::serial_write_hex_u64(desc.addr);
+                        crate::serial_write_str(" len=");
+                        crate::serial_write_hex_u64(to_write as u64);
+                        crate::serial_write_str("\n");
                     }
                 }
             }
@@ -2093,7 +2101,8 @@ fn read_virtq_descriptor(base: u64, index: u32) -> Option<VirtqDesc> {
         return None;
     }
     Some(VirtqDesc {
-        addr: u64::from_le_bytes(buf[0..8].try_into().ok()?),
+        // Mask address to 48 bits as a heuristic for guest-provided canonical addresses
+        addr: u64::from_le_bytes(buf[0..8].try_into().ok()?) & 0x0000_FFFF_FFFF_FFFF,
         len: u32::from_le_bytes(buf[8..12].try_into().ok()?),
         flags: u16::from_le_bytes(buf[12..14].try_into().ok()?),
         next: u16::from_le_bytes(buf[14..16].try_into().ok()?),
@@ -2129,7 +2138,9 @@ fn log_virtq_descriptors(base: u64, queue_size: u32) {
     }
 }
 
-fn log_descriptor_chain(base: u64, queue_size: u32, start_index: u32) -> Option<u32> {
+// debug memory dump removed
+
+fn log_descriptor_chain(base: u64, queue_size: u32, start_index: u32, queue_index: u64) -> Option<u32> {
     if queue_size == 0 {
         return None;
     }
@@ -2179,17 +2190,27 @@ fn log_descriptor_chain(base: u64, queue_size: u32, start_index: u32) -> Option<
         total_len = total_len.wrapping_add(desc.len);
         if desc.flags & VIRTQ_DESC_F_NEXT == 0 {
             if let Some(header) = header_desc {
-                // Dispatch to handler based on active device ID
-                let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
-                match device_id {
+                    // If the chain only contains a single non-writable header descriptor
+                    // that actually holds packet payload (guest may not split header/data),
+                    // treat it as a data descriptor so handlers see the packet bytes.
+                    if data_desc_count == 0 {
+                        data_descs[0] = header;
+                        data_desc_count = 1;
+                    }
+                    // Dispatch to handler based on active device ID
+                    let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:DISPATCH_DEVICE=");
+                    crate::serial_write_hex_u64(device_id as u64);
+                    crate::serial_write_str("\n");
+                    match device_id {
                     VIRTIO_MMIO_DEVICE_ID_VALUE => {
                         // Block device (0x0105)
                         handle_virtio_blk_chain(header, &data_descs[..data_desc_count], status_desc);
                     }
                     VIRTIO_NET_DEVICE_ID => {
-                        // Network device (0x0101) - queue_id would need to be tracked
-                        // For now, assume TX queue (0)
-                        handle_virtio_net_chain(VIRTIO_NET_TX_QUEUE, &data_descs[..data_desc_count]);
+                        // Network device (0x0101) - dispatch based on queue index
+                        let qid = if queue_index == 1 { VIRTIO_NET_RX_QUEUE } else { VIRTIO_NET_TX_QUEUE };
+                        handle_virtio_net_chain(qid, &data_descs[..data_desc_count]);
                     }
                     _ => {
                         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:UNKNOWN_DEVICE\n");
@@ -2732,6 +2753,7 @@ fn process_virtq_queue(
     used_base: u64,
     queue_size: u32,
     queue_ready: u32,
+    queue_index: u64,
 ) {
     if queue_size == 0 || queue_ready == 0 {
         return;
@@ -2740,8 +2762,10 @@ fn process_virtq_queue(
         return;
     }
     let queue_size_u64 = queue_size as u64;
-    let mut avail_processed = VIRTIO_MMIO_STATE.queue_avail_index.load(Ordering::Relaxed);
-    let mut used_idx = VIRTIO_MMIO_STATE.queue_used_index.load(Ordering::Relaxed);
+    // Index into per-queue arrays (cap to available queues)
+    let qi = if queue_index as usize >= 2 { 0 } else { queue_index as usize };
+    let mut avail_processed: u16 = VIRTIO_MMIO_STATE.queue_avail_index[qi].load(Ordering::Relaxed);
+    let mut used_idx: u16 = VIRTIO_MMIO_STATE.queue_used_index[qi].load(Ordering::Relaxed);
     let avail_idx = match read_u16(driver_base + VIRTQ_AVAIL_INDEX_OFFSET) {
         Some(v) => v,
         None => {
@@ -2763,7 +2787,7 @@ fn process_virtq_queue(
             crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:AVAIL_DESC_OOB\n");
             break;
         }
-        let total_len = match log_descriptor_chain(desc_base, queue_size, desc_index as u32) {
+        let total_len = match log_descriptor_chain(desc_base, queue_size, desc_index as u32, queue_index) {
             Some(len) => len,
             None => break,
         };
@@ -2823,10 +2847,10 @@ fn process_virtq_queue(
         avail_processed = avail_processed.wrapping_add(1);
     }
     VIRTIO_MMIO_STATE
-        .queue_avail_index
+        .queue_avail_index[qi]
         .store(avail_processed, Ordering::Relaxed);
     VIRTIO_MMIO_STATE
-        .queue_used_index
+        .queue_used_index[qi]
         .store(used_idx, Ordering::Relaxed);
 }
 
@@ -2967,7 +2991,7 @@ pub fn try_init_vmx_skeleton() -> bool {
     // By default, `vmm_hypervisor` only does bring-up and returns to RayOS.
     // The "enter guest" smoke test is gated behind a separate feature to avoid
     // surprising interactive boots.
-    #[cfg(feature = "vmm_hypervisor_smoke")]
+    #[cfg(any(feature = "vmm_hypervisor_smoke", feature = "vmm_hypervisor_net_test"))]
     {
         unsafe { setup_vmcs_minimal_guest_state() };
 
@@ -2994,7 +3018,7 @@ pub fn try_init_vmx_skeleton() -> bool {
         }
     }
 
-    #[cfg(not(feature = "vmm_hypervisor_smoke"))]
+    #[cfg(not(any(feature = "vmm_hypervisor_smoke", feature = "vmm_hypervisor_net_test")))]
     {
         crate::serial_write_str("RAYOS_VMM:VMX:SMOKE_DISABLED\n");
     }

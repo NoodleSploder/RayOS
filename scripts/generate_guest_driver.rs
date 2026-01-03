@@ -119,6 +119,9 @@ fn main() -> std::io::Result<()> {
         .map(|v| v == "1" || v.to_lowercase() == "true")
         .unwrap_or(false);
 
+    eprintln!("DEBUG: RAYOS_GUEST_NET_ENABLED={:?}, net_mode={}",
+        std::env::var("RAYOS_GUEST_NET_ENABLED"), net_mode);
+
     let req0_type: u32 = std::env::var("RAYOS_GUEST_REQ0_TYPE")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -137,7 +140,7 @@ fn main() -> std::io::Result<()> {
         .unwrap_or(0);
 
     let mut emitter = CodeEmitter::new();
-    
+
     if net_mode {
         return emit_network_test(&mut emitter);
     }
@@ -325,7 +328,7 @@ fn main() -> std::io::Result<()> {
 fn emit_network_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     // Simple virtio-net test: send a minimal Ethernet frame via TX queue and setup RX
     // This enables testing the hypervisor's packet loopback functionality
-    
+
     emitter.emit_bytes(&[0xB0, 0x41]);
     emitter.emit_bytes(&[0xE6, 0xE9]);
     emitter.emit_bytes(&[0x04, 0x01]);
@@ -374,9 +377,9 @@ fn emit_network_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     // Src MAC:  52:55:4F:53:00:01  (RAYOS)
     // EtherType: 0x0800 (IPv4)
     // Payload: minimal (just enough to test)
-    
+
     emitter.mov_rdi_imm(VIRTIO_NET_TX_PKT_GPA);
-    
+
     // Write destination MAC (6 bytes): 0xAA 0xBB 0xCC 0xDD 0xEE 0xFF
     emitter.emit_bytes(&[0xB0, 0xAA]); // mov al, 0xAA
     emitter.emit_bytes(&[0x88, 0x07]); // mov [rdi], al
@@ -434,41 +437,127 @@ fn emit_network_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
         0x00, 0x00,
         0x00, 0x00,
     ];
-    
+
     // Write descriptor to ring
+    // Write descriptor 0 as two 8-byte writes: [addr (u64)] [len(u32)|flags(u16)|next(u16)]
     emitter.mov_rdi_imm(VIRTIO_QUEUE_DESC_GPA);
-    for (i, byte) in tx_desc_bytes.iter().enumerate() {
-        if i % 4 == 0 && i > 0 {
-            emitter.emit_bytes(&[0x48, 0x83, 0xC7, 0x04]); // add rdi, 4
-        }
-        emitter.emit_bytes(&[0xB0, *byte]); // mov al, byte
-        emitter.emit_bytes(&[0x88, 0x07]); // mov [rdi], al
-        if i % 4 < 3 && i < tx_desc_bytes.len() - 1 {
-            emitter.emit_bytes(&[0x48, 0xFF, 0xC7]); // inc rdi
-        }
-    }
+    // Descriptor 0: addr
+    emitter.mov_reg64_imm(0, VIRTIO_NET_TX_PKT_GPA);
+    emitter.mov_mem_rdi_disp8_rax(0);
+    // Descriptor 0: len/flags/next packed into u64 at offset 8
+    let tx_len_flags_next: u64 = (0u64 << 48) | (0u64 << 32) | (VIRTIO_NET_PKT_LEN as u64);
+    emitter.mov_reg64_imm(0, tx_len_flags_next);
+    emitter.mov_mem_rdi_disp8_rax(8);
 
     // Submit TX: write to avail ring
     emitter.mov_rdi_imm(VIRTIO_QUEUE_DRIVER_GPA);
     emitter.emit_bytes(&[0xB0, 0x00]); // mov al, 0 (first descriptor)
     emitter.emit_bytes(&[0x88, 0x47, 0x04]); // mov [rdi+4], al (avail.ring[0])
     emitter.mov_reg64_imm(0, 0x01);
-    emitter.mov_mem_rdi_disp8_rax(0); // mov [rdi+0], rax (avail.idx = 1)
+    emitter.mov_mem_rdi_disp8_rax(2); // mov [rdi+2], rax (avail.idx = 1)
 
     // Notify TX queue
     emitter.mov_reg64_imm(0, 0); // TX queue = 0
     emitter.mov_mem_rax(virtio_queue_notify);
 
+    // Emit a serial marker from guest after TX notify: "G:NET_TX\n"
+    emitter.emit_bytes(&[0xB0, 0x47]); // mov al, 'G'
+    emitter.emit_bytes(&[0xE6, 0xE9]); // out 0xE9, al
+    emitter.emit_bytes(&[0xB0, 0x3A]); // mov al, ':'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x4E]); // mov al, 'N'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x45]); // mov al, 'E'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x54]); // mov al, 'T'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x5F]); // mov al, '_'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x54]); // mov al, 'T'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x58]); // mov al, 'X'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x0A]); // mov al, '\n'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+
     // Micro delay
     emitter.emit_bytes(&[0x90; 16]); // nop × 16
 
-    // Setup RX queue on second queue slot
-    // Use same descriptor/driver/used rings but queue 1
+    // Setup RX queue descriptor ring (queue 1)
+    // We need to select queue 1 first
     emitter.mov_reg64_imm(0, 1); // select queue 1 (RX)
-    emitter.mov_mem_rax(MMIO_VIRTIO_BASE + 0x050); // write to queue selector... actually we can't change queue dynamically this way
-    // For simplicity, assume RX uses queue 1 and was pre-setup, just notify it ready
-    emitter.mov_reg64_imm(0, 1); // RX queue
+    emitter.mov_mem_rax(MMIO_VIRTIO_BASE + 0x030); // queue selector register
+
+    // Setup RX queue descriptor ring
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_DESC_GPA + 0x1000); // RX descriptors at different offset
+    emitter.mov_mem_rax(queue_desc_reg);
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_DRIVER_GPA + 0x1000); // RX driver ring
+    emitter.mov_mem_rax(queue_driver_reg);
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_USED_GPA + 0x1000); // RX used ring
+    emitter.mov_mem_rax(queue_used_reg);
+    emitter.mov_reg64_imm(0, 8); // queue size
+    emitter.mov_mem_rax(queue_size_reg);
+    emitter.mov_reg64_imm(0, 1); // queue ready
+    emitter.mov_mem_rax(queue_ready_reg);
+
+    // Setup RX descriptor chain: single writable descriptor for received packets
+    let rx_desc_bytes = vec![
+        // Descriptor 0: RX packet buffer (writable)
+        ((VIRTIO_NET_RX_PKT_GPA) as u32) as u8, // addr lo
+        ((VIRTIO_NET_RX_PKT_GPA >> 8) as u32) as u8,
+        ((VIRTIO_NET_RX_PKT_GPA >> 16) as u32) as u8,
+        ((VIRTIO_NET_RX_PKT_GPA >> 24) as u32) as u8,
+        (VIRTIO_NET_PKT_LEN & 0xFF) as u8,  // len lo
+        ((VIRTIO_NET_PKT_LEN >> 8) & 0xFF) as u8,
+        ((VIRTIO_NET_PKT_LEN >> 16) & 0xFF) as u8,
+        ((VIRTIO_NET_PKT_LEN >> 24) & 0xFF) as u8,
+        (VIRTQ_DESC_F_WRITE & 0xFF) as u8, (VIRTQ_DESC_F_WRITE >> 8) as u8, // flags (WRITE)
+        0x00, 0x00, // next
+        0x00, 0x00,
+        0x00, 0x00,
+    ];
+
+    // Write RX descriptor to ring
+    // Write RX descriptor as two 8-byte writes at RX descriptor area
+    emitter.mov_rdi_imm(VIRTIO_QUEUE_DESC_GPA + 0x1000);
+    // RX addr
+    emitter.mov_reg64_imm(0, VIRTIO_NET_RX_PKT_GPA);
+    emitter.mov_mem_rdi_disp8_rax(0);
+    // RX len/flags/next: flags = VIRTQ_DESC_F_WRITE
+    let rx_packed: u64 = ((0u64) << 48) | ((VIRTQ_DESC_F_WRITE as u64) << 32) | (VIRTIO_NET_PKT_LEN as u64);
+    emitter.mov_reg64_imm(0, rx_packed);
+    emitter.mov_mem_rdi_disp8_rax(8);
+
+    // Submit RX: write to avail ring
+    emitter.mov_rdi_imm(VIRTIO_QUEUE_DRIVER_GPA + 0x1000); // RX driver ring
+    emitter.emit_bytes(&[0xB0, 0x00]); // mov al, 0 (first descriptor)
+    emitter.emit_bytes(&[0x88, 0x47, 0x04]); // mov [rdi+4], al (avail.ring[0])
+    emitter.mov_reg64_imm(0, 0x01);
+    emitter.mov_mem_rdi_disp8_rax(2); // mov [rdi+2], rax (avail.idx = 1)
+
+    // Notify RX queue
+    emitter.mov_reg64_imm(0, 1); // RX queue = 1
     emitter.mov_mem_rax(virtio_queue_notify);
+
+    // Emit a serial marker from guest after RX notify: "G:NET_RX\n"
+    emitter.emit_bytes(&[0xB0, 0x47]); // mov al, 'G'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x3A]); // mov al, ':'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x4E]); // mov al, 'N'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x45]); // mov al, 'E'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x54]); // mov al, 'T'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x5F]); // mov al, '_'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x52]); // mov al, 'R'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x58]); // mov al, 'X'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x0A]); // mov al, '\n'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
 
     // Check interrupt status
     emitter.mov_rax_mem(virtio_int_status);

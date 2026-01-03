@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![allow(dead_code)]
 
 use core::fmt::Write;
 
@@ -518,6 +519,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     // If we copy an ELF segment into plain RAM and jump to it post-exit, we can take an
     // instruction abort immediately. Reserve the ELF PT_LOAD destination pages *pre-exit*
     // as LOADER_CODE so firmware maps them executable.
+    #[cfg(target_arch = "aarch64")]
     let mut aarch64_kernel_segments_reserved = true;
     #[cfg(target_arch = "aarch64")]
     {
@@ -2129,6 +2131,7 @@ fn rayos_post_exit_embedded_loop(
     volume_size: u64,
 ) -> ! {
     let bi = unsafe { &*(boot_info_phys as *const BootInfo) };
+    let _ = (autorun_ptr, autorun_size, volume_ptr, volume_size);
 
     #[cfg(target_arch = "aarch64")]
     {

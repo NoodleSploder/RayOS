@@ -1,5 +1,7 @@
 #![no_std]
 #![no_main]
+#![allow(static_mut_refs)]
+#![allow(dead_code)]
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
@@ -88,6 +90,7 @@ mod acpi;
 mod pci;
 mod guest_surface;
 mod vmm;
+mod guest_driver_template;
 
 #[cfg(feature = "vmm_hypervisor")]
 mod hypervisor;
@@ -2630,27 +2633,27 @@ fn volume_probe_virtio_legacy_blk() -> bool {
 }
 
 fn virtio_read8(off: u16) -> u8 {
-    unsafe { inb(unsafe { VIRTIO_BLK_IO_BASE } + off) }
+    unsafe { inb(VIRTIO_BLK_IO_BASE.wrapping_add(off)) }
 }
 
 fn virtio_write8(off: u16, v: u8) {
-    unsafe { outb(unsafe { VIRTIO_BLK_IO_BASE } + off, v) }
+    unsafe { outb(VIRTIO_BLK_IO_BASE.wrapping_add(off), v) }
 }
 
 fn virtio_read16(off: u16) -> u16 {
-    unsafe { inw(unsafe { VIRTIO_BLK_IO_BASE } + off) }
+    unsafe { inw(VIRTIO_BLK_IO_BASE.wrapping_add(off)) }
 }
 
 fn virtio_write16(off: u16, v: u16) {
-    unsafe { outw(unsafe { VIRTIO_BLK_IO_BASE } + off, v) }
+    unsafe { outw(VIRTIO_BLK_IO_BASE.wrapping_add(off), v) }
 }
 
 fn virtio_read32(off: u16) -> u32 {
-    unsafe { inl(unsafe { VIRTIO_BLK_IO_BASE } + off) }
+    unsafe { inl(VIRTIO_BLK_IO_BASE.wrapping_add(off)) }
 }
 
 fn virtio_write32(off: u16, v: u32) {
-    unsafe { outl(unsafe { VIRTIO_BLK_IO_BASE } + off, v) }
+    unsafe { outl(VIRTIO_BLK_IO_BASE.wrapping_add(off), v) }
 }
 
 fn virtio_blk_init() -> bool {
@@ -2749,7 +2752,7 @@ fn virtio_blk_rw_sector(lba: u64, write: bool, data: &mut [u8; VOLUME_SECTOR_SIZ
     let status_off = data_off + VOLUME_SECTOR_SIZE as u64;
 
     // Write header
-    let hdr_ptr = unsafe { phys_as_mut_ptr::<VirtioBlkReq>(req_phys + hdr_off) };
+    let hdr_ptr = phys_as_mut_ptr::<VirtioBlkReq>(req_phys + hdr_off);
     unsafe {
         core::ptr::write_volatile(
             hdr_ptr,
@@ -2762,7 +2765,7 @@ fn virtio_blk_rw_sector(lba: u64, write: bool, data: &mut [u8; VOLUME_SECTOR_SIZ
     }
 
     // Data buffer copy
-    let data_ptr = unsafe { phys_as_mut_ptr::<u8>(req_phys + data_off) };
+    let data_ptr = phys_as_mut_ptr::<u8>(req_phys + data_off);
     if write {
         for i in 0..VOLUME_SECTOR_SIZE {
             unsafe { core::ptr::write_volatile(data_ptr.add(i), data[i]) };
@@ -2770,7 +2773,7 @@ fn virtio_blk_rw_sector(lba: u64, write: bool, data: &mut [u8; VOLUME_SECTOR_SIZ
     }
 
     // Status byte
-    let st_ptr = unsafe { phys_as_mut_ptr::<u8>(req_phys + status_off) };
+    let st_ptr = phys_as_mut_ptr::<u8>(req_phys + status_off);
     unsafe { core::ptr::write_volatile(st_ptr, 0xFF) };
 
     // Queue pointers
@@ -2780,17 +2783,16 @@ fn virtio_blk_rw_sector(lba: u64, write: bool, data: &mut [u8; VOLUME_SECTOR_SIZ
         return false;
     }
 
-    let desc_ptr = unsafe { phys_as_mut_ptr::<VirtqDesc>(qphys) };
+    let desc_ptr = phys_as_mut_ptr::<VirtqDesc>(qphys);
     let desc_bytes = core::mem::size_of::<VirtqDesc>() * qsize;
     let avail_off = desc_bytes as u64;
     let avail_size = (4 + (2 * qsize) + 2) as u64;
     let used_off = align_up(avail_off + avail_size, 4096);
 
     // Dynamic ring access (avoids fixed-size structs).
-    let avail_flags_ptr = unsafe { phys_as_mut_ptr::<u16>(qphys + avail_off) };
-    let avail_idx_ptr = unsafe { phys_as_mut_ptr::<u16>(qphys + avail_off + 2) };
-    let avail_ring_ptr = unsafe { phys_as_mut_ptr::<u16>(qphys + avail_off + 4) };
-    let used_idx_ptr = unsafe { phys_as_mut_ptr::<u16>(qphys + used_off + 2) };
+    let avail_idx_ptr = phys_as_mut_ptr::<u16>(qphys + avail_off + 2);
+    let avail_ring_ptr = phys_as_mut_ptr::<u16>(qphys + avail_off + 4);
+    let used_idx_ptr = phys_as_mut_ptr::<u16>(qphys + used_off + 2);
 
     // Fill three descriptors at 0,1,2
     unsafe {
@@ -3342,7 +3344,8 @@ fn rag_try_hnsw_search_topk(
     let mut visited = [0u8; RAG_MAX_DOCS];
     let mut cand_idx = [0u16; 32];
     let mut cand_score = [-1.0e30f32; 32];
-    let mut cand_len = 0usize;
+    // Initialize with 1 candidate (the entry seed) below.
+    let mut cand_len = 1usize;
 
     let mut score_cache = [-1.0e30f32; RAG_MAX_DOCS];
     let mut score_valid = [0u8; RAG_MAX_DOCS];
@@ -3363,7 +3366,6 @@ fn rag_try_hnsw_search_topk(
     let s0 = score_of(entry);
     cand_idx[0] = entry as u16;
     cand_score[0] = s0;
-    cand_len = 1;
 
     let mut expansions = 0usize;
     while cand_len != 0 && expansions < 64 {
@@ -8442,11 +8444,8 @@ fn init_pci(bi: &BootInfo) {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     serial_write_str("PANIC: ");
-    if let Some(s) = info.payload().downcast_ref::<&str>() {
-        serial_write_str(s);
-    } else {
-        serial_write_str("no payload");
-    }
+    // Avoid deprecated `PanicInfo::payload()`; keep output minimal.
+    serial_write_str("kernel panic");
     serial_write_str("\n");
     if let Some(loc) = info.location() {
         serial_write_str("  at ");

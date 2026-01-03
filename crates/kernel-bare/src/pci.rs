@@ -1,5 +1,4 @@
 use crate::{serial_write_str, acpi::Mcfg};
-use core::option::Option::{self, Some, None};
 
 #[derive(Debug)]
 pub struct PciDevice {
@@ -10,7 +9,7 @@ pub struct PciDevice {
     pub device_id: u16,
 }
 
-pub fn enumerate_pci(mcfg: &Mcfg) {
+pub fn enumerate_pci(_mcfg: &Mcfg) {
     serial_write_str("pci::enumerate_pci called\n");
     // Dummy implementation
 }
