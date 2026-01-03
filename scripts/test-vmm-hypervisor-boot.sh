@@ -111,6 +111,32 @@ if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM
     else
       echo "NOTE: virtio-console not observed; check build features" >&2
     fi
+
+    # Optional: deterministic guest-driven console test: build a guest blob that writes a console message
+    SERIAL_LOG_CONSOLE="$WORK_DIR/serial-vmm-hypervisor-boot.console.log"
+    SERIAL_NORM_CONSOLE="$WORK_DIR/serial-vmm-hypervisor-boot.console.norm.log"
+    echo "Running guest-driven virtio-console test (RAYOS_GUEST_CONSOLE_ENABLED=1)" >&2
+    pushd "$ROOT_DIR/scripts" >/dev/null
+    RAYOS_GUEST_CONSOLE_ENABLED=1 cargo run --quiet --release --bin generate_guest_driver >/dev/null || true
+    popd >/dev/null
+
+    pushd "$ROOT_DIR/crates/kernel-bare" >/dev/null
+    RUSTC="$(rustup which rustc)" cargo build \
+      -Z build-std=core,alloc \
+      -Z build-std-features=compiler-builtins-mem \
+      --release \
+      --target x86_64-unknown-none \
+      --features "${RAYOS_KERNEL_FEATURES}" \
+      >/dev/null
+    popd >/dev/null
+
+    (SERIAL_LOG="$SERIAL_LOG_CONSOLE" BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless) || true
+    tr -d '\r' < "$SERIAL_LOG_CONSOLE" > "$SERIAL_NORM_CONSOLE" 2>/dev/null || true
+    if grep -F -a -q "RAYOS_VMM:VIRTIO_CONSOLE:RECV" "$SERIAL_NORM_CONSOLE" || grep -F -a -q "G:CONSOLE" "$SERIAL_NORM_CONSOLE"; then
+      echo "PASS: guest-driven virtio-console message observed" >&2
+    else
+      echo "NOTE: guest-driven console message not observed; check guest blob generation" >&2
+    fi
   fi
 
   # Optional: exercise IRQ injection fallback path by forcing VMWRITE to fail

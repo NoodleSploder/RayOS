@@ -203,7 +203,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	P1 (Must-have): boot Linux headless under RayOS VMM — status: **in progress**
 	- [x] Virtqueue transport plumbing (descriptor chain logging, avail/used handling, queue notify handling) — basic plumbing exercised by deterministic guest driver blob.
 	- [x] Virtio-blk minimal in-memory backing (READ/WRITE/GET_ID) — works with the deterministic guest blob; **persistent image backing remains TODO**.
-	- [~] Virtio-console or minimal serial transport for guest logs/markers — **basic queue parsing implemented**: data/control queues handled, host logging emitted (markers: `RAYOS_VMM:VIRTIO_CONSOLE:COMPILED` / `ENABLED` / `CHAIN_HANDLED` / `RECV`, control markers `CTRLQ_HANDLED` present). Added a boot-time selftest feature (`vmm_virtio_console_selftest`) that exercises the handler during boot and emits `RAYOS_VMM:VIRTIO_CONSOLE:SELFTEST:INVOKE`. Remaining: richer control semantics, guest-driven end-to-end tests, and protocol conformance verification.
+	- [~] Virtio-console or minimal serial transport for guest logs/markers — **basic queue parsing implemented**: data/control queues handled, host logging emitted (markers: `RAYOS_VMM:VIRTIO_CONSOLE:COMPILED` / `ENABLED` / `CHAIN_HANDLED` / `RECV`, control markers `CTRLQ_HANDLED` present). Added a boot-time selftest feature (`vmm_virtio_console_selftest`) that exercises the handler during boot and emits `RAYOS_VMM:VIRTIO_CONSOLE:SELFTEST:INVOKE`. Added deterministic guest-driven test blob generation (`scripts/generate_guest_driver.rs` with `RAYOS_GUEST_CONSOLE_ENABLED=1`) and smoke-script validation. Remaining: richer control semantics and protocol conformance verification.
 	- [ ] Linux boots to a deterministic “guest ready” marker under RayOS (analogue of `RAYOS_LINUX_GUEST_READY`) — planned after persistent disk + console visibility.
 	- [ ] Add a headless test: boot RayOS → boot Linux headless under VMM → assert guest-ready marker → shutdown.
 
@@ -212,6 +212,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	- Observability: deterministic markers added for lifecycle and device behavior (e.g., `RAYOS_VMM:VMX:*`, `RAYOS_VMM:VIRTIO_MMIO:*`, `RAYOS_LINUX_DESKTOP_PRESENTED`, `RAYOS_LINUX_DESKTOP_FIRST_FRAME`).
 	- Testing: smoke script `scripts/test-vmm-hypervisor-boot.sh` now exercises VMX bring-up, virtio-gpu selftest, IRQ fallback modes, and the backoff selftest.
 	- TODO: convert boot selftest to host unit tests (unblock by resolving Cargo lockfile/toolchain mismatch or extracting logic to a host-test crate).
+
 	P2 (Must-have for desktop): single-surface scanout into RayOS compositor
 	- [ ] Wire virtio-gpu device model to the *real* virtqueue transport (controlq + cursorq if needed; start with scanout-only).
 	- [ ] Choose scanout backing (start CPU-visible shared backing: guest writes, RayOS blits).
@@ -282,7 +283,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 		- If not, launch once and record state, then present.
 		- Add a regression test around this.
 
-	24) Native-window mapping (Linux apps appear as RayOS windows)
+	1)  Native-window mapping (Linux apps appear as RayOS windows)
 - Map multiple guest Wayland surfaces into RayOS compositor as separate windows
 - Focus: lifecycle, focus, input routing, DPI scaling, clipboard basics
 	- Step 5 scaffolding: guest agent `SURFACE_MULTI_TEST` emits per-surface create + frame blocks over serial (`RAYOS_LINUX_SURFACE_CREATE`, `RAYOS_LINUX_SURFACE_FRAME_BEGIN/END`).

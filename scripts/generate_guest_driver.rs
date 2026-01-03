@@ -30,6 +30,10 @@ const VIRTIO_BLK_REQ_LEN: u32 = 16;
 const VIRTIO_BLK_DATA_LEN: u32 = 512;
 const VIRTIO_BLK_STATUS_LEN: u32 = 1;
 
+// Virtio-console test support
+const VIRTIO_CONSOLE_MSG_GPA: u64 = 0x0010_A000;
+const VIRTIO_CONSOLE_MSG_LEN: u32 = 64;
+
 // Virtio-net test support
 const VIRTIO_NET_TX_PKT_GPA: u64 = 0x0010_9000;
 const VIRTIO_NET_RX_PKT_GPA: u64 = VIRTIO_NET_TX_PKT_GPA + 0x1000;
@@ -119,8 +123,13 @@ fn main() -> std::io::Result<()> {
         .map(|v| v == "1" || v.to_lowercase() == "true")
         .unwrap_or(false);
 
-    eprintln!("DEBUG: RAYOS_GUEST_NET_ENABLED={:?}, net_mode={}",
-        std::env::var("RAYOS_GUEST_NET_ENABLED"), net_mode);
+    let console_mode: bool = std::env::var("RAYOS_GUEST_CONSOLE_ENABLED")
+        .ok()
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
+
+    eprintln!("DEBUG: RAYOS_GUEST_NET_ENABLED={:?}, net_mode={} RAYOS_GUEST_CONSOLE_ENABLED={:?}, console_mode={}",
+        std::env::var("RAYOS_GUEST_NET_ENABLED"), net_mode, std::env::var("RAYOS_GUEST_CONSOLE_ENABLED"), console_mode);
 
     let req0_type: u32 = std::env::var("RAYOS_GUEST_REQ0_TYPE")
         .ok()
@@ -143,6 +152,10 @@ fn main() -> std::io::Result<()> {
 
     if net_mode {
         return emit_network_test(&mut emitter);
+    }
+
+    if console_mode {
+        return emit_console_test(&mut emitter);
     }
 
     emitter.emit_bytes(&[0xB0, 0x41]);
@@ -324,6 +337,102 @@ fn main() -> std::io::Result<()> {
     file.write_all(&emitter.bytes)?;
     Ok(())
 }
+
+fn emit_console_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
+    // Simple virtio-console data queue test: write a message into guest memory,
+    // point a single descriptor at it, and notify queue 0 so the host sees the message.
+
+    emitter.emit_bytes(&[0xB0, 0x43]); // mov al, 'C'
+    emitter.emit_bytes(&[0xE6, 0xE9]); // out 0xE9, al
+
+    let virtio_features = MMIO_VIRTIO_BASE + 0x010;
+    let virtio_driver_features = MMIO_VIRTIO_BASE + 0x020;
+    let virtio_status = MMIO_VIRTIO_BASE + VIRTIO_MMIO_STATUS_OFFSET;
+    let virtio_queue_notify = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_NOTIFY_OFFSET;
+    let queue_desc_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_DESC_OFFSET;
+    let queue_driver_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_DRIVER_OFFSET;
+    let queue_used_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_USED_OFFSET;
+    let queue_size_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_SIZE_OFFSET;
+    let queue_ready_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_READY_OFFSET;
+
+    // Negotiate features
+    emitter.mov_rax_mem(virtio_features);
+    emitter.emit_bytes(&[0x48, 0xFF, 0xC0]); // inc rax
+    emitter.mov_mem_rax(virtio_driver_features);
+
+    // Set STATUS=ACKNOWLEDGE|DRIVER
+    emitter.mov_reg64_imm(0, 0x03);
+    emitter.mov_mem_rax(virtio_status);
+
+    // Setup queue 0 descriptors/driver/used
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_DESC_GPA);
+    emitter.mov_mem_rax(queue_desc_reg);
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_DRIVER_GPA);
+    emitter.mov_mem_rax(queue_driver_reg);
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_USED_GPA);
+    emitter.mov_mem_rax(queue_used_reg);
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_SIZE_VALUE);
+    emitter.mov_mem_rax(queue_size_reg);
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_READY_VALUE);
+    emitter.mov_mem_rax(queue_ready_reg);
+
+    // Write the message into guest memory at VIRTIO_CONSOLE_MSG_GPA
+    emitter.mov_rdi_imm(VIRTIO_CONSOLE_MSG_GPA);
+    let msg = b"guest->console: hello from blob\n";
+    // write in 1-byte stores using mov al, imm; mov [rdi+off], al
+    for (i, &b) in msg.iter().enumerate() {
+        emitter.emit_bytes(&[0xB0, b]); // mov al, imm8
+        if i == 0 {
+            emitter.emit_bytes(&[0x88, 0x07]); // mov [rdi], al
+        } else {
+            emitter.emit_bytes(&[0x88, 0x47, i as u8]); // mov [rdi+disp8], al
+        }
+    }
+
+    // Build descriptor 0 at VIRTIO_QUEUE_DESC_GPA: addr (u64) then len|flags|next (u64)
+    emitter.mov_rdi_imm(VIRTIO_QUEUE_DESC_GPA);
+    emitter.mov_reg64_imm(0, VIRTIO_CONSOLE_MSG_GPA);
+    emitter.mov_mem_rdi_disp8_rax(0);
+    let packed: u64 = ((0u64) << 48) | ((0u64) << 32) | (VIRTIO_CONSOLE_MSG_LEN as u64);
+    emitter.mov_reg64_imm(0, packed);
+    emitter.mov_mem_rdi_disp8_rax(8);
+
+    // Submit avail ring: write desc index 0 into avail.ring[0]; set avail.idx=1
+    emitter.mov_rdi_imm(VIRTIO_QUEUE_DRIVER_GPA);
+    emitter.emit_bytes(&[0xB0, 0x00]); // mov al, 0
+    emitter.emit_bytes(&[0x88, 0x47, 0x04]); // mov [rdi+4], al
+    emitter.mov_reg64_imm(0, 0x01);
+    emitter.mov_mem_rdi_disp8_rax(2); // mov [rdi+2], rax
+
+    // Notify queue 0
+    emitter.mov_reg64_imm(0, 0);
+    emitter.mov_mem_rax(virtio_queue_notify);
+
+    // Guest emits a small serial marker
+    emitter.emit_bytes(&[0xB0, 0x47]); // 'G'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x3A]); // ':'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x43]); // 'C'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x4F]); // 'O'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x4E]); // 'N'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x53]); // 'S'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x4F]); // 'O'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x4C]); // 'L'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x0A]); // '\n'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+
+    emitter.emit_byte(0xF4); // hlt
+    emitter.emit_bytes(&[0xEB, 0xFE]); // jmp $
+    Ok(())
+}
+
 
 fn emit_network_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     // Simple virtio-net test: send a minimal Ethernet frame via TX queue and setup RX
