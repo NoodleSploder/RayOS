@@ -2206,9 +2206,10 @@ fn log_virtq_descriptors(base: u64, queue_size: u32) {
 
 // debug memory dump removed
 
+#[allow(unreachable_code)]
 fn inject_guest_interrupt(vector: u8) -> bool {
     // Format VM-entry interruption info: valid bit (31) + vector in low bits.
-    let val = (1u64 << 31) | (vector as u64 & 0xFF);
+    let _val = (1u64 << 31) | (vector as u64 & 0xFF);
 
     // Allow forcing a VMWRITE failure for testing fallback paths with a feature flag.
     #[cfg(feature = "vmm_inject_force_fail")]
@@ -2252,19 +2253,23 @@ fn inject_guest_interrupt(vector: u8) -> bool {
             #[cfg(all(feature = "vmm_inject_force_fail", feature = "vmm_inject_force_msi_fail"))]
             {
                 crate::serial_write_str("RAYOS_VMM:VMX:SKIP_LAPIC_SIM_TO_EXERCISE_MSI\n");
+                // Intentionally fall through without touching LAPIC MMIO so MSI fallback
+                // can be exercised in test mode.
             }
 
-            // For self-delivery, write high (0) then low with dest-shorthand=SELF (1 << 18).
-            let low = (vector as u32) | (1u32 << 18);
-            // Write high then low (as per xAPIC semantics)
-            let reg_high = (LAPIC_MMIO + 0x310) as *mut u32;
-            let reg_low = (LAPIC_MMIO + 0x300) as *mut u32;
-            core::ptr::write_volatile(reg_high, 0);
-            core::ptr::write_volatile(reg_low, low);
-            // Read-after-write for posted writes
-            let _ = core::ptr::read_volatile(reg_low);
-            crate::serial_write_str("RAYOS_VMM:VMX:INJECT_VIA_LAPIC\n");
-            return true;
+            // When not forcing an MSI test, perform the real LAPIC MMIO IPI write.
+            #[cfg(not(feature = "vmm_inject_force_msi_fail"))]
+            {
+                let low = (vector as u32) | (1u32 << 18);
+                let reg_high = (LAPIC_MMIO + 0x310) as *mut u32;
+                let reg_low = (LAPIC_MMIO + 0x300) as *mut u32;
+                core::ptr::write_volatile(reg_high, 0);
+                core::ptr::write_volatile(reg_low, low);
+                // Read-after-write for posted writes
+                let _ = core::ptr::read_volatile(reg_low);
+                crate::serial_write_str("RAYOS_VMM:VMX:INJECT_VIA_LAPIC\n");
+                return true;
+            }
         }
     }
 
