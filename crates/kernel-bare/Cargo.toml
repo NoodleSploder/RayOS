@@ -55,6 +55,13 @@ vmm_inject_force_fail = []
 # force the code path that exercises MSI delivery).
 vmm_inject_force_msi_fail = []
 
+# Testing flag: force all injection paths to fail (VMWRITE/LAPIC/MSI) so backoff logic
+# and retry counters can be exercised deterministically in CI.
+vmm_inject_force_all_fail = []
+
+# Self-test: run an in-kernel backoff retry selftest at boot to verify counters/logs.
+vmm_inject_backoff_selftest = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"

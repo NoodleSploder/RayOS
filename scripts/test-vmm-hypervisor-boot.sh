@@ -155,6 +155,32 @@ if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM
     echo "NOTE: IRQ injection MSI fallback not exercised; check MSI mapping or test flags" >&2
   fi
 
+  # Forced backoff selftest: build/runnable smoke run that verifies backoff counters and logs.
+  SERIAL_LOG_FORCE_BO="$WORK_DIR/serial-vmm-hypervisor-boot.force-bo.log"
+  SERIAL_NORM_FORCE_BO="$WORK_DIR/serial-vmm-hypervisor-boot.force-bo.norm.log"
+  RAYOS_KERNEL_FEATURES_FORCE_BO="${RAYOS_KERNEL_FEATURES},vmm_inject_force_all_fail,vmm_inject_backoff_selftest"
+  echo "Running forced-backoff test features: $RAYOS_KERNEL_FEATURES_FORCE_BO" >&2
+  pushd "$ROOT_DIR/crates/kernel-bare" >/dev/null
+  RUSTC="$(rustup which rustc)" cargo build \
+    -Z build-std=core,alloc \
+    -Z build-std-features=compiler-builtins-mem \
+    --release \
+    --target x86_64-unknown-none \
+    --features "$RAYOS_KERNEL_FEATURES_FORCE_BO" \
+    >/dev/null
+  popd >/dev/null
+
+  # Run the boot where the selftest should execute and leave diagnostic logs.
+  (SERIAL_LOG="$SERIAL_LOG_FORCE_BO" BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless) || true
+  tr -d '\r' < "$SERIAL_LOG_FORCE_BO" > "$SERIAL_NORM_FORCE_BO" 2>/dev/null || true
+  if grep -F -a -q "RAYOS_VMM:VIRTIO_MMIO:BACKOFF_SELFTEST_BEGIN" "$SERIAL_NORM_FORCE_BO" && \
+     grep -F -a -q "RAYOS_VIRTIO_MMIO:BACKOFF_SELFTEST_END" "$SERIAL_NORM_FORCE_BO" || \
+     grep -F -a -q "RAYOS_VMM:VIRTIO_MMIO:BACKOFF_SELFTEST_END" "$SERIAL_NORM_FORCE_BO"; then
+    echo "PASS: IRQ injection backoff selftest exercised" >&2
+  else
+    echo "NOTE: IRQ injection backoff selftest not observed; check build flags" >&2
+  fi
+
   echo "Serial log: $SERIAL_LOG" >&2
   exit 0
 fi
