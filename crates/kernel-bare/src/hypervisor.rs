@@ -2199,9 +2199,7 @@ fn log_descriptor_chain(base: u64, queue_size: u32, start_index: u32, queue_inde
                     }
                     // Dispatch to handler based on active device ID
                     let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
-                    crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:DISPATCH_DEVICE=");
-                    crate::serial_write_hex_u64(device_id as u64);
-                    crate::serial_write_str("\n");
+                    // dispatching device (silent)
                     match device_id {
                     VIRTIO_MMIO_DEVICE_ID_VALUE => {
                         // Block device (0x0105)
