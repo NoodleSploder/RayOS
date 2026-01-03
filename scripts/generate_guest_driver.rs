@@ -389,13 +389,25 @@ fn emit_console_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
         }
     }
 
-    // Build descriptor 0 at VIRTIO_QUEUE_DESC_GPA: addr (u64) then len|flags|next (u64)
-    emitter.mov_rdi_imm(VIRTIO_QUEUE_DESC_GPA);
-    emitter.mov_reg64_imm(0, VIRTIO_CONSOLE_MSG_GPA);
-    emitter.mov_mem_rdi_disp8_rax(0);
-    let packed: u64 = ((0u64) << 48) | ((0u64) << 32) | (VIRTIO_CONSOLE_MSG_LEN as u64);
-    emitter.mov_reg64_imm(0, packed);
-    emitter.mov_mem_rdi_disp8_rax(8);
+    // Build descriptor 0 bytes to be copied into guest desc area via rep movs (reliable placement)
+    let mut desc_bytes = Vec::new();
+    desc_bytes.extend_from_slice(&VIRTIO_CONSOLE_MSG_GPA.to_le_bytes());
+    desc_bytes.extend_from_slice(&((VIRTIO_CONSOLE_MSG_LEN as u32).to_le_bytes()));
+    desc_bytes.extend_from_slice(&(0u16.to_le_bytes())); // flags
+    desc_bytes.extend_from_slice(&(0u16.to_le_bytes())); // next
+    let desc_len = desc_bytes.len() as u64;
+
+    // Ensure the mov imm for R6 is placed at the kernel's expected patch offset
+    const GUEST_DRIVER_DESC_DATA_PTR_OFFSET: usize = 176;
+    while emitter.bytes.len() < GUEST_DRIVER_DESC_DATA_PTR_OFFSET {
+        emitter.emit_byte(0x90); // nop
+    }
+    let _desc_data_patch = emitter.mov_reg64_imm(6, 0);
+
+    // R7 -> dest (VIRTIO_QUEUE_DESC_GPA), R1 -> len
+    emitter.mov_reg64_imm(7, VIRTIO_QUEUE_DESC_GPA);
+    emitter.mov_reg64_imm(1, desc_len);
+    emitter.emit_bytes(&[0xF3, 0xA4]); // rep movsb (src=R6 dest=R7 count=R1)
 
     // Submit avail ring: write desc index 0 into avail.ring[0]; set avail.idx=1
     emitter.mov_rdi_imm(VIRTIO_QUEUE_DRIVER_GPA);
@@ -403,6 +415,26 @@ fn emit_console_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     emitter.emit_bytes(&[0x88, 0x47, 0x04]); // mov [rdi+4], al
     emitter.mov_reg64_imm(0, 0x01);
     emitter.mov_mem_rdi_disp8_rax(2); // mov [rdi+2], rax
+
+    // Append descriptor bytes into the emitter *at the canonical data offset* so the
+    // kernel-side installer (which patches GUEST_DRIVER_DESC_DATA_PTR_OFFSET) can point
+    // R6 at code_gpa + GUEST_DRIVER_DESC_DATA_OFFSET to copy them into the virtq desc area.
+    const GUEST_DRIVER_DESC_DATA_OFFSET: usize = 501;
+    if emitter.bytes.len() < GUEST_DRIVER_DESC_DATA_OFFSET {
+        // pad with zeros up to the expected offset
+        let pad = GUEST_DRIVER_DESC_DATA_OFFSET - emitter.bytes.len();
+        for _ in 0..pad {
+            emitter.emit_byte(0);
+        }
+    }
+    // overwrite/emit descriptor bytes at the canonical offset
+    for (i, b) in desc_bytes.iter().enumerate() {
+        if GUEST_DRIVER_DESC_DATA_OFFSET + i < emitter.bytes.len() {
+            emitter.bytes[GUEST_DRIVER_DESC_DATA_OFFSET + i] = *b;
+        } else {
+            emitter.emit_byte(*b);
+        }
+    }
 
     // Notify queue 0
     emitter.mov_reg64_imm(0, 0);
