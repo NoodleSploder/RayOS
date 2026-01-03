@@ -108,6 +108,9 @@ mod virtio_gpu_model;
 
 #[cfg(feature = "vmm_virtio_console")]
 mod virtio_console;
+
+#[cfg(feature = "vmm_virtio_console")]
+mod virtio_console_proto;
 const KERNEL_BASE: u64 = 0xffff_ffff_8000_0000;
 static KERNEL_PHYS_START_ALIGNED: AtomicU64 = AtomicU64::new(0);
 static KERNEL_PHYS_END_ALIGNED: AtomicU64 = AtomicU64::new(0);
