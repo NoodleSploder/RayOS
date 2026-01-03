@@ -40,6 +40,11 @@ vmm_virtio_gpu = []
 # Scaffolding for an in-kernel hypervisor runtime skeleton (VMX-first on x86_64).
 vmm_hypervisor = []
 
+# Development-only: run the VMX "enter guest" smoke test (HLT loop + VM-exit markers).
+# Without this, `vmm_hypervisor` will only do bring-up (VMXON/VMCS setup) and then VMXOFF,
+# allowing RayOS to continue into the interactive loop.
+vmm_hypervisor_smoke = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"

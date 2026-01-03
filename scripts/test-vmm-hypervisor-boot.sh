@@ -23,9 +23,13 @@ SERIAL_NORM="$WORK_DIR/serial-vmm-hypervisor-boot.norm.log"
 # Ensure the feature is enabled (append if user provided other features).
 RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-}"
 if [ -z "$RAYOS_KERNEL_FEATURES" ]; then
-  RAYOS_KERNEL_FEATURES="vmm_hypervisor"
+  RAYOS_KERNEL_FEATURES="vmm_hypervisor,vmm_hypervisor_smoke"
 elif ! echo ",${RAYOS_KERNEL_FEATURES}," | grep -q ",vmm_hypervisor,"; then
   RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES},vmm_hypervisor"
+fi
+
+if ! echo ",${RAYOS_KERNEL_FEATURES}," | grep -q ",vmm_hypervisor_smoke,"; then
+  RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES},vmm_hypervisor_smoke"
 fi
 export RAYOS_KERNEL_FEATURES
 
