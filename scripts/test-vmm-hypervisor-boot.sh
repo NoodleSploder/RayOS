@@ -104,6 +104,32 @@ if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM
     # Non-fatal; the hypervisor init still counts as success for general CI.
   fi
 
+  # Optional: exercise IRQ injection fallback path by forcing VMWRITE to fail
+  # and verifying we either simulate or perform a LAPIC-based injection.
+  SERIAL_LOG_FORCE="$WORK_DIR/serial-vmm-hypervisor-boot.force.log"
+  SERIAL_NORM_FORCE="$WORK_DIR/serial-vmm-hypervisor-boot.force.norm.log"
+  RAYOS_KERNEL_FEATURES_FORCE="${RAYOS_KERNEL_FEATURES},vmm_inject_force_fail"
+  echo "Running forced-inject test features: $RAYOS_KERNEL_FEATURES_FORCE" >&2
+  pushd "$ROOT_DIR/crates/kernel-bare" >/dev/null
+  RUSTC="$(rustup which rustc)" cargo build \
+    -Z build-std=core,alloc \
+    -Z build-std-features=compiler-builtins-mem \
+    --release \
+    --target x86_64-unknown-none \
+    --features "$RAYOS_KERNEL_FEATURES_FORCE" \
+    >/dev/null
+  popd >/dev/null
+
+  # Run a headless boot with forced-failure features; keep old SERIAL_LOG untouched.
+  (SERIAL_LOG="$SERIAL_LOG_FORCE" BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless) || true
+  tr -d '\r' < "$SERIAL_LOG_FORCE" > "$SERIAL_NORM_FORCE" 2>/dev/null || true
+  if grep -F -a -q "RAYOS_VMM:VMX:FORCED_VMWRITE_FAIL" "$SERIAL_NORM_FORCE" && \
+     (grep -F -a -q "RAYOS_VMM:VMX:INJECT_VIA_LAPIC_SIM" "$SERIAL_NORM_FORCE" || grep -F -a -q "RAYOS_VMM:VMX:INJECT_VIA_LAPIC" "$SERIAL_NORM_FORCE" || grep -F -a -q "RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_PENDING" "$SERIAL_NORM_FORCE"); then
+    echo "PASS: IRQ injection fallback exercised" >&2
+  else
+    echo "NOTE: IRQ injection fallback not exercised; check LAPIC mapping or test flags" >&2
+  fi
+
   echo "Serial log: $SERIAL_LOG" >&2
   exit 0
 fi

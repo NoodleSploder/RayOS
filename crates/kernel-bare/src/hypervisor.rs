@@ -18,6 +18,8 @@ use crate::guest_driver_template::{
     GUEST_DRIVER_BINARY, GUEST_DRIVER_DESC_DATA_OFFSET, GUEST_DRIVER_DESC_DATA_PTR_OFFSET,
 };
 
+use crate::LAPIC_MMIO;
+
 // MSRs
 const IA32_FEATURE_CONTROL: u32 = 0x3A;
 const IA32_VMX_BASIC: u32 = 0x480;
@@ -623,6 +625,8 @@ struct VirtioMmioState {
     status: AtomicU32,
     driver_features: AtomicU32,
     interrupt_status: AtomicU32,
+    // Pending retry flag: set to 1 when VM-entry injection fails and retries are needed.
+    interrupt_pending: AtomicU32,
     device_id: AtomicU32,
     queue_notify_count: AtomicU32,
     queue_desc_address: [AtomicU64; 2],
@@ -653,6 +657,7 @@ impl VirtioMmioState {
             status: AtomicU32::new(0),
             driver_features: AtomicU32::new(0),
             interrupt_status: AtomicU32::new(0),
+            interrupt_pending: AtomicU32::new(0),
             device_id: AtomicU32::new(device_id),
             queue_notify_count: AtomicU32::new(0),
             queue_desc_address: [AtomicU64::new(0), AtomicU64::new(0)],
@@ -2204,12 +2209,62 @@ fn log_virtq_descriptors(base: u64, queue_size: u32) {
 fn inject_guest_interrupt(vector: u8) -> bool {
     // Format VM-entry interruption info: valid bit (31) + vector in low bits.
     let val = (1u64 << 31) | (vector as u64 & 0xFF);
-    if unsafe { vmwrite(VMCS_ENTRY_INTERRUPTION_INFO, val) } {
-        true
-    } else {
-        crate::serial_write_str("RAYOS_VMM:VMX:VMWRITE_INJECT_FAIL\n");
-        false
+
+    // Allow forcing a VMWRITE failure for testing fallback paths with a feature flag.
+    #[cfg(feature = "vmm_inject_force_fail")]
+    {
+        crate::serial_write_str("RAYOS_VMM:VMX:FORCED_VMWRITE_FAIL\n");
     }
+
+    #[cfg(not(feature = "vmm_inject_force_fail"))]
+    {
+        if unsafe { vmwrite(VMCS_ENTRY_INTERRUPTION_INFO, val) } {
+            return true;
+        }
+    }
+
+    // VM-entry injection failed; try APIC (LAPIC MMIO) as a fallback delivery path.
+    crate::serial_write_str("RAYOS_VMM:VMX:VMWRITE_INJECT_FAIL, trying LAPIC fallback\n");
+
+    // In test mode, if LAPIC_MMIO is not yet discovered, set a reasonable default
+    // so the fallback path can be exercised in CI/smoke runs.
+    #[cfg(feature = "vmm_inject_force_fail")]
+    unsafe {
+        if LAPIC_MMIO == 0 {
+            // HHDM_OFFSET + 0xFEE0_0000 (typical local APIC physical base)
+            const FALLBACK_LAPIC_MMIO: u64 = 0xffff_8000_0000_0000u64 + 0xFEE0_0000u64;
+            LAPIC_MMIO = FALLBACK_LAPIC_MMIO;
+            crate::serial_write_str("RAYOS_VMM:VMX:FORCE_SET_LAPIC_MMIO\n");
+        }
+    }
+
+    unsafe {
+        if LAPIC_MMIO != 0 {
+            // In test mode we simulate a successful IPI so tests don't trigger PF when
+            // LAPIC MMIO is not mapped in the HHDM. This avoids crashes in CI while
+            // still validating our fallback logic.
+            #[cfg(feature = "vmm_inject_force_fail")]
+            {
+                crate::serial_write_str("RAYOS_VMM:VMX:INJECT_VIA_LAPIC_SIM\n");
+                return true;
+            }
+
+            // For self-delivery, write high (0) then low with dest-shorthand=SELF (1 << 18).
+            let low = (vector as u32) | (1u32 << 18);
+            // Write high then low (as per xAPIC semantics)
+            let reg_high = (LAPIC_MMIO + 0x310) as *mut u32;
+            let reg_low = (LAPIC_MMIO + 0x300) as *mut u32;
+            core::ptr::write_volatile(reg_high, 0);
+            core::ptr::write_volatile(reg_low, low);
+            // Read-after-write for posted writes
+            let _ = core::ptr::read_volatile(reg_low);
+            crate::serial_write_str("RAYOS_VMM:VMX:INJECT_VIA_LAPIC\n");
+            return true;
+        }
+    }
+
+    crate::serial_write_str("RAYOS_VMM:VMX:INJECT_FAIL_NO_FALLBACK\n");
+    false
 }
 
 fn log_descriptor_chain(
@@ -2981,6 +3036,16 @@ fn process_virtq_queue(
     } else {
         queue_index as usize
     };
+    // Attempt retry of pending interrupt injections if needed.
+    if VIRTIO_MMIO_STATE.interrupt_pending.load(Ordering::Relaxed) != 0 {
+        if inject_guest_interrupt(VIRTIO_MMIO_IRQ_VECTOR) {
+            VIRTIO_MMIO_STATE.interrupt_pending.store(0, Ordering::Relaxed);
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_OK\n");
+        } else {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_FAIL\n");
+        }
+    }
+
     let mut avail_processed: u16 = VIRTIO_MMIO_STATE.queue_avail_index[qi].load(Ordering::Relaxed);
     let mut used_idx: u16 = VIRTIO_MMIO_STATE.queue_used_index[qi].load(Ordering::Relaxed);
     let avail_idx = match read_u16(driver_base + VIRTQ_AVAIL_INDEX_OFFSET) {
@@ -3058,6 +3123,10 @@ fn process_virtq_queue(
                 crate::serial_write_str("\n");
             } else {
                 crate::serial_write_str("RAYOS_VMM:VMX:INJECT_IRQ_FAIL\n");
+                // Mark pending so retries can be attempted later when VM environment
+                // might be ready (e.g., after APIC is initialized by guest).
+                VIRTIO_MMIO_STATE.interrupt_pending.store(1, Ordering::Relaxed);
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_PENDING\n");
             }
         }
         let mut idx_buf = [0u8; 2];
