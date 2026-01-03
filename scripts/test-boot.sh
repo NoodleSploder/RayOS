@@ -162,6 +162,8 @@ fi
 # QEMU + firmware configuration.
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 OVMF_CODE="${OVMF_CODE:-}"
+QEMU_EXTRA_ARGS="${QEMU_EXTRA_ARGS:-}"
+QEMU_TIMEOUT_SECS="${QEMU_TIMEOUT_SECS:-}"
 
 detect_ovmf_code() {
     local candidate=""
@@ -1429,7 +1431,12 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE_WANTED" != "0" ]; then
     fi
 fi
 
-"$QEMU_BIN" \
+QEMU_PREFIX=()
+if [ -n "$QEMU_TIMEOUT_SECS" ]; then
+    QEMU_PREFIX=(timeout "$QEMU_TIMEOUT_SECS")
+fi
+
+"${QEMU_PREFIX[@]}" "$QEMU_BIN" \
     -machine q35 \
     -m 2048 \
     -rtc base=utc,clock=host \
@@ -1439,6 +1446,7 @@ fi
     -serial "chardev:rayos-serial0" \
     -monitor "unix:$MON_SOCK,server,nowait" \
     -vga std \
+    ${QEMU_EXTRA_ARGS} \
     "${DISPLAY_ARGS[@]}"
 
 echo ""

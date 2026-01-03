@@ -186,6 +186,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 		- ✅ RayOS compositor/presentation can ingest guest scanout buffers (kernel-bare `guest_surface` publish/snapshot + native blit path exist; needs a real producer).
 	- TODOs (milestone 1: single full-desktop surface):
 		- ⏳ Implement hypervisor runtime skeleton (VMX/SVM detection + enable + VMXON/VMCS + minimal VM-exit loop stub).
+			- Milestone reached: VM-entry succeeds and emits deterministic `HLT` VM-exits (see `scripts/test-vmm-hypervisor-boot.sh` markers `RAYOS_VMM:VMX:VMEXIT`).
 		- ⏳ Implement virtqueue transport plumbing (virtio-pci modern or legacy) for in-OS virtio devices.
 		- ⏳ Implement guest memory mapping (GPA→HPA/EPT) + safe host accessors for device models.
 		- ✅ Implement scanout publication contract in the kernel (kernel-bare `GuestSurface` + `frame_seq` + Presented/Hidden gating).

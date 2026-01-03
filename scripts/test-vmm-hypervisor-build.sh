@@ -10,7 +10,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-if ! rustc --version | grep -qi "nightly"; then
+RUSTC_BIN=""
+if command -v rustup >/dev/null 2>&1; then
+  RUSTC_BIN="$(rustup which rustc 2>/dev/null || true)"
+fi
+if [ -z "$RUSTC_BIN" ]; then
+  RUSTC_BIN="$(command -v rustc 2>/dev/null || true)"
+fi
+if [ -z "$RUSTC_BIN" ] || ! "$RUSTC_BIN" --version 2>/dev/null | grep -qi "nightly"; then
   echo "SKIP: nightly rustc not available; cannot run -Z build-std build" >&2
   exit 0
 fi

@@ -6294,6 +6294,15 @@ pub extern "C" fn _start(boot_info_phys: u64) -> ! {
     // Copy boot info to a safe place and set up basic env.
     init_boot_info(boot_info_phys);
 
+    // Initialize the simple physical page allocator from the UEFI memory map.
+    // (Used by feature-gated VMM bring-up and other low-level subsystems.)
+    if boot_info_phys != 0 {
+        let bi = unsafe { &*(boot_info_phys as *const BootInfo) };
+        if bi.magic == BOOTINFO_MAGIC {
+            phys_alloc_init_from_bootinfo(bi);
+        }
+    }
+
     // Set up our own GDT+TSS for fault handling (IST).
     init_gdt();
 
