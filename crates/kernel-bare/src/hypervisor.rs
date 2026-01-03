@@ -2219,7 +2219,7 @@ fn inject_guest_interrupt(vector: u8) -> bool {
 
     #[cfg(not(feature = "vmm_inject_force_fail"))]
     {
-        if unsafe { vmwrite(VMCS_ENTRY_INTERRUPTION_INFO, val) } {
+        if unsafe { vmwrite(VMCS_ENTRY_INTERRUPTION_INFO, _val) } {
             return true;
         }
     }
