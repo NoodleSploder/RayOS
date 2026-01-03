@@ -85,18 +85,45 @@ NEED1="RAYOS_VMM:VMX:INIT_BEGIN"
 NEED2="RAYOS_VMM:VMX:VMLAUNCH_ATTEMPT"
 NEED3="RAYOS_VMM:VIRTIO_MMIO:NET_RX_INJECT"
 
-if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM"; then
-  echo "PASS: hypervisor init path executed (markers present)" >&2
-  if grep -F -a -q "$NEED3" "$SERIAL_NORM"; then
-    echo "PASS: virtio-net loopback injection observed" >&2
-    echo "Serial log: $SERIAL_LOG" >&2
-    exit 0
+  if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM"; then
+    echo "PASS: hypervisor init path executed (markers present)" >&2
+    if grep -F -a -q "$NEED3" "$SERIAL_NORM"; then
+      if python3 - "$SERIAL_NORM" <<'PY'
+import pathlib, sys
+
+log_path = pathlib.Path(sys.argv[1])
+marker = "G:NET_RX"
+current = []
+for line in log_path.read_text(errors="ignore").splitlines():
+    if not line.startswith("RAYOS_GUEST_E9:"):
+        continue
+    char = line[len("RAYOS_GUEST_E9:"):]
+    if char == "":
+        char = "\n"
+    if char == "\n":
+        if "".join(current) == marker:
+            sys.exit(0)
+        current = []
+        continue
+
+    current.append(char)
+
+sys.exit(1)
+PY
+      then
+        echo "PASS: virtio-net loopback injection observed (guest RX received)" >&2
+        echo "Serial log: $SERIAL_LOG" >&2
+        exit 0
+      else
+        echo "FAIL: guest RX notification missing (G:NET_RX)" >&2
+        echo "NOTE: Hypervisor injected packet but guest didn't log RX marker" >&2
+      fi
+    else
+      echo "FAIL: no virtio-net RX injection marker observed" >&2
+      echo "NOTE: This may indicate the test packet injection didn't trigger" >&2
+      echo "NOTE: Check if guest driver assembly needs debugging" >&2
+    fi
   else
-    echo "FAIL: no virtio-net RX injection marker observed" >&2
-    echo "NOTE: This may indicate the test packet injection didn't trigger" >&2
-    echo "NOTE: Check if guest driver assembly needs debugging" >&2
-  fi
-else
   echo "FAIL: missing expected VMX markers" >&2
 fi
 

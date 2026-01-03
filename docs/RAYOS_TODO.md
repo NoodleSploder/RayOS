@@ -204,7 +204,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 				- ✅ Packet loopback infrastructure: TX handler gathers packet bytes, swaps src/dst MACs, and injects into RX descriptors.
 				- ✅ Feature flags: `vmm_hypervisor_net_test` selects virtio-net device at startup (for testing); default remains virtio-blk.
 				- ✅ Guest driver generator: `RAYOS_GUEST_NET_ENABLED=1` emits deterministic guest blob; descriptor layout and avail/used writes corrected.
-				- ✅ End-to-end verified: headless smoke test `scripts/test-vmm-hypervisor-net.sh` observes guest TX → hypervisor loopback → guest RX injection.
+				- ✅ End-to-end verified: headless smoke test `scripts/test-vmm-hypervisor-net.sh` now checks for `G:NET_RX` so guest RX completion is asserted.
 				- Next steps:
 					- Minor log cleanups and audit of remaining debug traces (done recently; additional reductions possible).
 					- Add a deterministic guest-driven echo test or user-space test harness to broaden coverage.
