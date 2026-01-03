@@ -14,6 +14,12 @@ use core::convert::TryInto;
 use core::ptr;
 use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
+// Test hook: when non-zero, cause inject_guest_interrupt to always fail (unit tests).
+#[cfg(any(test, feature = "vmm_inject_force_all_fail"))]
+pub(crate) static INJECT_FORCE_FAIL: AtomicU32 = AtomicU32::new(0);
+#[cfg(not(any(test, feature = "vmm_inject_force_all_fail")))]
+static INJECT_FORCE_FAIL: AtomicU32 = AtomicU32::new(0);
+
 use crate::guest_driver_template::{
     GUEST_DRIVER_BINARY, GUEST_DRIVER_DESC_DATA_OFFSET, GUEST_DRIVER_DESC_DATA_PTR_OFFSET,
 };
@@ -49,6 +55,9 @@ const GUEST_PHYSICAL_ADDRESS: u64 = 0x2400;
 const VMCS_ENTRY_INTERRUPTION_INFO: u64 = 0x4016;
 // Default vector to use for virtio-mmio notifications (pick a free vector in the usable range).
 const VIRTIO_MMIO_IRQ_VECTOR: u8 = 0x20; // IRQ vector 32 (first non-reserved)
+
+// Bounded retry attempts for pending interrupt injection
+const MAX_INT_INJECT_ATTEMPTS: u32 = 5;
 
 // 64-bit control fields
 const VMCS_LINK_POINTER: u64 = 0x2800;
@@ -631,6 +640,10 @@ struct VirtioMmioState {
     interrupt_pending_attempts: AtomicU32,
     // Last retry tick (TIMER_TICKS) used for exponential backoff scheduling.
     interrupt_pending_last_tick: AtomicU64,
+    // Metrics: counters for diagnostics and observability.
+    interrupt_backoff_total_attempts: AtomicU32,
+    interrupt_backoff_succeeded: AtomicU32,
+    interrupt_backoff_failed_max: AtomicU32,
     device_id: AtomicU32,
     queue_notify_count: AtomicU32,
     queue_desc_address: [AtomicU64; 2],
@@ -666,6 +679,9 @@ impl VirtioMmioState {
             // Track the last TIMER_TICKS when a retry attempt was made to implement
             // exponential backoff scheduling.
             interrupt_pending_last_tick: AtomicU64::new(0),
+            interrupt_backoff_total_attempts: AtomicU32::new(0),
+            interrupt_backoff_succeeded: AtomicU32::new(0),
+            interrupt_backoff_failed_max: AtomicU32::new(0),
             device_id: AtomicU32::new(device_id),
             queue_notify_count: AtomicU32::new(0),
             queue_desc_address: [AtomicU64::new(0), AtomicU64::new(0)],
@@ -2216,6 +2232,12 @@ fn log_virtq_descriptors(base: u64, queue_size: u32) {
 
 #[allow(unreachable_code)]
 fn inject_guest_interrupt(vector: u8) -> bool {
+    // Allow unit-tests / runtime force to make injection fail.
+    if INJECT_FORCE_FAIL.load(Ordering::Relaxed) != 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:FORCED_VMWRITE_FAIL\n");
+        return false;
+    }
+
     // Format VM-entry interruption info: valid bit (31) + vector in low bits.
     let _val = (1u64 << 31) | (vector as u64 & 0xFF);
 
@@ -3094,6 +3116,132 @@ unsafe fn log_guest_vmcs_state() {
             crate::serial_write_hex_u64(*field);
             crate::serial_write_str("\n");
         }
+    }
+}
+
+fn try_retry_pending_if_due() {
+    if VIRTIO_MMIO_STATE.interrupt_pending.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+
+    let attempts = VIRTIO_MMIO_STATE
+        .interrupt_pending_attempts
+        .load(Ordering::Relaxed);
+    let last_tick = VIRTIO_MMIO_STATE
+        .interrupt_pending_last_tick
+        .load(Ordering::Relaxed);
+    // Exponential backoff base (in timer ticks). This is intentionally small
+    // for unit tests; real deployments can increase the cap if necessary.
+    let base_backoff: u64 = 1;
+    let max_backoff: u64 = 128;
+    // Compute backoff: min(2^attempts * base, max_backoff)
+    let mut backoff = base_backoff.wrapping_shl(attempts.min(63));
+    if backoff == 0 {
+        backoff = max_backoff;
+    }
+    if backoff > max_backoff {
+        backoff = max_backoff;
+    }
+    let now = crate::TIMER_TICKS.load(Ordering::Relaxed);
+    // If we've already exceeded attempts cap, give up.
+    if attempts >= MAX_INT_INJECT_ATTEMPTS {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_FAILED_MAX\n");
+        VIRTIO_MMIO_STATE.interrupt_pending.store(0, Ordering::Relaxed);
+        VIRTIO_MMIO_STATE
+            .interrupt_pending_attempts
+            .store(0, Ordering::Relaxed);
+        VIRTIO_MMIO_STATE
+            .interrupt_pending_last_tick
+            .store(0, Ordering::Relaxed);
+        return;
+    }
+
+    if now.wrapping_sub(last_tick) < backoff {
+        // Not yet time to retry; report wait interval for diagnostic purposes.
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_WAITING\n");
+        return;
+    }
+
+    // Time to retry.
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_ATTEMPT\n");
+    if inject_guest_interrupt(VIRTIO_MMIO_IRQ_VECTOR) {
+        VIRTIO_MMIO_STATE.interrupt_pending.store(0, Ordering::Relaxed);
+        VIRTIO_MMIO_STATE
+            .interrupt_pending_attempts
+            .store(0, Ordering::Relaxed);
+        VIRTIO_MMIO_STATE
+            .interrupt_pending_last_tick
+            .store(0, Ordering::Relaxed);
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_OK\n");
+    } else {
+        let next = attempts.wrapping_add(1);
+        VIRTIO_MMIO_STATE
+            .interrupt_pending_attempts
+            .store(next, Ordering::Relaxed);
+        VIRTIO_MMIO_STATE
+            .interrupt_pending_last_tick
+            .store(now, Ordering::Relaxed);
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_FAIL\n");
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_ATTEMPT=");
+        crate::serial_write_hex_u64(next as u64);
+        crate::serial_write_str("\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::sync::atomic::Ordering;
+
+    #[test]
+    fn backoff_retry_unit_test() {
+        // Force injects to fail using the in-crate test hook.
+        INJECT_FORCE_FAIL.store(1, Ordering::Relaxed);
+
+        // Initialize pending state.
+        VIRTIO_MMIO_STATE.interrupt_pending.store(1, Ordering::Relaxed);
+        VIRTIO_MMIO_STATE
+            .interrupt_pending_attempts
+            .store(0, Ordering::Relaxed);
+        VIRTIO_MMIO_STATE
+            .interrupt_pending_last_tick
+            .store(0, Ordering::Relaxed);
+
+        // Reset metrics.
+        VIRTIO_MMIO_STATE
+            .interrupt_backoff_total_attempts
+            .store(0, Ordering::Relaxed);
+        VIRTIO_MMIO_STATE
+            .interrupt_backoff_succeeded
+            .store(0, Ordering::Relaxed);
+        VIRTIO_MMIO_STATE
+            .interrupt_backoff_failed_max
+            .store(0, Ordering::Relaxed);
+
+        // Run retries until the helper gives up.
+        for i in 0..(MAX_INT_INJECT_ATTEMPTS + 2) {
+            // Advance timer sufficiently each iteration to allow a retry.
+            crate::TIMER_TICKS.store(i as u64 * 256, Ordering::Relaxed);
+            try_retry_pending_if_due();
+        }
+
+        let failed = VIRTIO_MMIO_STATE
+            .interrupt_backoff_failed_max
+            .load(Ordering::Relaxed);
+        assert!(failed >= 1, "expected at least one failed-max event");
+
+        let total = VIRTIO_MMIO_STATE
+            .interrupt_backoff_total_attempts
+            .load(Ordering::Relaxed);
+        assert!(total >= MAX_INT_INJECT_ATTEMPTS, "expected attempts >= MAX");
+
+        // Ensure no successful injections were recorded.
+        let succ = VIRTIO_MMIO_STATE
+            .interrupt_backoff_succeeded
+            .load(Ordering::Relaxed);
+        assert_eq!(succ, 0);
+
+        INJECT_FORCE_FAIL.store(0, Ordering::Relaxed);
     }
 }
 
