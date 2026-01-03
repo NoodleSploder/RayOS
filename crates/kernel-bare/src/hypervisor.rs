@@ -754,6 +754,12 @@ fn init_hypervisor_mmio() {
         if MMIO_REGIONS_INITIALIZED {
             return;
         }
+
+        #[cfg(feature = "vmm_virtio_console")]
+        {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:COMPILED\n");
+        }
+
         let region = MmioRegion {
             base: MMIO_COUNTER_BASE,
             size: MMIO_COUNTER_SIZE,
