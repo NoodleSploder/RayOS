@@ -545,6 +545,7 @@ const VIRTIO_QUEUE_READY_VALUE: u64 = 1;
 const VIRTQ_DESC_SIZE: u64 = 16;
 const MAX_VIRTQ_DESC_TO_LOG: u32 = 4;
 const MAX_DESC_PAYLOAD_LOG_BYTES: usize = 16;
+const DESC_RESPONSE_BYTE: u8 = 0x42;
 const MAX_VIRTQ_DESC_CHAIN_ENTRIES: usize = 8;
 const VIRTQ_DESC_F_NEXT: u16 = 1;
 const VIRTQ_DESC_F_WRITE: u16 = 2;
@@ -1596,6 +1597,24 @@ fn write_u32(gpa: u64, value: u32) -> bool {
     write_guest_bytes(gpa, &value.to_le_bytes())
 }
 
+fn fill_descriptor_payload(addr: u64, len: u32, pattern: u8) -> bool {
+    if len == 0 {
+        return true;
+    }
+    let mut remaining = len as usize;
+    let mut cur = addr;
+    let mut chunk_buf = [pattern; PAGE_SIZE];
+    while remaining > 0 {
+        let chunk = cmp::min(remaining, PAGE_SIZE);
+        if !write_guest_bytes(cur, &chunk_buf[..chunk]) {
+            return false;
+        }
+        remaining -= chunk;
+        cur += chunk as u64;
+    }
+    true
+}
+
 fn read_virtq_descriptor(base: u64, index: u32) -> Option<VirtqDesc> {
     let offset = base.wrapping_add((index as u64) * VIRTQ_DESC_SIZE);
     let mut buf = [0u8; VIRTQ_DESC_SIZE as usize];
@@ -1669,6 +1688,13 @@ fn log_descriptor_chain(base: u64, queue_size: u32, start_index: u32) -> Option<
         crate::serial_write_hex_u64(desc.next as u64);
         crate::serial_write_str("\n");
         log_descriptor_payload(desc.addr, desc.len);
+        if desc.flags & VIRTQ_DESC_F_WRITE != 0 {
+            if fill_descriptor_payload(desc.addr, desc.len, DESC_RESPONSE_BYTE) {
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:DESC_FILL=SUCCESS\n");
+            } else {
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:DESC_FILL_FAIL\n");
+            }
+        }
         total_len = total_len.wrapping_add(desc.len);
         if desc.flags & VIRTQ_DESC_F_NEXT == 0 {
             return Some(total_len);
