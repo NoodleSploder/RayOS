@@ -189,8 +189,21 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 			- Milestone reached: VM-entry succeeds; deterministic VM-exits for `HLT` and port I/O; guest debug output via `out 0xE9` is trapped and printed (`RAYOS_GUEST_E9:<byte>`). See `scripts/test-vmm-hypervisor-boot.sh` markers `RAYOS_VMM:VMX:VMEXIT` + `RAYOS_GUEST_E9:`.
 			- ✅ Handle `EPT_VIOLATION` as a first-class dispatch path so we can emulate MMIO/PCI BARs for virtio devices (MMIO counter region + register/decoder/handler chain exercises the new path in `scripts/test-vmm-hypervisor-boot.sh`).
 		- ⏳ Implement virtqueue transport plumbing (virtio-pci modern or legacy) for in-OS virtio devices.
-			- ✅ Exercise a minimal virtio-MMIO queue by logging descriptor/driver/used addresses, queue-notify events, the first avail/used entries, payload bytes from each descriptor chain, and by tracing descriptor chains into a simple used-ring completion while writing response bytes into descriptors marked `WRITE` (see [virtio handler](crates/kernel-bare/src/hypervisor.rs#L617-L970) and [guest code emitter](crates/kernel-bare/src/hypervisor.rs#L248-L319)).
-		- ⏳ Implement guest memory mapping (GPA→HPA/EPT) + safe host accessors for device models.
+			- ✅ Exercise a minimal virtio-MMIO queue by logging descriptor/driver/used addresses, queue-notify events, the first avail/used entries, payload bytes from each descriptor chain, and by tracing descriptor chains into a used-ring completion while implementing a virtio-blk-like request path (READ fills pattern into writable data descriptors, WRITE logs buffers, GET_ID fills identity, and status byte is written; supports multiple data descriptors).
+			- ✅ Virtio-blk now has a tiny in-memory disk backing: `VIRTIO_BLK_T_OUT` writes persist and subsequent `VIRTIO_BLK_T_IN` reads return the stored sector bytes (default disk initialized to the old `0xA5` pattern).
+			- ✅ Virtio-MMIO interrupt registers are modeled (`InterruptStatus`/`InterruptAck`) and the VMM sets the VRING bit when publishing used-ring entries (see `INT_STATUS_SET` markers).
+			- ✅ Virtio device dispatch scaffolding: MMIO state now tracks `device_id` and the descriptor-chain handler dispatches to either `handle_virtio_blk_chain` or `handle_virtio_net_chain` based on the active device. Enables future multi-device scenarios without recompiling.
+			- ✅ Deterministic guest virtqueue setup now uses a **prebuilt guest driver blob** copied into guest RAM (instead of runtime instruction emission):
+				- Blob: `crates/kernel-bare/src/guest_driver_template.bin` (loaded + patched by the VMM).
+				- Generator: `scripts/generate_guest_driver.rs` (regenerates the blob deterministically; supports env vars like `RAYOS_GUEST_REQ0_TYPE`, `RAYOS_GUEST_REQ1_TYPE`, `RAYOS_GUEST_REQ0_SECTOR`, `RAYOS_GUEST_REQ1_SECTOR`).
+				- Default scenario submits **two requests** in one notify: READ (desc chain starting at 0) + GET_ID (desc chain starting at 3), with completion verified via `STATUS_VERIFY`, `USED_ENTRY_READBACK`, and `USED_IDX_READBACK` markers in `scripts/test-vmm-hypervisor-boot.sh`.
+			- ⏳ Implement basic virtio-net device model (TX+RX queues):
+				- ✅ Scaffolding in place: TX queue logs packet lengths + Ethernet types; RX queue marks buffers ready.
+				- ✅ MAC address assignment: device config space (offset 0x100+) exposes MAC address for virtio-net devices (fixed RAYOS MAC).
+				- ✅ Multi-device dispatch: MMIO state tracks device_id; descriptor-chain handler dispatches to device-specific handlers based on configured device type.
+				- ✅ Packet loopback infrastructure: TX handler gathers packet bytes + swaps MAC addresses; RX handler injects looped-back packets into guest buffers (static loopback buffer stores most recent TX packet).
+				- Next: (1) extend guest driver to emit virtio-net TX requests (needs parameterizable network packet generation in `generate_guest_driver.rs`), (2) verify RX injection delivers packet to guest, (3) test end-to-end echo with guest receiving looped packet.
+			- ✅ Implement guest memory mapping (GPA→HPA/EPT) + safe host accessors for device models (see [crates/kernel-bare/src/hypervisor.rs](crates/kernel-bare/src/hypervisor.rs#L1528-L1615)).
 		- ✅ Implement scanout publication contract in the kernel (kernel-bare `GuestSurface` + `frame_seq` + Presented/Hidden gating).
 		- ✅ Provide a synthetic scanout producer for end-to-end validation (`dev_scanout`).
 		- ⏳ Implement virtio-gpu device model (scanout-focused) in the RayOS VM supervisor.
