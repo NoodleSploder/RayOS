@@ -781,6 +781,9 @@ fn init_hypervisor_mmio() {
         // Emit a deterministic marker when virtio-console is selected so smoke tests
         // can detect dispatch readiness without needing guest traffic.
         let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:DEVICE_ID=");
+        crate::serial_write_hex_u64(dev as u64);
+        crate::serial_write_str("\n");
         if dev == VIRTIO_CONSOLE_DEVICE_ID {
             crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:ENABLED\n");
         }
