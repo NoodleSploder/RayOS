@@ -198,15 +198,20 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	- [✅] Add/keep a headless smoke test that proves: boot → enter guest → exit loop deterministically (existing `test-vmm-hypervisor-boot.sh` is the baseline; it now also validates virtio-gpu selftest + IRQ injection markers).
 	- [✅] IRQ delivery: VM-entry injection implemented; **LAPIC fallback path** added and exercised via a forced-inject smoke run (`vmm_inject_force_fail` feature). MSI fallback implemented and exercised via forced-MSI run.
 	- [✅] Bounded retry attempts added for pending interrupt injection (MAX=5). Exponential backoff implemented and a boot-time backoff selftest is available (`vmm_inject_backoff_selftest`).
-	- [note] Unit-style tests were attempted, but running `cargo test` for `kernel-bare` requires toolchain flags in this environment; for now the boot selftest is treated as canonical verification and converting the selftest to host-runnable unit tests is scheduled (see TODO item).
+	- [note] Unit-style tests were attempted; a host-runnable unit test exists (`crates/kernel-bare/tests/backoff_unit.rs`) but running `cargo test` for `kernel-bare` on the host is currently blocked by a Cargo lockfile / toolchain mismatch (lock file version 4 requires `-Znext-lockfile-bump` or a toolchain update). Converting and unblocking the selftest for stable `cargo test` is scheduled (see TODO below).
 
-	P1 (Must-have): boot Linux headless under RayOS VMM
-	- [ ] Virtqueue transport plumbing is “real” (not only a scripted guest driver blob): guest can drive virtqueues with correct notifications and interrupts.
-	- [ ] Virtio-blk backed by a real persistent image (not only in-memory) so a Linux rootfs can persist across RayOS boots.
-	- [ ] Virtio-console or minimal serial transport for guest logs/markers (so boot readiness is observable without a GUI). (scaffolded - dispatch + basic host logging implemented; needs queue parsing, control/data handling)
-	- [ ] Linux boots to a deterministic “guest ready” marker under RayOS (analogue of `RAYOS_LINUX_GUEST_READY`, but in-OS path).
+	P1 (Must-have): boot Linux headless under RayOS VMM — status: **in progress**
+	- [x] Virtqueue transport plumbing (descriptor chain logging, avail/used handling, queue notify handling) — basic plumbing exercised by deterministic guest driver blob.
+	- [x] Virtio-blk minimal in-memory backing (READ/WRITE/GET_ID) — works with the deterministic guest blob; **persistent image backing remains TODO**.
+	- [~] Virtio-console or minimal serial transport for guest logs/markers — **scaffolded**: dispatch + basic host logging implemented (markers: `RAYOS_VMM:VIRTIO_CONSOLE:COMPILED` / `ENABLED` / `CHAIN_HANDLED` / `RECV`). Remaining: queue parsing, control/data handling, and guest-side test cases.
+	- [ ] Linux boots to a deterministic “guest ready” marker under RayOS (analogue of `RAYOS_LINUX_GUEST_READY`) — planned after persistent disk + console visibility.
 	- [ ] Add a headless test: boot RayOS → boot Linux headless under VMM → assert guest-ready marker → shutdown.
 
+	**Notes / Implementation highlights:**
+	- IRQ delivery robustness: VM-entry injection implemented using `VMCS_ENTRY_INTERRUPTION_INFO` with LAPIC and MSI fallbacks (forced-fail smoke features exercise each path).
+	- Observability: deterministic markers added for lifecycle and device behavior (e.g., `RAYOS_VMM:VMX:*`, `RAYOS_VMM:VIRTIO_MMIO:*`, `RAYOS_LINUX_DESKTOP_PRESENTED`, `RAYOS_LINUX_DESKTOP_FIRST_FRAME`).
+	- Testing: smoke script `scripts/test-vmm-hypervisor-boot.sh` now exercises VMX bring-up, virtio-gpu selftest, IRQ fallback modes, and the backoff selftest.
+	- TODO: convert boot selftest to host unit tests (unblock by resolving Cargo lockfile/toolchain mismatch or extracting logic to a host-test crate).
 	P2 (Must-have for desktop): single-surface scanout into RayOS compositor
 	- [ ] Wire virtio-gpu device model to the *real* virtqueue transport (controlq + cursorq if needed; start with scanout-only).
 	- [ ] Choose scanout backing (start CPU-visible shared backing: guest writes, RayOS blits).

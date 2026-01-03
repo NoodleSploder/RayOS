@@ -149,6 +149,44 @@ QEMU_DISPLAY=sdl ./scripts/test-dev-scanout.sh
 - `./scripts/test-boot.sh` — interactive boot
 - `./scripts/test-volume-persistence.sh` — validates Volume persistence using a QEMU disk
 
+## Hypervisor / In-OS VMM (experimental)
+
+RayOS includes an experimental in-kernel VMM (VMX-first on x86_64) so we can run a headless Linux guest inside RayOS without relying on an external QEMU instance for production-like validation. This work is intentionally incremental; the current status is "P0 complete, P1 in progress" (see `docs/RAYOS_TODO.md` for the full roadmap).
+
+Key implemented pieces (high level):
+
+- VMX bring-up and VMCS setup with EPT/GPA ↔ HPA mapping for guest memory.
+- Guest VM entry injection of virtio IRQs via the VMCS `VM_ENTRY_INTERRUPTION_INFO` field.
+- IRQ delivery fallbacks: LAPIC MMIO write fallback and MSI-style APIC write fallback when VM-entry injection fails (test hooks exercise these paths).
+- Bounded retry + exponential backoff for pending interrupt injection, plus a boot-time selftest and metrics counters.
+- Virtio-MMIO plumbing: descriptor chain logging, avail/used handling, queue-notify, and basic virtio-blk handler (in-memory backing).
+- Virtio-gpu: control-path stub + selftest that publishes scanout/presentation markers (`RAYOS_LINUX_DESKTOP_PRESENTED`, `RAYOS_LINUX_DESKTOP_FIRST_FRAME`).
+- Virtio-console: scaffolded device model + basic dispatch and host logging (markers: `RAYOS_VMM:VIRTIO_CONSOLE:*`); queue handling & I/O remain to be implemented.
+
+How to exercise (dev / smoke tests):
+
+- Hypervisor boot smoke test (headless):
+
+```bash
+# Run the hypervisor boot smoke test (headless) which validates VMX bring-up and device selftests
+RAYOS_KERNEL_FEATURES="vmm_hypervisor,vmm_hypervisor_smoke" ./scripts/test-vmm-hypervisor-boot.sh
+
+# Add device features / forced-failure tests:
+# - virtio-gpu selftest: add vmm_virtio_gpu
+# - virtio-console presence: add vmm_virtio_console
+# - force VMWRITE injection failures: add vmm_inject_force_fail
+# - force MSI fallback: add vmm_inject_force_msi_fail
+# - exercise backoff selftest: add vmm_inject_force_all_fail,vmm_inject_backoff_selftest
+```
+
+Current work & next steps:
+
+- Convert the backoff boot selftest to a stable host-runnable unit test (blocked by a Cargo lockfile / toolchain mismatch; issue tracked in `docs/RAYOS_TODO.md`).
+- Implement virtio-console queue parsing/control/data handling and end-to-end guest console testcases.
+- Add persistent virtio-blk backing and a headless Linux boot test that asserts a deterministic guest-ready marker.
+
+See `docs/RAYOS_TODO.md` for the hypervisor roadmap and more details.
+
 ## Documentation
 
 Start here:
