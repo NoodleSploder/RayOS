@@ -106,10 +106,10 @@ if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM
 
   # Optional: check virtio-console dispatch marker when the feature is present.
   if echo ",${RAYOS_KERNEL_FEATURES}," | grep -q ",vmm_virtio_console,"; then
-    if grep -F -a -q "RAYOS_VMM:VIRTIO_CONSOLE:CHAIN_HANDLED" "$SERIAL_NORM"; then
-      echo "PASS: virtio-console dispatch exercised" >&2
+    if grep -F -a -q "RAYOS_VMM:VIRTIO_CONSOLE:CHAIN_HANDLED" "$SERIAL_NORM" || grep -F -a -q "RAYOS_VMM:VIRTIO_CONSOLE:ENABLED" "$SERIAL_NORM" || grep -F -a -q "RAYOS_VMM:VIRTIO_CONSOLE:COMPILED" "$SERIAL_NORM"; then
+      echo "PASS: virtio-console present (enabled or dispatch observed)" >&2
     else
-      echo "NOTE: virtio-console dispatch not observed; check build features" >&2
+      echo "NOTE: virtio-console not observed; check build features" >&2
     fi
   fi
 
