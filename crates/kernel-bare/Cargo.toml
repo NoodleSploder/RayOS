@@ -45,6 +45,9 @@ vmm_hypervisor = []
 # allowing RayOS to continue into the interactive loop.
 vmm_hypervisor_smoke = []
 
+# Development-only: test virtio-net packet loopback (device starts as virtio-net instead of virtio-blk).
+vmm_hypervisor_net_test = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"

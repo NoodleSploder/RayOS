@@ -608,11 +608,16 @@ struct VirtioMmioState {
 
 impl VirtioMmioState {
     const fn new() -> Self {
+        #[cfg(feature = "vmm_hypervisor_net_test")]
+        let device_id = VIRTIO_NET_DEVICE_ID;
+        #[cfg(not(feature = "vmm_hypervisor_net_test"))]
+        let device_id = VIRTIO_MMIO_DEVICE_ID_VALUE;
+        
         Self {
             status: AtomicU32::new(0),
             driver_features: AtomicU32::new(0),
             interrupt_status: AtomicU32::new(0),
-            device_id: AtomicU32::new(VIRTIO_MMIO_DEVICE_ID_VALUE),
+            device_id: AtomicU32::new(device_id),
             queue_notify_count: AtomicU32::new(0),
             queue_desc_address: AtomicU64::new(0),
             queue_driver_address: AtomicU64::new(0),
@@ -1964,6 +1969,34 @@ fn handle_virtio_blk_chain(header: VirtqDesc, data_descs: &[VirtqDesc], status_d
 }
 
 fn handle_virtio_net_chain(queue_id: u16, data_descs: &[VirtqDesc]) {
+    // Optionally inject a test packet on startup in network test mode
+    #[cfg(feature = "vmm_hypervisor_net_test")]
+    {
+        static mut TEST_PACKET_INJECTED: bool = false;
+        if !unsafe { TEST_PACKET_INJECTED } && queue_id == VIRTIO_NET_RX_QUEUE {
+            unsafe { TEST_PACKET_INJECTED = true; }
+            // Create a minimal test Ethernet frame: dest MAC, src MAC, ethertype, payload
+            let mut test_pkt = [0u8; 64];
+            // Destination MAC: AA:BB:CC:DD:EE:FF
+            test_pkt[0] = 0xAA; test_pkt[1] = 0xBB; test_pkt[2] = 0xCC;
+            test_pkt[3] = 0xDD; test_pkt[4] = 0xEE; test_pkt[5] = 0xFF;
+            // Source MAC: 52:55:4F:53:00:01 (RAYOS)
+            test_pkt[6] = 0x52; test_pkt[7] = 0x55; test_pkt[8] = 0x4F;
+            test_pkt[9] = 0x53; test_pkt[10] = 0x00; test_pkt[11] = 0x01;
+            // EtherType: 0x0800 (IPv4)
+            test_pkt[12] = 0x08; test_pkt[13] = 0x00;
+            // Payload: pattern
+            for i in 14..64 {
+                test_pkt[i] = 0x42; // 'B'
+            }
+            unsafe {
+                VIRTIO_NET_LOOPBACK_PKT[..64].copy_from_slice(&test_pkt[..]);
+                VIRTIO_NET_LOOPBACK_PKT_LEN = 64;
+            }
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:NET_TEST_PKT_INJECTED len=64\n");
+        }
+    }
+    
     match queue_id {
         VIRTIO_NET_TX_QUEUE => {
             // TX queue: guest sends packets
@@ -1971,7 +2004,7 @@ fn handle_virtio_net_chain(queue_id: u16, data_descs: &[VirtqDesc]) {
             let mut ethertype = 0u16;
             let mut pkt_buf = [0u8; VIRTIO_NET_PKT_MAX];
             let mut pkt_off = 0usize;
-            
+
             for (idx, desc) in data_descs.iter().enumerate() {
                 if (desc.flags & VIRTQ_DESC_F_WRITE) == 0 {
                     pkt_len += desc.len;
@@ -1999,7 +2032,7 @@ fn handle_virtio_net_chain(queue_id: u16, data_descs: &[VirtqDesc]) {
             crate::serial_write_str(" count=");
             crate::serial_write_hex_u64(unsafe { VIRTIO_NET_TX_PACKETS as u64 });
             crate::serial_write_str("\n");
-            
+
             // Loopback: echo TX to RX (swap MAC addresses)
             if unsafe { VIRTIO_NET_LOOPBACK_ENABLED } && pkt_off >= 12 {
                 let mut loopback_pkt = pkt_buf;
