@@ -31,6 +31,14 @@ fn init_boot_info(boot_info_phys: u64) {
     MODEL_PHYS.store(bi.model_ptr, Ordering::Relaxed);
     MODEL_SIZE.store(bi.model_size, Ordering::Relaxed);
 
+    // Optional staged Linux guest artifacts.
+    LINUX_KERNEL_PHYS.store(bi.linux_kernel_ptr, Ordering::Relaxed);
+    LINUX_KERNEL_SIZE.store(bi.linux_kernel_size, Ordering::Relaxed);
+    LINUX_INITRD_PHYS.store(bi.linux_initrd_ptr, Ordering::Relaxed);
+    LINUX_INITRD_SIZE.store(bi.linux_initrd_size, Ordering::Relaxed);
+    LINUX_CMDLINE_PHYS.store(bi.linux_cmdline_ptr, Ordering::Relaxed);
+    LINUX_CMDLINE_SIZE.store(bi.linux_cmdline_size, Ordering::Relaxed);
+
     // Capture best-effort boot time baseline.
     BOOT_UNIX_SECONDS_AT_BOOT.store(bi.boot_unix_seconds, Ordering::Relaxed);
     BOOT_TIME_VALID.store(bi.boot_time_valid as u64, Ordering::Relaxed);
@@ -240,6 +248,12 @@ pub(crate) fn serial_write_hex_u64(mut value: u64) {
     }
 }
 
+pub(crate) fn serial_write_hex_u8(value: u8) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    serial_write_byte(HEX[((value >> 4) & 0xF) as usize]);
+    serial_write_byte(HEX[(value & 0xF) as usize]);
+}
+
 fn serial_write_u32_dec(mut value: u32) {
     let mut buf = [0u8; 10];
     let mut i = 0usize;
@@ -431,6 +445,44 @@ const PIT_HZ: u64 = 100;
 
 static MODEL_PHYS: AtomicU64 = AtomicU64::new(0);
 static MODEL_SIZE: AtomicU64 = AtomicU64::new(0);
+
+//=============================================================================
+// Linux guest artifacts (staged by UEFI bootloader; optional)
+//=============================================================================
+
+static LINUX_KERNEL_PHYS: AtomicU64 = AtomicU64::new(0);
+static LINUX_KERNEL_SIZE: AtomicU64 = AtomicU64::new(0);
+static LINUX_INITRD_PHYS: AtomicU64 = AtomicU64::new(0);
+static LINUX_INITRD_SIZE: AtomicU64 = AtomicU64::new(0);
+static LINUX_CMDLINE_PHYS: AtomicU64 = AtomicU64::new(0);
+static LINUX_CMDLINE_SIZE: AtomicU64 = AtomicU64::new(0);
+
+fn linux_kernel_ptr_and_len() -> Option<(*const u8, usize)> {
+    let phys = LINUX_KERNEL_PHYS.load(Ordering::Relaxed);
+    if phys == 0 || phys >= hhdm_phys_limit() {
+        return None;
+    }
+    let len = LINUX_KERNEL_SIZE.load(Ordering::Relaxed) as usize;
+    Some((phys_as_ptr::<u8>(phys), len))
+}
+
+fn linux_initrd_ptr_and_len() -> Option<(*const u8, usize)> {
+    let phys = LINUX_INITRD_PHYS.load(Ordering::Relaxed);
+    if phys == 0 || phys >= hhdm_phys_limit() {
+        return None;
+    }
+    let len = LINUX_INITRD_SIZE.load(Ordering::Relaxed) as usize;
+    Some((phys_as_ptr::<u8>(phys), len))
+}
+
+fn linux_cmdline_ptr_and_len() -> Option<(*const u8, usize)> {
+    let phys = LINUX_CMDLINE_PHYS.load(Ordering::Relaxed);
+    if phys == 0 || phys >= hhdm_phys_limit() {
+        return None;
+    }
+    let len = LINUX_CMDLINE_SIZE.load(Ordering::Relaxed) as usize;
+    Some((phys_as_ptr::<u8>(phys), len))
+}
 
 #[repr(C)]
 struct TinyLmHeader {
@@ -2037,6 +2089,15 @@ pub struct BootInfo {
     index_ptr: u64,
     index_size: u64,
 
+    // Optional Linux guest artifacts staged from the boot filesystem.
+    // 0/0 means "not present".
+    linux_kernel_ptr: u64,
+    linux_kernel_size: u64,
+    linux_initrd_ptr: u64,
+    linux_initrd_size: u64,
+    linux_cmdline_ptr: u64,
+    linux_cmdline_size: u64,
+
     // Best-effort UTC wall-clock baseline captured by the UEFI bootloader.
     // If unavailable, boot_time_valid=0 and boot_unix_seconds=0.
     boot_unix_seconds: u64,
@@ -2452,11 +2513,23 @@ struct VolRecHdr {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 struct VirtqDesc {
     addr: u64,
     len: u32,
     flags: u16,
     next: u16,
+}
+
+impl Default for VirtqDesc {
+    fn default() -> Self {
+        Self {
+            addr: 0,
+            len: 0,
+            flags: 0,
+            next: 0,
+        }
+    }
 }
 
 #[repr(C)]

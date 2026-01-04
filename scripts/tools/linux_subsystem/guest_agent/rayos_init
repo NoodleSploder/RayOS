@@ -3,11 +3,39 @@
 # Minimal init for RayOS-controlled Linux guest.
 # Boots from initramfs and immediately hands control to the RayOS guest agent.
 
+# Ensure we have usable device nodes even before devtmpfs is mounted.
+/bin/busybox mkdir -p /dev 2>/dev/null || true
+
+# /dev/console: char 5:1
+[ -e /dev/console ] || /bin/busybox mknod -m 600 /dev/console c 5 1 2>/dev/null || true
+
+# /dev/kmsg: char 1:11 (lets us force output into the kernel log, which should reach ttyS0 via printk)
+[ -e /dev/kmsg ] || /bin/busybox mknod -m 600 /dev/kmsg c 1 11 2>/dev/null || true
+
+emit_marker() {
+	# Try multiple sinks; at least one should be visible to the headless harness.
+	msg="$1"
+	for dev in /dev/kmsg /dev/console /dev/ttyS0; do
+		if [ -e "$dev" ]; then
+			# Write failures are fine; keep trying others.
+			echo "$msg" >"$dev" 2>/dev/null || true
+		fi
+	done
+}
+
+# Emit the legacy readiness marker as soon as init runs.
+if [ ! -e /tmp/rayos_guest_ready_emitted ]; then
+	emit_marker "RAYOS_LINUX_GUEST_READY"
+	: > /tmp/rayos_guest_ready_emitted 2>/dev/null || true
+fi
+
+# Prefer routing subsequent output to the console if possible.
+if [ -e /dev/console ]; then
+	exec </dev/console >/dev/console 2>/dev/console
+fi
+
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sys /sys 2>/dev/null || true
 mount -t devtmpfs dev /dev 2>/dev/null || true
-
-# Ensure agent speaks over the serial console.
-exec </dev/console >/dev/console 2>/dev/console
 
 exec /bin/sh /rayos_agent.sh

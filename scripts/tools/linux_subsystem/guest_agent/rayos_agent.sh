@@ -6,9 +6,29 @@
 
 set -u
 
+/bin/busybox mkdir -p /dev 2>/dev/null || true
+[ -e /dev/console ] || /bin/busybox mknod -m 600 /dev/console c 5 1 2>/dev/null || true
+
+[ -e /dev/kmsg ] || /bin/busybox mknod -m 600 /dev/kmsg c 1 11 2>/dev/null || true
+
+emit_line() {
+  msg="$1"
+  for dev in /dev/kmsg /dev/console /dev/ttyS0; do
+    if [ -e "$dev" ]; then
+      echo "$msg" >"$dev" 2>/dev/null || true
+    fi
+  done
+}
+
 exec </dev/console >/dev/console 2>/dev/console
 
-echo "RAYOS_LINUX_AGENT_READY"
+emit_line "RAYOS_LINUX_AGENT_READY"
+
+# Back-compat marker used by older headless bring-up checks.
+if [ ! -e /tmp/rayos_guest_ready_emitted ]; then
+  emit_line "RAYOS_LINUX_GUEST_READY"
+  : > /tmp/rayos_guest_ready_emitted 2>/dev/null || true
+fi
 
 MODE="${RAYOS_AGENT_MODE:-}"
 

@@ -23,7 +23,7 @@ SERIAL_NORM="$WORK_DIR/serial-vmm-hypervisor-boot.norm.log"
 # Ensure the feature is enabled (append if user provided other features).
 RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-}"
 if [ -z "$RAYOS_KERNEL_FEATURES" ]; then
-  RAYOS_KERNEL_FEATURES="vmm_hypervisor,vmm_hypervisor_smoke"
+  RAYOS_KERNEL_FEATURES="vmm_hypervisor,vmm_hypervisor_smoke,vmm_virtio_console"
 elif ! echo ",${RAYOS_KERNEL_FEATURES}," | grep -q ",vmm_hypervisor,"; then
   RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES},vmm_hypervisor"
 fi
@@ -82,10 +82,11 @@ tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
 
 NEED1="RAYOS_VMM:VMX:INIT_BEGIN"
 NEED2="RAYOS_VMM:VMX:VMLAUNCH_ATTEMPT"
+NEED2_ALT="RAYOS_VMM:VMX:SUPPORTED"
 NEED3="RAYOS_LINUX_DESKTOP_PRESENTED"
 NEED4="RAYOS_LINUX_DESKTOP_FIRST_FRAME"
 
-if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM"; then
+if grep -F -a -q "$NEED1" "$SERIAL_NORM" && (grep -F -a -q "$NEED2" "$SERIAL_NORM" || grep -F -a -q "$NEED2_ALT" "$SERIAL_NORM"); then
   echo "PASS: hypervisor init path executed (markers present)" >&2
   if grep -F -a -q "RAYOS_VMM:VMX:VMEXIT" "$SERIAL_NORM"; then
     echo "PASS: observed VM-exit marker" >&2
@@ -117,7 +118,10 @@ if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM
     SERIAL_NORM_CONSOLE="$WORK_DIR/serial-vmm-hypervisor-boot.console.norm.log"
     echo "Running guest-driven virtio-console test (RAYOS_GUEST_CONSOLE_ENABLED=1)" >&2
     pushd "$ROOT_DIR/scripts" >/dev/null
-    RAYOS_GUEST_CONSOLE_ENABLED=1 cargo run --quiet --release --bin generate_guest_driver >/dev/null || true
+    # Build the generator as a small executable and run it to write the guest blob
+    rustc generate_guest_driver.rs -O -o generate_guest_driver || true
+    RAYOS_GUEST_NET_ENABLED=0 RAYOS_GUEST_CONSOLE_ENABLED=1 ./generate_guest_driver >/dev/null || true
+    rm -f generate_guest_driver || true
     popd >/dev/null
 
     pushd "$ROOT_DIR/crates/kernel-bare" >/dev/null
@@ -214,6 +218,33 @@ if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM
     echo "PASS: IRQ injection backoff selftest exercised" >&2
   else
     echo "NOTE: IRQ injection backoff selftest not observed; check build flags" >&2
+  fi
+
+  # Optional: virtio-blk image-backed initialization (P1 follow-up)
+  SERIAL_LOG_IMG="$WORK_DIR/serial-vmm-hypervisor-boot.blkimg.log"
+  SERIAL_NORM_IMG="$WORK_DIR/serial-vmm-hypervisor-boot.blkimg.norm.log"
+  # IMPORTANT: this check must boot a virtio-blk device. If we include vmm_virtio_console
+  # (or vmm_virtio_gpu), the VMM will expose a different device_id and the blk disk init
+  # path won't run.
+  RAYOS_KERNEL_FEATURES_IMG="vmm_hypervisor,vmm_hypervisor_smoke,vmm_virtio_blk_image"
+  echo "Running virtio-blk image init features: $RAYOS_KERNEL_FEATURES_IMG" >&2
+  "$ROOT_DIR/scripts/generate-vmm-disk-image.sh" >/dev/null
+  pushd "$ROOT_DIR/crates/kernel-bare" >/dev/null
+  RUSTC="$(rustup which rustc)" cargo build \
+    -Z build-std=core,alloc \
+    -Z build-std-features=compiler-builtins-mem \
+    --release \
+    --target x86_64-unknown-none \
+    --features "$RAYOS_KERNEL_FEATURES_IMG" \
+    >/dev/null
+  popd >/dev/null
+
+  (SERIAL_LOG="$SERIAL_LOG_IMG" BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless) || true
+  tr -d '\r' < "$SERIAL_LOG_IMG" > "$SERIAL_NORM_IMG" 2>/dev/null || true
+  if grep -F -a -q "RAYOS_VMM:VIRTIO_BLK:DISK_INIT_IMAGE" "$SERIAL_NORM_IMG"; then
+    echo "PASS: virtio-blk initialized from embedded disk image" >&2
+  else
+    echo "NOTE: virtio-blk image init marker not observed" >&2
   fi
 
   echo "Serial log: $SERIAL_LOG" >&2

@@ -14,6 +14,8 @@ use core::convert::TryInto;
 use core::ptr;
 use core::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
+use crate::VirtqDesc;
+
 // Test hook: when non-zero, cause inject_guest_interrupt to always fail (unit tests).
 #[cfg(any(test, feature = "vmm_inject_force_all_fail"))]
 pub(crate) static INJECT_FORCE_FAIL: AtomicU32 = AtomicU32::new(0);
@@ -25,6 +27,9 @@ use crate::guest_driver_template::{
 };
 
 use crate::LAPIC_MMIO;
+
+#[cfg(feature = "vmm_virtio_gpu")]
+use crate::vmm::virtio_gpu::VirtioGpuDevice;
 
 // MSRs
 const IA32_FEATURE_CONTROL: u32 = 0x3A;
@@ -47,12 +52,15 @@ const CR4_VMXE: u64 = 1 << 13;
 const VMCS_VM_INSTRUCTION_ERROR: u64 = 0x4400;
 const VMCS_EXIT_REASON: u64 = 0x4402;
 const VMCS_EXIT_INTERRUPTION_INFO: u64 = 0x4404;
+const VMCS_EXIT_INTERRUPTION_ERROR_CODE: u64 = 0x4406;
 const VMCS_VMEXIT_INSTRUCTION_LEN: u64 = 0x440C;
 const VMCS_EXIT_QUALIFICATION: u64 = 0x6400;
 const GUEST_LINEAR_ADDRESS: u64 = 0x640A;
 const GUEST_PHYSICAL_ADDRESS: u64 = 0x2400;
 // VM-entry interruption info field (to request an injected interrupt on VM-entry).
 const VMCS_ENTRY_INTERRUPTION_INFO: u64 = 0x4016;
+// VM-entry exception error code field (used when injecting exceptions that push an error code).
+const VMCS_ENTRY_EXCEPTION_ERROR_CODE: u64 = 0x4018;
 // Default vector to use for virtio-mmio notifications (pick a free vector in the usable range).
 const VIRTIO_MMIO_IRQ_VECTOR: u8 = 0x20; // IRQ vector 32 (first non-reserved)
 
@@ -64,32 +72,55 @@ const VMCS_LINK_POINTER: u64 = 0x2800;
 const EPT_POINTER: u64 = 0x201A;
 const IO_BITMAP_A: u64 = 0x2000;
 const IO_BITMAP_B: u64 = 0x2002;
+const MSR_BITMAPS: u64 = 0x2004;
 
 // 32-bit control fields
 const PIN_BASED_VM_EXEC_CONTROL: u64 = 0x4000;
 const CPU_BASED_VM_EXEC_CONTROL: u64 = 0x4002;
+const EXCEPTION_BITMAP: u64 = 0x4004;
 const VM_EXIT_CONTROLS: u64 = 0x400C;
 const VM_ENTRY_CONTROLS: u64 = 0x4012;
 const SECONDARY_VM_EXEC_CONTROL: u64 = 0x401E;
+
+// VMX-preemption timer (optional): if supported, can be used to force periodic VM-exits for
+// debugging even when the guest is executing pure compute loops with no exits.
+const PIN_CTL_VMX_PREEMPTION_TIMER: u32 = 1 << 6;
+const VMX_PREEMPTION_TIMER_VALUE: u64 = 0x482E;
 
 // CPU-based execution control bits
 const CPU_CTL_HLT_EXITING: u32 = 1 << 7;
 const CPU_CTL_CPUID_EXITING: u32 = 1 << 21;
 const CPU_CTL_UNCOND_IO_EXITING: u32 = 1 << 24;
 const CPU_CTL_USE_IO_BITMAPS: u32 = 1 << 25;
+const CPU_CTL_USE_MSR_BITMAPS: u32 = 1 << 28;
 const CPU_CTL_ACTIVATE_SECONDARY_CONTROLS: u32 = 1 << 31;
 
 // Secondary processor-based execution controls
 const CPU2_CTL_ENABLE_EPT: u32 = 1 << 1;
+const CPU2_CTL_ENABLE_RDTSCP: u32 = 1 << 3;
+const CPU2_CTL_UNRESTRICTED_GUEST: u32 = 1 << 7;
+const CPU2_CTL_ENABLE_INVPCID: u32 = 1 << 12;
 
 // Guest-state fields (subset)
 const GUEST_CR0: u64 = 0x6800;
 const GUEST_CR3: u64 = 0x6802;
 const GUEST_CR4: u64 = 0x6804;
 
+// Control register virtualization fields.
+// See Intel SDM: VMCS encodings for CR0/CR4 guest/host mask and read shadow.
+const CR0_GUEST_HOST_MASK: u64 = 0x6000;
+const CR4_GUEST_HOST_MASK: u64 = 0x6002;
+const CR0_READ_SHADOW: u64 = 0x6004;
+const CR4_READ_SHADOW: u64 = 0x6006;
+
 const GUEST_RSP: u64 = 0x681C;
 const GUEST_RIP: u64 = 0x681E;
 const GUEST_RFLAGS: u64 = 0x6820;
+
+// Guest interruptibility/activity state (32-bit fields).
+// Useful to understand whether the guest is halting with interrupts disabled.
+const GUEST_INTERRUPTIBILITY_STATE: u64 = 0x4824;
+const GUEST_ACTIVITY_STATE: u64 = 0x4826;
 
 const GUEST_ES_SELECTOR: u64 = 0x0800;
 const GUEST_CS_SELECTOR: u64 = 0x0802;
@@ -142,11 +173,29 @@ const GUEST_CODE_SELECTOR: u16 = 1 << 3;
 const GUEST_DATA_SELECTOR: u16 = 2 << 3;
 const GUEST_TSS_SELECTOR: u16 = (GUEST_GDT_STATIC_ENTRIES as u16) << 3;
 const GUEST_SEGMENT_LIMIT_VALUE: u64 = 0x000F_FFFF;
-const GUEST_CS_AR_VALUE: u64 = 0xAF9B;
-const GUEST_DS_AR_VALUE: u64 = 0xCF93;
+const GUEST_CS_AR_VALUE: u64 = 0xA09B;
+const GUEST_DS_AR_VALUE: u64 = 0xC093;
+
+// Linux boot protocol requires __BOOT_CS=0x10 and __BOOT_DS=0x18.
+// We provide those selectors in the guest GDT when staging a Linux guest.
+const LINUX_BOOT_CS_SELECTOR: u16 = 0x10;
+const LINUX_BOOT_DS_SELECTOR: u16 = 0x18;
+const LINUX_TSS_SELECTOR: u16 = 0x20;
+const LINUX_GDT_STATIC_ENTRIES: usize = 4;
+const LINUX_GDT_ENTRY_COUNT: usize = LINUX_GDT_STATIC_ENTRIES + 2; // TSS descriptor takes two slots
+const LINUX_GDT_ENTRIES_64: [u64; LINUX_GDT_STATIC_ENTRIES] =
+    [0, 0, 0x00AF9B000000FFFF, 0x00CF93000000FFFF];
+const LINUX_GDT_LIMIT_VALUE: u64 = (LINUX_GDT_ENTRY_COUNT * 8 - 1) as u64;
+const LINUX_CS_AR_VALUE: u64 = 0xA09B;
 static mut GUEST_TSS_PHYS_VALUE: u64 = 0;
 static mut GUEST_TSS_LIMIT_VALUE: u64 = 0;
 static mut GUEST_TSS_AR_VALUE: u64 = 0;
+
+// Bring-up paging fixups sometimes need to synthesize new paging structures inside
+// guest RAM. Reserve a small region at the top of RAM (and mark it reserved in the
+// E820 map) so Linux won't reuse/overwrite these pages.
+const PF_FIXUP_PT_RESERVE_BYTES: u64 = 16 * 1024 * 1024;
+static mut PF_FIXUP_PT_ALLOC_NEXT_GPA: u64 = 0;
 const GUEST_TSS_PAGE_INDEX: usize = GUEST_IDT_PAGE_INDEX + 1;
 const TSS_IO_MAP_BASE: usize = 0x68;
 const TSS_IO_BITMAP_BYTES: usize = 8192;
@@ -207,6 +256,20 @@ fn prepare_guest_memory() -> bool {
 
     init_hypervisor_mmio();
 
+    #[cfg(feature = "vmm_linux_guest")]
+    {
+        let k = crate::linux_kernel_ptr_and_len().map(|(_, len)| len).unwrap_or(0);
+        let i = crate::linux_initrd_ptr_and_len().map(|(_, len)| len).unwrap_or(0);
+        let c = crate::linux_cmdline_ptr_and_len().map(|(_, len)| len).unwrap_or(0);
+        crate::serial_write_str("RAYOS_VMM:LINUX_BLOBS:KERNEL_SIZE=");
+        crate::serial_write_hex_u64(k as u64);
+        crate::serial_write_str(" INITRD_SIZE=");
+        crate::serial_write_hex_u64(i as u64);
+        crate::serial_write_str(" CMDLINE_SIZE=");
+        crate::serial_write_hex_u64(c as u64);
+        crate::serial_write_str("\n");
+    }
+
     for page in 0..GUEST_RAM_PAGES {
         unsafe {
             if GUEST_RAM_PHYS[page] != 0 {
@@ -222,7 +285,18 @@ fn prepare_guest_memory() -> bool {
     unsafe {
         build_guest_page_tables();
         install_guest_descriptor_tables();
-        install_guest_code();
+
+        #[cfg(feature = "vmm_linux_guest")]
+        {
+            if !try_install_linux_guest() {
+                install_guest_code();
+            }
+        }
+
+        #[cfg(not(feature = "vmm_linux_guest"))]
+        {
+            install_guest_code();
+        }
         GUEST_RAM_INITIALIZED = true;
     }
 
@@ -273,6 +347,25 @@ unsafe fn build_guest_page_tables() {
             );
         }
     }
+
+    // Paging sanity probe: log the translation chain for 0x0010_0200.
+    // In PAE mode this should be:
+    //   CR3 -> PDPT[0] -> PD[0] -> PT[0x100] (page 0x100000)
+    #[cfg(feature = "vmm_linux_guest")]
+    {
+        let pdpt0 = core::ptr::read_volatile(pdpt.add(0));
+        let pd0 = core::ptr::read_volatile(pd.add(0));
+        let pt0_phys = guest_ram_phys(GUEST_PT_PAGE_START);
+        let pt0 = crate::phys_to_virt(pt0_phys) as *const u64;
+        let pte = core::ptr::read_volatile(pt0.add(0x100));
+        crate::serial_write_str("RAYOS_VMM:PAGING:PDPT0=0x");
+        crate::serial_write_hex_u64(pdpt0);
+        crate::serial_write_str(" PD0=0x");
+        crate::serial_write_hex_u64(pd0);
+        crate::serial_write_str(" PTE[0x100]=0x");
+        crate::serial_write_hex_u64(pte);
+        crate::serial_write_str("\n");
+    }
 }
 
 unsafe fn install_guest_code() {
@@ -284,12 +377,401 @@ unsafe fn install_guest_code() {
     ptr::copy_nonoverlapping(GUEST_DRIVER_BINARY.as_ptr(), code_ptr, driver_len);
     let desc_data_gpa = code_gpa + GUEST_DRIVER_DESC_DATA_OFFSET as u64;
     let patch_ptr = code_ptr.add(GUEST_DRIVER_DESC_DATA_PTR_OFFSET) as *mut u64;
+    crate::serial_write_str("RAYOS_VMM:INSTALL_GUEST_CODE:PATCHING\n");
+    crate::serial_write_str("  code_gpa=0x");
+    crate::serial_write_hex_u64(code_gpa);
+    crate::serial_write_str("\n");
+    crate::serial_write_str("  desc_data_gpa=0x");
+    crate::serial_write_hex_u64(desc_data_gpa);
+    crate::serial_write_str("\n");
+    crate::serial_write_str("  ptr_offset=0x");
+    crate::serial_write_hex_u64(GUEST_DRIVER_DESC_DATA_PTR_OFFSET as u64);
+    crate::serial_write_str("\n");
+    // Dump 16 bytes from the descriptor data area in the code image for verification.
+    let desc_src = code_ptr.add(GUEST_DRIVER_DESC_DATA_OFFSET) as *const u8;
+    crate::serial_write_str("  desc_src_bytes=");
+    for i in 0..16 {
+        let b = core::ptr::read_volatile(desc_src.add(i));
+        crate::serial_write_hex_u8(b);
+        crate::serial_write_str(" ");
+    }
+    crate::serial_write_str("\n");
     ptr::write_unaligned(patch_ptr, desc_data_gpa);
+    crate::serial_write_str("  wrote patch ptr -> ");
+    crate::serial_write_hex_u64(core::ptr::read_unaligned(patch_ptr));
+    crate::serial_write_str("\n");
+
+    // Smoke-mode helper: if descriptor data appears non-zero, copy it into the
+    // virtqueue descriptors area and submit the avail ring so we can exercise
+    // virtio queue handling without requiring the guest to execute its rep movs.
+    #[cfg(feature = "vmm_hypervisor_smoke")]
+    {
+        // The built-in guest-driver template is blk/net oriented; when we're
+        // exposing virtio-gpu on the MMIO device ID, skip this generic submit
+        // (virtio-gpu has a dedicated selftest path).
+        let active_dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+        if active_dev == VIRTIO_GPU_DEVICE_ID {
+            return;
+        }
+
+        let mut d = [0u8; 16];
+        if read_guest_bytes(desc_data_gpa, &mut d) {
+            let any_nonzero = d.iter().any(|&b| b != 0);
+            if any_nonzero {
+                crate::serial_write_str("RAYOS_VMM:INSTALL_GUEST_CODE:SMOKE_COPY\n");
+                let ok = write_guest_bytes(VIRTIO_QUEUE_DESC_GPA, &d);
+                if ok {
+                    crate::serial_write_str("RAYOS_VMM:INSTALL_GUEST_CODE:SMOKE_COPY_OK\n");
+                    // avail.ring[0]=0
+                    let _ = write_u16(VIRTIO_QUEUE_DRIVER_GPA + VIRTQ_AVAIL_ENTRY_SIZE * 0, 0);
+                    // avail.idx = 1
+                    let _ = write_u16(VIRTIO_QUEUE_DRIVER_GPA + VIRTQ_AVAIL_INDEX_OFFSET, 1);
+                    // Ensure used.idx = 0
+                    let _ = write_u16(VIRTIO_QUEUE_USED_GPA + VIRTQ_USED_IDX_OFFSET, 0);
+                    crate::serial_write_str("RAYOS_VMM:INSTALL_GUEST_CODE:SMOKE_SUBMIT\n");
+                    log_virtq_descriptors(VIRTIO_QUEUE_DESC_GPA, VIRTIO_QUEUE_SIZE_VALUE as u32);
+                    log_virtq_avail(VIRTIO_QUEUE_DRIVER_GPA, VIRTIO_QUEUE_SIZE_VALUE as u32);
+                    process_virtq_queue(
+                        VIRTIO_QUEUE_DESC_GPA,
+                        VIRTIO_QUEUE_DRIVER_GPA,
+                        VIRTIO_QUEUE_USED_GPA,
+                        VIRTIO_QUEUE_SIZE_VALUE as u32,
+                        VIRTIO_QUEUE_READY_VALUE as u32,
+                        0,
+                    );
+                } else {
+                    crate::serial_write_str("RAYOS_VMM:INSTALL_GUEST_CODE:SMOKE_COPY_FAIL\n");
+                }
+            }
+        } else {
+            crate::serial_write_str("RAYOS_VMM:INSTALL_GUEST_CODE:SMOKE_READ_FAIL\n");
+        }
+    }
+}
+
+#[cfg(feature = "vmm_linux_guest")]
+unsafe fn try_install_linux_guest() -> bool {
+    // Linux/x86 boot protocol: https://www.kernel.org/doc/html/latest/arch/x86/boot.html
+    const SETUP_SECTS_OFFSET: usize = 0x01F1;
+    const HDRS_MAGIC_OFFSET: usize = 0x0202;
+    const VERSION_OFFSET: usize = 0x0206;
+    const TYPE_OF_LOADER_OFFSET: usize = 0x0210;
+    const LOADFLAGS_OFFSET: usize = 0x0211;
+    const RAMDISK_IMAGE_OFFSET: usize = 0x0218;
+    const RAMDISK_SIZE_OFFSET: usize = 0x021C;
+    const CMDLINE_PTR_OFFSET: usize = 0x0228;
+    const INITRD_ADDR_MAX_OFFSET: usize = 0x022C;
+    const XLOADFLAGS_OFFSET: usize = 0x0236;
+
+    // boot_params e820 map (struct boot_params in bootparam.h)
+    // Common offsets in the 4096-byte boot_params "zero page".
+    const E820_ENTRIES_OFFSET: usize = 0x01E8;
+    const E820_TABLE_OFFSET: usize = 0x02D0;
+    const E820_ENTRY_SIZE: usize = 20; // u64 addr + u64 size + u32 type (packed)
+    const E820_TYPE_RAM: u32 = 1;
+    const E820_TYPE_RESERVED: u32 = 2;
+
+    const BOOT_PARAMS_GPA: u64 = 0x0009_0000;
+    const CMDLINE_GPA: u64 = 0x0009_A000;
+    const KERNEL_LOAD_GPA: u64 = 0x0010_0000;
+
+    let (kptr, klen) = match crate::linux_kernel_ptr_and_len() {
+        Some(v) => v,
+        None => return false,
+    };
+    let kernel = core::slice::from_raw_parts(kptr, klen);
+    if kernel.len() < 0x0300 {
+        crate::serial_write_str("RAYOS_VMM:LINUX:KERNEL_TOO_SMALL\n");
+        return false;
+    }
+    if &kernel[HDRS_MAGIC_OFFSET..HDRS_MAGIC_OFFSET + 4] != b"HdrS" {
+        crate::serial_write_str("RAYOS_VMM:LINUX:BAD_HDRS_MAGIC\n");
+        return false;
+    }
+    let version = u16::from_le_bytes([kernel[VERSION_OFFSET], kernel[VERSION_OFFSET + 1]]);
+    let loadflags = kernel[LOADFLAGS_OFFSET];
+    let is_bzimage = version >= 0x0200 && (loadflags & 0x01) != 0;
+    if !is_bzimage {
+        crate::serial_write_str("RAYOS_VMM:LINUX:NOT_BZIMAGE\n");
+        return false;
+    }
+
+    // Optional sanity: if xloadflags exists, warn if kernel doesn't advertise a 64-bit entry.
+    if kernel.len() >= XLOADFLAGS_OFFSET + 2 {
+        let xloadflags = u16::from_le_bytes([kernel[XLOADFLAGS_OFFSET], kernel[XLOADFLAGS_OFFSET + 1]]);
+        if (xloadflags & 0x0001) == 0 {
+            crate::serial_write_str("RAYOS_VMM:LINUX:WARN_XLF_KERNEL_64_MISSING\n");
+        }
+    }
+
+    let mut setup_sects = kernel[SETUP_SECTS_OFFSET];
+    if setup_sects == 0 {
+        setup_sects = 4;
+    }
+    let setup_bytes = ((setup_sects as usize) + 1) * 512;
+    if setup_bytes >= kernel.len() {
+        crate::serial_write_str("RAYOS_VMM:LINUX:SETUP_SIZE_INVALID\n");
+        return false;
+    }
+
+    // Load protected-mode payload at 0x100000.
+    let payload = &kernel[setup_bytes..];
+    if !write_guest_bytes(KERNEL_LOAD_GPA, payload) {
+        crate::serial_write_str("RAYOS_VMM:LINUX:KERNEL_COPY_FAIL\n");
+        return false;
+    }
+
+    // Ensure boot_params is zero.
+    if !fill_descriptor_payload(BOOT_PARAMS_GPA, 4096, 0) {
+        crate::serial_write_str("RAYOS_VMM:LINUX:BOOT_PARAMS_CLEAR_FAIL\n");
+        return false;
+    }
+
+    // Populate boot_params by copying the setup area (boot sector + setup header)
+    // into the boot_params page at the same offsets.
+    // boot_params is 4096 bytes.
+    let copy_len = core::cmp::min(4096usize, setup_bytes);
+    if !write_guest_bytes(BOOT_PARAMS_GPA, &kernel[..copy_len]) {
+        crate::serial_write_str("RAYOS_VMM:LINUX:BOOT_PARAMS_SETUP_COPY_FAIL\n");
+        return false;
+    }
+
+    // Provide a minimal E820 map: low RAM, reserved hole, then high RAM.
+    // This is required for many kernels to size/locate usable memory correctly.
+    let write_e820_entry = |idx: usize, addr: u64, size: u64, typ: u32| -> bool {
+        let mut entry = [0u8; E820_ENTRY_SIZE];
+        entry[0..8].copy_from_slice(&addr.to_le_bytes());
+        entry[8..16].copy_from_slice(&size.to_le_bytes());
+        entry[16..20].copy_from_slice(&typ.to_le_bytes());
+        write_guest_bytes(
+            BOOT_PARAMS_GPA + (E820_TABLE_OFFSET as u64) + (idx as u64) * (E820_ENTRY_SIZE as u64),
+            &entry,
+        )
+    };
+
+    // Low RAM: 0..0x9F000 (leave BIOS/EBDA area alone).
+    if !write_e820_entry(0, 0x0000_0000, 0x0009_F000, E820_TYPE_RAM) {
+        crate::serial_write_str("RAYOS_VMM:LINUX:E820_WRITE_FAIL\n");
+        return false;
+    }
+    // High RAM: 1MB..guest RAM top (minus a small reserved region for VMM fixups).
+    let high_base = 0x0010_0000u64;
+    let ram_top = GUEST_RAM_SIZE_BYTES as u64;
+    let reserve_base = ram_top.saturating_sub(PF_FIXUP_PT_RESERVE_BYTES);
+    let high_top = reserve_base;
+    let high_size = high_top.saturating_sub(high_base);
+    if !write_e820_entry(1, high_base, high_size, E820_TYPE_RAM) {
+        crate::serial_write_str("RAYOS_VMM:LINUX:E820_WRITE_FAIL\n");
+        return false;
+    }
+    // Reserved top-of-RAM region for bring-up paging fixups.
+    if PF_FIXUP_PT_RESERVE_BYTES != 0 {
+        if !write_e820_entry(2, reserve_base, PF_FIXUP_PT_RESERVE_BYTES, E820_TYPE_RESERVED) {
+            crate::serial_write_str("RAYOS_VMM:LINUX:E820_WRITE_FAIL\n");
+            return false;
+        }
+    }
+    // e820_entries
+    if !write_guest_bytes(BOOT_PARAMS_GPA + (E820_ENTRIES_OFFSET as u64), &[3u8]) {
+        crate::serial_write_str("RAYOS_VMM:LINUX:E820_COUNT_WRITE_FAIL\n");
+        return false;
+    }
+
+    // Command line (NUL-terminated; classic placement below 0xA0000).
+    let mut cmdline_buf = [0u8; 1024];
+    let cmdline_len = match crate::linux_cmdline_ptr_and_len() {
+        Some((ptr, len)) => {
+            let src = core::slice::from_raw_parts(ptr, len);
+            let mut n = 0usize;
+            for &b in src.iter() {
+                if n + 1 >= cmdline_buf.len() {
+                    break;
+                }
+                cmdline_buf[n] = b;
+                n += 1;
+            }
+            while n > 0
+                && (cmdline_buf[n - 1] == b'\n'
+                    || cmdline_buf[n - 1] == b'\r'
+                    || cmdline_buf[n - 1] == 0)
+            {
+                n -= 1;
+            }
+
+            // Disable KASLR for deterministic early paging layout. Our bring-up path
+            // currently relies on predictable high-half virtual bases (physmap/kernel).
+            // Keep this minimal: just append " nokaslr" when there is room.
+            const NOKASLR: &[u8] = b" nokaslr";
+            if n + 1 + NOKASLR.len() < cmdline_buf.len() {
+                for &b in NOKASLR {
+                    cmdline_buf[n] = b;
+                    n += 1;
+                }
+            }
+
+            // Helps identify exactly which initcall we hang in.
+            const INITCALL_DEBUG: &[u8] = b" initcall_debug";
+            if n + 1 + INITCALL_DEBUG.len() < cmdline_buf.len() {
+                for &b in INITCALL_DEBUG {
+                    cmdline_buf[n] = b;
+                    n += 1;
+                }
+            }
+
+            cmdline_buf[n] = 0;
+            n + 1
+        }
+        None => {
+            let s = b"auto\0";
+            cmdline_buf[..s.len()].copy_from_slice(s);
+            s.len()
+        }
+    };
+
+    crate::serial_write_str("RAYOS_VMM:LINUX:CMDLINE_GPA=0x");
+    crate::serial_write_hex_u64(CMDLINE_GPA);
+    crate::serial_write_str(" len=0x");
+    crate::serial_write_hex_u64(cmdline_len as u64);
+    crate::serial_write_str(" text='");
+    for &b in cmdline_buf.iter().take(cmdline_len) {
+        if b == 0 {
+            break;
+        }
+        crate::serial_write_byte(b);
+    }
+    crate::serial_write_str("'\n");
+
+    if !write_guest_bytes(CMDLINE_GPA, &cmdline_buf[..cmdline_len]) {
+        crate::serial_write_str("RAYOS_VMM:LINUX:CMDLINE_COPY_FAIL\n");
+        return false;
+    }
+    if !write_u32(BOOT_PARAMS_GPA + (CMDLINE_PTR_OFFSET as u64), CMDLINE_GPA as u32) {
+        crate::serial_write_str("RAYOS_VMM:LINUX:CMDLINE_PTR_WRITE_FAIL\n");
+        return false;
+    }
+
+    if let Some(ptr) = read_u32(BOOT_PARAMS_GPA + (CMDLINE_PTR_OFFSET as u64)) {
+        crate::serial_write_str("RAYOS_VMM:LINUX:CMDLINE_PTR_RD=0x");
+        crate::serial_write_hex_u64(ptr as u64);
+        crate::serial_write_str("\n");
+    }
+
+    // type_of_loader = 0xFF (undefined).
+    if !write_guest_bytes(BOOT_PARAMS_GPA + (TYPE_OF_LOADER_OFFSET as u64), &[0xFF]) {
+        crate::serial_write_str("RAYOS_VMM:LINUX:TYPE_OF_LOADER_WRITE_FAIL\n");
+        return false;
+    }
+
+    // Initrd placement (optional).
+    if let Some((iptr, ilen)) = crate::linux_initrd_ptr_and_len() {
+        let initrd = core::slice::from_raw_parts(iptr, ilen);
+
+        let initrd_addr_max = if version >= 0x0203 {
+            u32::from_le_bytes([
+                kernel[INITRD_ADDR_MAX_OFFSET],
+                kernel[INITRD_ADDR_MAX_OFFSET + 1],
+                kernel[INITRD_ADDR_MAX_OFFSET + 2],
+                kernel[INITRD_ADDR_MAX_OFFSET + 3],
+            ])
+        } else {
+            0x37FF_FFFFu32
+        };
+
+        let guest_max = (GUEST_RAM_SIZE_BYTES as u64).saturating_sub(1);
+        let max_end = core::cmp::min(initrd_addr_max as u64, guest_max);
+        let start_unaligned = (max_end + 1).saturating_sub(initrd.len() as u64);
+        let initrd_gpa = start_unaligned & !0xFFFu64;
+
+        if initrd_gpa < KERNEL_LOAD_GPA + 0x2000 {
+            crate::serial_write_str("RAYOS_VMM:LINUX:INITRD_PLACEMENT_TOO_LOW\n");
+            return false;
+        }
+        if !write_guest_bytes(initrd_gpa, initrd) {
+            crate::serial_write_str("RAYOS_VMM:LINUX:INITRD_COPY_FAIL\n");
+            return false;
+        }
+        if !write_u32(BOOT_PARAMS_GPA + (RAMDISK_IMAGE_OFFSET as u64), initrd_gpa as u32) {
+            crate::serial_write_str("RAYOS_VMM:LINUX:RAMDISK_IMAGE_WRITE_FAIL\n");
+            return false;
+        }
+        if !write_u32(BOOT_PARAMS_GPA + (RAMDISK_SIZE_OFFSET as u64), initrd.len() as u32) {
+            crate::serial_write_str("RAYOS_VMM:LINUX:RAMDISK_SIZE_WRITE_FAIL\n");
+            return false;
+        }
+    } else {
+        let _ = write_u32(BOOT_PARAMS_GPA + (RAMDISK_IMAGE_OFFSET as u64), 0);
+        let _ = write_u32(BOOT_PARAMS_GPA + (RAMDISK_SIZE_OFFSET as u64), 0);
+    }
+
+    // 64-bit boot protocol entry: loaded kernel start + 0x200.
+    // See kernel.org boot protocol section "64-bit Boot Protocol".
+    let entry_rip = KERNEL_LOAD_GPA + 0x200;
+    LINUX_GUEST_ENTRY_RIP = entry_rip;
+    LINUX_GUEST_BOOT_PARAMS_GPA = BOOT_PARAMS_GPA;
+
+    seed_linux_guest_msrs();
+
+    crate::serial_write_str("RAYOS_VMM:LINUX:READY entry=0x");
+    crate::serial_write_hex_u64(entry_rip);
+    crate::serial_write_str(" bp=0x");
+    crate::serial_write_hex_u64(BOOT_PARAMS_GPA);
+    crate::serial_write_str("\n");
+
+    true
 }
 
 unsafe fn install_guest_descriptor_tables() {
     let gdt_phys = guest_ram_phys(GUEST_GDT_PAGE_INDEX);
     let gdt_dst = crate::phys_to_virt(gdt_phys) as *mut u64;
+    #[cfg(feature = "vmm_linux_guest")]
+    let linux_guest = crate::linux_kernel_ptr_and_len().is_some();
+    #[cfg(not(feature = "vmm_linux_guest"))]
+    let linux_guest = false;
+
+    if linux_guest {
+        for (idx, entry) in LINUX_GDT_ENTRIES_64.iter().enumerate() {
+            core::ptr::write_volatile(gdt_dst.add(idx), *entry);
+        }
+
+        let tss_phys = guest_ram_phys(GUEST_TSS_PAGE_INDEX);
+        let tss_gpa = guest_ram_gpa(GUEST_TSS_PAGE_INDEX);
+        let tss_virt = crate::phys_to_virt(tss_phys) as *mut u8;
+        core::ptr::write_bytes(tss_virt, 0, PAGE_SIZE);
+
+        // Point RSP0 at the top of the guest stack (minus a small red zone for pushes).
+        let guest_stack_top = guest_ram_gpa(GUEST_STACK_START_INDEX + GUEST_STACK_PAGES);
+        let rsp0_ptr = unsafe { tss_virt.add(4) } as *mut u64;
+        core::ptr::write_volatile(rsp0_ptr, guest_stack_top - 0x10);
+
+        // Configure an I/O bitmap so guest OUTs do not #GP when nested in VMX.
+        let io_map_base_ptr = unsafe { tss_virt.add(0x66) } as *mut u16;
+        core::ptr::write_volatile(io_map_base_ptr, TSS_IO_MAP_BASE as u16);
+        let io_bitmap_tail =
+            unsafe { tss_virt.add(TSS_IO_MAP_BASE + TSS_IO_BITMAP_BYTES) } as *mut u8;
+        core::ptr::write_volatile(io_bitmap_tail, 0xFF);
+
+        let tss_limit =
+            (TSS_IO_MAP_BASE + TSS_IO_BITMAP_BYTES + TSS_IO_BITMAP_TAIL_BYTES - 1) as u32;
+        let (tss_desc_lo, tss_desc_hi, tss_ar) = make_tss_descriptor(tss_gpa, tss_limit);
+        core::ptr::write_volatile(gdt_dst.add(LINUX_GDT_STATIC_ENTRIES), tss_desc_lo);
+        core::ptr::write_volatile(gdt_dst.add(LINUX_GDT_STATIC_ENTRIES + 1), tss_desc_hi);
+
+        let gdt_used = LINUX_GDT_ENTRY_COUNT * 8;
+        if gdt_used < PAGE_SIZE {
+            let tail = (gdt_dst as *mut u8).add(gdt_used);
+            core::ptr::write_bytes(tail, 0, PAGE_SIZE - gdt_used);
+        }
+
+        let idt_phys = guest_ram_phys(GUEST_IDT_PAGE_INDEX);
+        let idt_dst = crate::phys_to_virt(idt_phys) as *mut u8;
+        core::ptr::write_bytes(idt_dst, 0, PAGE_SIZE);
+
+        GUEST_TSS_PHYS_VALUE = tss_gpa;
+        GUEST_TSS_LIMIT_VALUE = tss_limit as u64;
+        GUEST_TSS_AR_VALUE = tss_ar;
+        return;
+    }
+
     for (idx, entry) in GUEST_GDT_ENTRIES.iter().enumerate() {
         core::ptr::write_volatile(gdt_dst.add(idx), *entry);
     }
@@ -355,7 +837,91 @@ fn make_tss_descriptor(base: u64, limit: u32) -> (u64, u64, u64) {
 }
 
 const EPT_ENTRY_FLAGS: u64 = 0b111;
+const EPT_MEMTYPE_UC: u64 = 0;
 const EPT_MEMTYPE_WB: u64 = 6;
+
+#[repr(C, packed)]
+struct InveptDescriptor {
+    eptp: u64,
+    _rsvd: u64,
+}
+
+#[inline(always)]
+unsafe fn invept_all_contexts() -> bool {
+    // Type 2: invalidate all EPT contexts.
+    let desc = InveptDescriptor { eptp: 0, _rsvd: 0 };
+    let inv_type: u64 = 2;
+    let rflags: u64;
+    asm!(
+        "invept {0}, [{1}]\n\
+         pushfq\n\
+         pop {2}",
+        in(reg) inv_type,
+        in(reg) &desc,
+        out(reg) rflags,
+        options(nostack)
+    );
+    (rflags & (1 << 0)) == 0 && (rflags & (1 << 6)) == 0
+}
+
+unsafe fn ept_map_4k_page(eptp: u64, gpa: u64, host_phys: u64, memtype: u64) -> bool {
+    let pml4_phys = eptp & 0xFFFF_FFFF_FFFF_F000;
+    if pml4_phys == 0 {
+        return false;
+    }
+
+    let pml4_idx = ((gpa >> 39) & 0x1FF) as usize;
+    let pdpt_idx = ((gpa >> 30) & 0x1FF) as usize;
+    let pd_idx = ((gpa >> 21) & 0x1FF) as usize;
+    let pt_idx = ((gpa >> 12) & 0x1FF) as usize;
+
+    let pml4_v = crate::phys_to_virt(pml4_phys) as *mut u64;
+    let pml4e = core::ptr::read_volatile(pml4_v.add(pml4_idx));
+    if (pml4e & EPT_ENTRY_FLAGS) == 0 {
+        return false;
+    }
+    let pdpt_phys = pml4e & 0xFFFF_FFFF_FFFF_F000;
+    if pdpt_phys == 0 {
+        return false;
+    }
+
+    let pdpt_v = crate::phys_to_virt(pdpt_phys) as *mut u64;
+    let mut pdpte = core::ptr::read_volatile(pdpt_v.add(pdpt_idx));
+    if (pdpte & EPT_ENTRY_FLAGS) == 0 {
+        let new_pd = match alloc_zeroed_page() {
+            Some(p) => p,
+            None => return false,
+        };
+        pdpte = (new_pd & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS;
+        core::ptr::write_volatile(pdpt_v.add(pdpt_idx), pdpte);
+    }
+    let pd_phys = pdpte & 0xFFFF_FFFF_FFFF_F000;
+    if pd_phys == 0 {
+        return false;
+    }
+
+    let pd_v = crate::phys_to_virt(pd_phys) as *mut u64;
+    let mut pde = core::ptr::read_volatile(pd_v.add(pd_idx));
+    if (pde & EPT_ENTRY_FLAGS) == 0 {
+        let new_pt = match alloc_zeroed_page() {
+            Some(p) => p,
+            None => return false,
+        };
+        pde = (new_pt & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS;
+        core::ptr::write_volatile(pd_v.add(pd_idx), pde);
+    }
+    let pt_phys = pde & 0xFFFF_FFFF_FFFF_F000;
+    if pt_phys == 0 {
+        return false;
+    }
+
+    let pt_v = crate::phys_to_virt(pt_phys) as *mut u64;
+    let entry = (host_phys & 0xFFFF_FFFF_FFFF_F000) | EPT_ENTRY_FLAGS | ((memtype & 0x7) << 3);
+    core::ptr::write_volatile(pt_v.add(pt_idx), entry);
+
+    let _ = invept_all_contexts();
+    true
+}
 
 unsafe fn build_guest_ram_ept() -> Option<u64> {
     let pml4 = alloc_zeroed_page()?;
@@ -434,6 +1000,16 @@ const HOST_IA32_SYSENTER_EIP: u64 = 0x6C12;
 // FS/GS base MSRs
 const IA32_FS_BASE: u32 = 0xC000_0100;
 const IA32_GS_BASE: u32 = 0xC000_0101;
+const IA32_KERNEL_GS_BASE: u32 = 0xC000_0102;
+
+// Syscall MSRs (x86_64)
+const IA32_STAR: u32 = 0xC000_0081;
+const IA32_LSTAR: u32 = 0xC000_0082;
+const IA32_CSTAR: u32 = 0xC000_0083;
+const IA32_FMASK: u32 = 0xC000_0084;
+
+// APIC base MSR (commonly touched during early boot)
+const IA32_APIC_BASE: u32 = 0x1B;
 
 #[repr(C, packed)]
 #[derive(Copy, Clone)]
@@ -470,11 +1046,36 @@ struct VmxStack([u8; VMX_STACK_SIZE]);
 static mut VMX_HOST_STACK: VmxStack = VmxStack([0; VMX_STACK_SIZE]);
 
 static VMEXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static PFEXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static LOW_IDENTITY_PREFILL_DONE: AtomicUsize = AtomicUsize::new(0);
+static PHYSMAP_PREFILL_DONE: AtomicUsize = AtomicUsize::new(0);
+static PHYSMAP_PML4E_FRESH_LOGGED: AtomicUsize = AtomicUsize::new(0);
+static GUEST_COM1_TX_BYTES: AtomicUsize = AtomicUsize::new(0);
+static HLTEXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static PREEMPTEXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+static mut GUEST_FAKE_LAPIC_PAGE_PHYS: u64 = 0;
 
 const PAGE_SIZE: usize = 4096;
+#[cfg(feature = "vmm_linux_guest")]
+const GUEST_RAM_SIZE_MB: usize = 256;
+
+#[cfg(not(feature = "vmm_linux_guest"))]
 const GUEST_RAM_SIZE_MB: usize = 16;
 const GUEST_RAM_SIZE_BYTES: usize = GUEST_RAM_SIZE_MB * 1024 * 1024;
 const GUEST_RAM_PAGES: usize = GUEST_RAM_SIZE_BYTES / PAGE_SIZE;
+
+// Linux x86_64 direct-map (physmap) base in the common 4-level paging layout.
+// Bring-up aid: used only for heuristic page-table fixups.
+const LINUX_X86_64_PHYSMAP_BASE: u64 = 0xFFFF_8880_0000_0000;
+
+#[inline(always)]
+fn linux_physmap_pa_for_va(va: u64) -> Option<u64> {
+    if va < LINUX_X86_64_PHYSMAP_BASE {
+        return None;
+    }
+    Some(va.wrapping_sub(LINUX_X86_64_PHYSMAP_BASE))
+}
 const MMIO_COUNTER_BASE: u64 = GUEST_RAM_SIZE_BYTES as u64;
 const MMIO_COUNTER_SIZE: u64 = PAGE_SIZE as u64;
 const MMIO_VIRTIO_BASE: u64 = MMIO_COUNTER_BASE + MMIO_COUNTER_SIZE;
@@ -529,6 +1130,9 @@ const VIRTIO_BLK_DISK_BYTES: usize = VIRTIO_BLK_SECTOR_SIZE * VIRTIO_BLK_DISK_SE
 
 static mut VIRTIO_BLK_DISK: [u8; VIRTIO_BLK_DISK_BYTES] = [0; VIRTIO_BLK_DISK_BYTES];
 static mut VIRTIO_BLK_DISK_INITIALIZED: bool = false;
+
+#[cfg(feature = "vmm_virtio_blk_image")]
+static VIRTIO_BLK_DISK_IMAGE: &[u8] = include_bytes!("../assets/vmm_disk.img");
 const VIRTQ_AVAIL_FLAGS_OFFSET: u64 = 0;
 const VIRTQ_AVAIL_INDEX_OFFSET: u64 = 2;
 const VIRTQ_AVAIL_RING_OFFSET: u64 = 4;
@@ -548,6 +1152,12 @@ const VIRTIO_NET_DEVICE_ID: u32 = 0x0101;
 const VIRTIO_GPU_DEVICE_ID: u32 = 16;
 // Standard virtio device ID for virtio-console (P1)
 const VIRTIO_CONSOLE_DEVICE_ID: u32 = 0x0107;
+
+// Feature-gated device model instance for virtio-gpu.
+//
+// Safety: accessed only from the single-core hypervisor path today.
+#[cfg(feature = "vmm_virtio_gpu")]
+static mut VIRTIO_GPU_DEVICE: VirtioGpuDevice = VirtioGpuDevice::new();
 const VIRTIO_NET_TX_QUEUE: u16 = 0;
 const VIRTIO_NET_RX_QUEUE: u16 = 1;
 const VIRTIO_NET_PKT_MAX: usize = 2048;
@@ -577,9 +1187,154 @@ const GUEST_IDT_PAGE_INDEX: usize = GUEST_GDT_PAGE_INDEX + 1;
 static mut GUEST_RAM_PHYS: [u64; GUEST_RAM_PAGES] = [0; GUEST_RAM_PAGES];
 static mut GUEST_RAM_INITIALIZED: bool = false;
 
+#[cfg(feature = "vmm_linux_guest")]
+static mut LINUX_GUEST_ENTRY_RIP: u64 = 0;
+
+#[cfg(feature = "vmm_linux_guest")]
+static mut LINUX_GUEST_BOOT_PARAMS_GPA: u64 = 0;
+
 static mut IO_BITMAP_A_PHYS: u64 = 0;
 static mut IO_BITMAP_B_PHYS: u64 = 0;
 static mut IO_BITMAPS_READY: bool = false;
+
+static mut MSR_BITMAPS_PHYS: u64 = 0;
+static mut MSR_BITMAPS_READY: bool = false;
+
+const GUEST_MSR_STORE_CAPACITY: usize = 64;
+static mut GUEST_MSR_KEYS: [u32; GUEST_MSR_STORE_CAPACITY] = [0; GUEST_MSR_STORE_CAPACITY];
+static mut GUEST_MSR_VALUES: [u64; GUEST_MSR_STORE_CAPACITY] = [0; GUEST_MSR_STORE_CAPACITY];
+static mut GUEST_MSR_COUNT: usize = 0;
+
+#[inline(always)]
+unsafe fn seed_linux_guest_msrs() {
+    // IA32_APIC_BASE (0x1B): base 0xFEE0_0000, BSP=1, APIC global enable=1.
+    // Many kernels expect something like 0xFEE00900 on reset.
+    guest_msr_set(IA32_APIC_BASE, 0xFEE0_0000u64 | 0x900u64);
+}
+
+#[inline(always)]
+unsafe fn guest_msr_get(msr: u32) -> Option<u64> {
+    let count = GUEST_MSR_COUNT;
+    let mut i = 0;
+    while i < count {
+        if GUEST_MSR_KEYS[i] == msr {
+            return Some(GUEST_MSR_VALUES[i]);
+        }
+        i += 1;
+    }
+    None
+}
+
+#[inline(always)]
+unsafe fn guest_msr_set(msr: u32, value: u64) {
+    let count = GUEST_MSR_COUNT;
+    let mut i = 0;
+    while i < count {
+        if GUEST_MSR_KEYS[i] == msr {
+            GUEST_MSR_VALUES[i] = value;
+            return;
+        }
+        i += 1;
+    }
+    if count < GUEST_MSR_STORE_CAPACITY {
+        GUEST_MSR_KEYS[count] = msr;
+        GUEST_MSR_VALUES[count] = value;
+        GUEST_MSR_COUNT = count + 1;
+    }
+}
+
+const COM1_BASE_PORT: u16 = 0x03F8;
+const COM1_PORT_COUNT: u16 = 8;
+
+struct Uart16550 {
+    dll: u8,
+    dlm: u8,
+    ier: u8,
+    fcr: u8,
+    lcr: u8,
+    mcr: u8,
+    scr: u8,
+}
+
+static mut COM1_UART: Uart16550 = Uart16550 {
+    // Default divisor 1 => 115200 baud (common default).
+    dll: 1,
+    dlm: 0,
+    ier: 0,
+    fcr: 0,
+    lcr: 0,
+    mcr: 0,
+    scr: 0,
+};
+
+#[inline(always)]
+fn com1_is_port(port: u16) -> bool {
+    port >= COM1_BASE_PORT && port < COM1_BASE_PORT.wrapping_add(COM1_PORT_COUNT)
+}
+
+#[inline(always)]
+unsafe fn com1_uart_in(offset: u16) -> u8 {
+    // Minimal 16550 behavior: no RX, no interrupts.
+    // Offsets: 0 RBR/THR/DLL, 1 IER/DLM, 2 IIR/FCR, 3 LCR, 4 MCR, 5 LSR, 6 MSR, 7 SCR
+    let dlab = (COM1_UART.lcr & 0x80) != 0;
+    match offset {
+        0 => {
+            if dlab {
+                COM1_UART.dll
+            } else {
+                0 // RBR: no received data
+            }
+        }
+        1 => {
+            if dlab {
+                COM1_UART.dlm
+            } else {
+                COM1_UART.ier
+            }
+        }
+        2 => 0x01, // IIR: no interrupt pending
+        3 => COM1_UART.lcr,
+        4 => COM1_UART.mcr,
+        5 => 0x60, // LSR: THR empty | TEMT
+        6 => 0xB0, // MSR: CTS|DSR|DCD asserted (best-effort)
+        7 => COM1_UART.scr,
+        _ => 0,
+    }
+}
+
+#[inline(always)]
+unsafe fn com1_uart_out(offset: u16, value: u8) {
+    let dlab = (COM1_UART.lcr & 0x80) != 0;
+    match offset {
+        0 => {
+            if dlab {
+                COM1_UART.dll = value;
+            } else {
+                // THR write: emit raw byte to host serial.
+                let n = GUEST_COM1_TX_BYTES.fetch_add(1, Ordering::Relaxed) + 1;
+                if n == 1 {
+                    crate::serial_write_str("RAYOS_VMM:COM1:TX_FIRST\n");
+                }
+                crate::serial_write_byte(value);
+            }
+        }
+        1 => {
+            if dlab {
+                COM1_UART.dlm = value;
+            } else {
+                COM1_UART.ier = value;
+            }
+        }
+        2 => {
+            // FCR write (we ignore FIFO behavior, but store it).
+            COM1_UART.fcr = value;
+        }
+        3 => COM1_UART.lcr = value,
+        4 => COM1_UART.mcr = value,
+        7 => COM1_UART.scr = value,
+        _ => {}
+    }
+}
 
 #[repr(C)]
 struct GuestRegs {
@@ -616,6 +1371,13 @@ struct MmioAccess {
     size: usize,
     kind: MmioAccessKind,
     reg: MmioRegister,
+}
+
+#[derive(Copy, Clone)]
+struct MmioInstruction {
+    kind: MmioAccessKind,
+    size: usize,
+    address: u64,
 }
 
 type MmioHandler = fn(&mut GuestRegs, &MmioAccess, Option<u64>) -> Option<u64>;
@@ -681,8 +1443,6 @@ impl VirtioMmioState {
             interrupt_status: AtomicU32::new(0),
             interrupt_pending: AtomicU32::new(0),
             interrupt_pending_attempts: AtomicU32::new(0),
-            // Track the last TIMER_TICKS when a retry attempt was made to implement
-            // exponential backoff scheduling.
             interrupt_pending_last_tick: AtomicU64::new(0),
             interrupt_backoff_total_attempts: AtomicU32::new(0),
             interrupt_backoff_succeeded: AtomicU32::new(0),
@@ -703,39 +1463,6 @@ impl VirtioMmioState {
 
 static VIRTIO_MMIO_STATE: VirtioMmioState = VirtioMmioState::new();
 
-#[cfg(feature = "vmm_virtio_gpu")]
-static mut VIRTIO_GPU_DEVICE: crate::vmm::virtio_gpu::VirtioGpuDevice =
-    crate::vmm::virtio_gpu::VirtioGpuDevice::new();
-
-#[cfg(feature = "vmm_virtio_console")]
-static mut VIRTIO_CONSOLE_DEVICE: crate::virtio_console::VirtioConsoleDevice =
-    crate::virtio_console::VirtioConsoleDevice::new();
-
-struct MmioInstruction {
-    kind: MmioAccessKind,
-    size: usize,
-    address: u64,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-struct VirtqDesc {
-    addr: u64,
-    len: u32,
-    flags: u16,
-    next: u16,
-}
-
-unsafe fn register_mmio_region(region: MmioRegion) -> bool {
-    for slot in MMIO_REGIONS.iter_mut() {
-        if slot.is_none() {
-            *slot = Some(region);
-            return true;
-        }
-    }
-    false
-}
-
 fn find_mmio_region(gpa: u64) -> Option<MmioRegion> {
     unsafe {
         for slot in MMIO_REGIONS.iter() {
@@ -747,6 +1474,18 @@ fn find_mmio_region(gpa: u64) -> Option<MmioRegion> {
         }
     }
     None
+}
+
+fn register_mmio_region(region: MmioRegion) -> bool {
+    unsafe {
+        for slot in MMIO_REGIONS.iter_mut() {
+            if slot.is_none() {
+                *slot = Some(region);
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn init_hypervisor_mmio() {
@@ -1123,6 +1862,26 @@ fn cpuid(leaf: u32, subleaf: u32) -> Cpuid {
 }
 
 #[inline(always)]
+fn linux_guest_active() -> bool {
+    #[cfg(feature = "vmm_linux_guest")]
+    unsafe {
+        LINUX_GUEST_ENTRY_RIP != 0 && LINUX_GUEST_BOOT_PARAMS_GPA != 0
+    }
+
+    #[cfg(not(feature = "vmm_linux_guest"))]
+    {
+        false
+    }
+}
+
+#[inline(always)]
+fn read_cr2() -> u64 {
+    let v: u64;
+    unsafe { asm!("mov {}, cr2", out(reg) v, options(nomem, nostack, preserves_flags)) };
+    v
+}
+
+#[inline(always)]
 fn read_cr0() -> u64 {
     let v: u64;
     unsafe { asm!("mov {0}, cr0", out(reg) v, options(nomem, nostack, preserves_flags)) };
@@ -1144,6 +1903,37 @@ fn read_cr4() -> u64 {
 #[inline(always)]
 fn write_cr4(v: u64) {
     unsafe { asm!("mov cr4, {0}", in(reg) v, options(nomem, nostack, preserves_flags)) };
+}
+
+#[repr(C, packed)]
+struct InvvpidDescriptor {
+    vpid: u16,
+    _rsvd1: u16,
+    _rsvd2: u32,
+    linear_address: u64,
+}
+
+#[inline(always)]
+unsafe fn invvpid_all_contexts() -> bool {
+    // Type 2: invalidate all contexts.
+    let desc = InvvpidDescriptor {
+        vpid: 0,
+        _rsvd1: 0,
+        _rsvd2: 0,
+        linear_address: 0,
+    };
+    let inv_type: u64 = 2;
+    let rflags: u64;
+    asm!(
+        "invvpid {0}, [{1}]\n\
+         pushfq\n\
+         pop {2}",
+        in(reg) inv_type,
+        in(reg) &desc,
+        out(reg) rflags,
+        options(nostack)
+    );
+    (rflags & (1 << 0)) == 0 && (rflags & (1 << 6)) == 0
 }
 
 #[inline(always)]
@@ -1209,6 +1999,32 @@ unsafe fn vmlaunch() -> (bool, u64) {
     );
     let ok = (rflags & (1 << 0)) == 0 && (rflags & (1 << 6)) == 0;
     (ok, rflags)
+}
+
+#[cfg(feature = "vmm_linux_guest")]
+unsafe fn vmlaunch_with_linux_boot_params(bp_gpa: u64) -> (bool, u64) {
+    let mut rflags: u64;
+    let mut success: u8;
+    core::arch::asm!(
+        "xor rbx, rbx",
+        "xor rbp, rbp",
+        "xor rdi, rdi",
+        "mov rsi, {bp}",
+        // Linux boot protocol: EAX must contain the magic 'HdrS' (0x53726448)
+        // and RSI must point at boot_params.
+        "mov eax, 0x53726448",
+        "xor rcx, rcx",
+        "xor rdx, rdx",
+        "vmlaunch",
+        "pushfq",
+        "pop {rflags}",
+        "setna {success}",
+        bp = in(reg) bp_gpa,
+        rflags = out(reg) rflags,
+        success = out(reg_byte) success,
+        options(preserves_flags),
+    );
+    (success == 0, rflags)
 }
 
 #[inline(always)]
@@ -1386,11 +2202,16 @@ fn exit_reason_name(basic: u32) -> &'static str {
         0 => "EXCEPTION_OR_NMI",
         2 => "TRIPLE_FAULT",
         7 => "INVALID_GUEST_STATE",
+        33 => "VM_ENTRY_FAILURE_INVALID_GUEST_STATE",
         10 => "CPUID",
         12 => "HLT",
         18 => "VMCALL",
+        28 => "CR_ACCESS",
         30 => "IO_INSTRUCTION",
+        31 => "RDMSR",
+        32 => "WRMSR",
         48 => "EPT_VIOLATION",
+        52 => "VMX_PREEMPTION_TIMER",
         _ => "(unknown)",
     }
 }
@@ -1416,17 +2237,113 @@ unsafe fn ensure_io_bitmaps() -> bool {
     core::ptr::write_bytes(a_v, 0x00, PAGE_SIZE);
     core::ptr::write_bytes(b_v, 0x00, PAGE_SIZE);
 
-    // Intercept port 0xE9 (QEMU debugcon-style output).
     // I/O bitmap A covers ports 0..0x7FFF.
-    let port: usize = 0xE9;
-    let byte_index = port / 8;
-    let bit = 1u8 << (port % 8);
-    let cur = core::ptr::read_volatile(a_v.add(byte_index));
-    core::ptr::write_volatile(a_v.add(byte_index), cur | bit);
+    let mut set_trap_a = |port: u16| {
+        let port = port as usize;
+        let byte_index = port / 8;
+        let bit = 1u8 << (port % 8);
+        let cur = core::ptr::read_volatile(a_v.add(byte_index));
+        core::ptr::write_volatile(a_v.add(byte_index), cur | bit);
+    };
+
+    // Intercept port 0xE9 (QEMU debugcon-style output).
+    set_trap_a(0x00E9);
+
+    // Intercept COM1 UART ports (Linux console=ttyS0 uses these).
+    for p in COM1_BASE_PORT..COM1_BASE_PORT.wrapping_add(COM1_PORT_COUNT) {
+        set_trap_a(p);
+    }
 
     IO_BITMAP_A_PHYS = a;
     IO_BITMAP_B_PHYS = b;
     IO_BITMAPS_READY = true;
+    true
+}
+
+unsafe fn ensure_msr_bitmaps() -> bool {
+    if MSR_BITMAPS_READY {
+        return true;
+    }
+
+    let phys = match alloc_zeroed_page() {
+        Some(p) => p,
+        None => return false,
+    };
+    let v = crate::phys_to_virt(phys) as *mut u8;
+    core::ptr::write_bytes(v, 0x00, PAGE_SIZE);
+
+    // Default: allow RDMSR (read bitmap all zeros). Trapping every RDMSR is extremely slow for
+    // Linux and can prevent reaching user space within the harness timeout.
+
+    // MSR bitmap layout (Intel SDM):
+    // 0x000..0x3FF  read bitmap for MSRs 0x0000_0000..0x0000_1FFF
+    // 0x400..0x7FF  read bitmap for MSRs 0xC000_0000..0xC000_1FFF
+    // 0x800..0xBFF  write bitmap for MSRs 0x0000_0000..0x0000_1FFF
+    // 0xC00..0xFFF  write bitmap for MSRs 0xC000_0000..0xC000_1FFF
+    let set_bit = |base: usize, msr_index: usize| {
+        let byte_index = base + (msr_index / 8);
+        let bit = 1u8 << (msr_index % 8);
+        unsafe {
+            let cur = core::ptr::read_volatile(v.add(byte_index));
+            core::ptr::write_volatile(v.add(byte_index), cur | bit);
+        }
+    };
+
+    let intercept_read = |msr: u32| {
+        if msr <= 0x1FFF {
+            set_bit(0x000, msr as usize);
+        } else if (0xC000_0000..=0xC000_1FFF).contains(&msr) {
+            set_bit(0x400, (msr - 0xC000_0000) as usize);
+        }
+    };
+    let intercept_write = |msr: u32| {
+        if msr <= 0x1FFF {
+            set_bit(0x800, msr as usize);
+        } else if (0xC000_0000..=0xC000_1FFF).contains(&msr) {
+            set_bit(0xC00, (msr - 0xC000_0000) as usize);
+        }
+    };
+
+    // Safety first: intercept all WRMSR so the guest cannot mutate host MSRs.
+    core::ptr::write_bytes(v.add(0x800), 0xFF, 0x400);
+    core::ptr::write_bytes(v.add(0xC00), 0xFF, 0x400);
+
+    // Intercept reads for MSRs we virtualize in software/VMCS.
+    intercept_read(IA32_EFER);
+    intercept_read(IA32_PAT);
+    intercept_read(IA32_FS_BASE);
+    intercept_read(IA32_GS_BASE);
+    intercept_read(IA32_KERNEL_GS_BASE);
+
+    intercept_read(IA32_SYSENTER_CS);
+    intercept_read(IA32_SYSENTER_ESP);
+    intercept_read(IA32_SYSENTER_EIP);
+
+    intercept_read(IA32_STAR);
+    intercept_read(IA32_LSTAR);
+    intercept_read(IA32_CSTAR);
+    intercept_read(IA32_FMASK);
+
+    intercept_read(IA32_APIC_BASE);
+
+    // Also intercept writes for these MSRs explicitly (even though we already trap all writes),
+    // so this list stays in sync if we ever relax the global write policy.
+    intercept_write(IA32_EFER);
+    intercept_write(IA32_PAT);
+    intercept_write(IA32_FS_BASE);
+    intercept_write(IA32_GS_BASE);
+    intercept_write(IA32_KERNEL_GS_BASE);
+    intercept_write(IA32_SYSENTER_CS);
+    intercept_write(IA32_SYSENTER_ESP);
+    intercept_write(IA32_SYSENTER_EIP);
+    intercept_write(IA32_STAR);
+    intercept_write(IA32_LSTAR);
+    intercept_write(IA32_CSTAR);
+    intercept_write(IA32_FMASK);
+    intercept_write(IA32_APIC_BASE);
+
+    MSR_BITMAPS_PHYS = phys;
+    MSR_BITMAPS_READY = true;
     true
 }
 
@@ -1455,8 +2372,22 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
         let exit_basic = (reason & 0xffff) as u32;
         let entry_fail = ((reason >> 31) & 1) as u32;
 
+        // Page-fault exits can be extremely hot during Linux bring-up. Avoid drowning the
+        // guest in serial I/O: keep detailed logging for only the first few #PFs.
+        let is_pf_exit = exit_basic == 0 && ok_intr && ((intr_info & 0xFF) as u8) == 0x0E;
+        let pf_count = if is_pf_exit {
+            PFEXIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1
+        } else {
+            0
+        };
+
         // Keep logs tight: only print full lines for the first few exits and for interesting reasons.
-        let verbose = count <= 8 || exit_basic == 10 || exit_basic == 2 || exit_basic == 7;
+        let verbose = count <= 8
+            || (exit_basic == 0 && (!is_pf_exit || pf_count <= 32))
+            || exit_basic == 2
+            || exit_basic == 7
+            || exit_basic == 28
+            || exit_basic == 48;
         if verbose {
             crate::serial_write_str("RAYOS_VMM:VMX:EXIT_REASON=0x");
             crate::serial_write_hex_u64(reason);
@@ -1473,9 +2404,563 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
             crate::serial_write_str(" entry_fail=0x");
             crate::serial_write_hex_u64(entry_fail as u64);
             crate::serial_write_str("\n");
+
+            if entry_fail != 0 {
+                let (ok_err, err) = vmread(VMCS_VM_INSTRUCTION_ERROR);
+                if ok_err {
+                    crate::serial_write_str("RAYOS_VMM:VMX:VM_INSTR_ERR=0x");
+                    crate::serial_write_hex_u64(err);
+                    crate::serial_write_str("\n");
+                }
+            }
+
+            if exit_basic == 0 && ok_intr {
+                let vector = (intr_info & 0xFF) as u8;
+                let has_error = ((intr_info >> 11) & 1) != 0;
+                crate::serial_write_str("RAYOS_VMM:VMX:EXC_VECTOR=0x");
+                crate::serial_write_hex_u64(vector as u64);
+                crate::serial_write_str("\n");
+                if ok_q {
+                    crate::serial_write_str("RAYOS_VMM:VMX:EXC_QUAL=0x");
+                    crate::serial_write_hex_u64(qual);
+                    crate::serial_write_str("\n");
+                }
+                if has_error {
+                    let (ok_ec, ec) = vmread(VMCS_EXIT_INTERRUPTION_ERROR_CODE);
+                    if ok_ec {
+                        crate::serial_write_str("RAYOS_VMM:VMX:EXC_ERROR_CODE=0x");
+                        crate::serial_write_hex_u64(ec);
+                        crate::serial_write_str("\n");
+                    }
+                }
+                let (ok_gla, gla) = vmread(GUEST_LINEAR_ADDRESS);
+                if ok_gla {
+                    crate::serial_write_str("RAYOS_VMM:VMX:GUEST_LINEAR=0x");
+                    crate::serial_write_hex_u64(gla);
+                    crate::serial_write_str("\n");
+                }
+                if ok_grip {
+                    crate::serial_write_str("RAYOS_VMM:VMX:GUEST_RIP_AT_EXIT=0x");
+                    crate::serial_write_hex_u64(grip);
+                    crate::serial_write_str("\n");
+
+                    let mut insn = [0u8; 16];
+                    if read_guest_bytes(grip, &mut insn) {
+                        crate::serial_write_str("RAYOS_VMM:VMX:GUEST_INSN_BYTES=");
+                        for b in insn.iter() {
+                            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                            crate::serial_write_byte(HEX[(b >> 4) as usize]);
+                            crate::serial_write_byte(HEX[(b & 0xF) as usize]);
+                        }
+                        crate::serial_write_str("\n");
+                    }
+                }
+
+                // For early-boot failures, a page-walk dump is often the fastest way to
+                // distinguish "paging format mismatch" from "mapping missing".
+                if vector == 0x0E {
+                    // Further throttle expensive #PF details after early bring-up.
+                    if pf_count > 32 {
+                        crate::serial_write_str("RAYOS_VMM:VMX:PF_THROTTLED count=0x");
+                        crate::serial_write_hex_u64(pf_count as u64);
+                        crate::serial_write_str("\n");
+                        // Skip the rest of the detailed #PF diagnostics.
+                        // (Fixups below still run; this only reduces serial overhead.)
+                        //
+                        // NOTE: This block is inside the verbose exception print path.
+                        // Keeping it here ensures we still get *some* signal without flooding.
+                        //
+                        // Continue to the main exit handling.
+                        //
+                    } else {
+                    let (ok_cr3, cr3) = vmread(GUEST_CR3);
+                    let (ok_cr4, cr4) = vmread(GUEST_CR4);
+                    let (ok_efer, efer) = vmread(GUEST_IA32_EFER);
+
+                    // For trapped #PF, VM-exit qualification is the authoritative faulting VA.
+                    // (Host CR2 is not meaningful here; nested bring-up environments may also
+                    // report a bogus GUEST_LINEAR_ADDRESS.)
+                    let cr2 = read_cr2();
+                    crate::serial_write_str("RAYOS_VMM:VMX:PF_GUEST_CR2=0x");
+                    crate::serial_write_hex_u64(cr2);
+                    crate::serial_write_str("\n");
+
+                    crate::serial_write_str("RAYOS_VMM:VMX:PF_REG_R11=0x");
+                    crate::serial_write_hex_u64(regs.r11);
+                    crate::serial_write_str(" R8=0x");
+                    crate::serial_write_hex_u64(regs.r8);
+                    crate::serial_write_str("\n");
+                    let (ok_rsp, rsp) = vmread(GUEST_RSP);
+                    if ok_rsp {
+                        crate::serial_write_str("RAYOS_VMM:VMX:PF_GUEST_RSP=0x");
+                        crate::serial_write_hex_u64(rsp);
+                        crate::serial_write_str("\n");
+                    }
+
+                    if ok_cr3 {
+                        crate::serial_write_str("RAYOS_VMM:VMX:PF_GUEST_CR3=0x");
+                        crate::serial_write_hex_u64(cr3);
+                        crate::serial_write_str("\n");
+                    }
+                    if ok_cr4 {
+                        crate::serial_write_str("RAYOS_VMM:VMX:PF_GUEST_CR4=0x");
+                        crate::serial_write_hex_u64(cr4);
+                        crate::serial_write_str("\n");
+                    }
+                    if ok_efer {
+                        crate::serial_write_str("RAYOS_VMM:VMX:PF_GUEST_EFER=0x");
+                        crate::serial_write_hex_u64(efer);
+                        crate::serial_write_str("\n");
+                    }
+
+                    // Primary: VM-exit qualification.
+                    let mut fault_va = if ok_q && qual != 0 { qual } else { 0 };
+                    // Fallbacks: GUEST_LINEAR and instruction heuristics (best effort only).
+                    if fault_va == 0 {
+                        fault_va = if cr2 != 0 {
+                            cr2
+                        } else if ok_gla && gla != 0 {
+                            gla
+                        } else {
+                            0
+                        };
+                    }
+                    if fault_va == 0 {
+                        let mut insn = [0u8; 3];
+                        if read_guest_bytes(grip, &mut insn) {
+                            if insn == [0x45, 0x88, 0x03] {
+                                fault_va = regs.r11;
+                            }
+                        }
+                    }
+                    if fault_va == 0 {
+                        fault_va = grip;
+                    }
+                    crate::serial_write_str("RAYOS_VMM:VMX:PF_VA=0x");
+                    crate::serial_write_hex_u64(fault_va);
+                    crate::serial_write_str("\n");
+
+                    if ok_cr3 && ok_cr4 {
+                        let is_long_mode = ok_efer && ((efer >> 10) & 1) != 0;
+                        if is_long_mode {
+                            dump_guest_longmode_walk(cr3, fault_va);
+                        } else {
+                            dump_guest_pae_walk(cr3, fault_va);
+                        }
+                    }
+                    }
+                }
+            }
         }
 
-        match exit_basic {
+        let action = match exit_basic {
+            52 => {
+                // VMX-preemption timer expired: periodic forced exit for debugging.
+                let n = PREEMPTEXIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                if n <= 8 || n == 1024 || n == 16_384 {
+                    crate::serial_write_str("RAYOS_VMM:VMX:PREEMPT_TICK=0x");
+                    crate::serial_write_hex_u64(n as u64);
+                    if ok_grip {
+                        crate::serial_write_str(" rip=0x");
+                        crate::serial_write_hex_u64(grip);
+                    }
+                    let (ok_rsp, rsp) = vmread(GUEST_RSP);
+                    if ok_rsp {
+                        crate::serial_write_str(" rsp=0x");
+                        crate::serial_write_hex_u64(rsp);
+                    }
+                    let (ok_rflags, rflags) = vmread(GUEST_RFLAGS);
+                    if ok_rflags {
+                        crate::serial_write_str(" rflags=0x");
+                        crate::serial_write_hex_u64(rflags);
+                    }
+                    crate::serial_write_str("\n");
+                }
+
+                // On first tick, try to decode the instruction at RIP (best-effort) by
+                // translating RIP VA via the guest's current CR3.
+                if n == 1 {
+                    let (ok_cr3, cr3) = vmread(GUEST_CR3);
+                    if ok_cr3 {
+                        crate::serial_write_str("RAYOS_VMM:VMX:PREEMPT_CR3=0x");
+                        crate::serial_write_hex_u64(cr3);
+                        crate::serial_write_str("\n");
+
+                        let (ok_cr4, cr4) = vmread(GUEST_CR4);
+                        if ok_cr4 {
+                            crate::serial_write_str("RAYOS_VMM:VMX:PREEMPT_CR4=0x");
+                            crate::serial_write_hex_u64(cr4);
+                            crate::serial_write_str("\n");
+                        }
+
+                        // Interrupt state can explain “stuck” cases.
+                        let (ok_int, int_state) = vmread(GUEST_INTERRUPTIBILITY_STATE);
+                        let (ok_act, act_state) = vmread(GUEST_ACTIVITY_STATE);
+                        if ok_int || ok_act {
+                            crate::serial_write_str("RAYOS_VMM:VMX:PREEMPT_INT_STATE=");
+                            if ok_int {
+                                crate::serial_write_str("0x");
+                                crate::serial_write_hex_u64(int_state);
+                            } else {
+                                crate::serial_write_str("(na)");
+                            }
+                            crate::serial_write_str(" act_state=");
+                            if ok_act {
+                                crate::serial_write_str("0x");
+                                crate::serial_write_hex_u64(act_state);
+                            } else {
+                                crate::serial_write_str("(na)");
+                            }
+                            crate::serial_write_str("\n");
+                        }
+
+                        let cr4_for_walk = if ok_cr4 { cr4 } else { 0 };
+
+                        if let Some(pa) = guest_longmode_translate_pa_with_cr4(cr3, cr4_for_walk, grip) {
+                            crate::serial_write_str("RAYOS_VMM:VMX:PREEMPT_RIP_PA=0x");
+                            crate::serial_write_hex_u64(pa);
+                            crate::serial_write_str("\n");
+
+                            let mut insn = [0u8; 16];
+                            if read_guest_bytes(pa, &mut insn) {
+                                crate::serial_write_str("RAYOS_VMM:VMX:PREEMPT_RIP_BYTES=");
+                                for b in insn.iter() {
+                                    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+                                    crate::serial_write_byte(HEX[(b >> 4) as usize]);
+                                    crate::serial_write_byte(HEX[(b & 0xF) as usize]);
+                                }
+                                crate::serial_write_str("\n");
+                            }
+                        } else {
+                            crate::serial_write_str("RAYOS_VMM:VMX:PREEMPT_RIP_TRANSLATE_FAIL\n");
+                        }
+
+                        crate::serial_write_str("RAYOS_VMM:VMX:PREEMPT_RBX=0x");
+                        crate::serial_write_hex_u64(regs.rbx);
+                        crate::serial_write_str("\n");
+                        if let Some(lock_word) = guest_longmode_read_u64_with_cr4(cr3, cr4_for_walk, regs.rbx) {
+                            crate::serial_write_str("RAYOS_VMM:VMX:PREEMPT_RBX_QWORD=0x");
+                            crate::serial_write_hex_u64(lock_word);
+                            crate::serial_write_str("\n");
+                        }
+
+                        let (ok_rsp2, rsp2) = vmread(GUEST_RSP);
+                        // Dump a small slice of the current stack (return addresses etc).
+                        for i in 0..16u64 {
+                            if !ok_rsp2 {
+                                break;
+                            }
+                            let va = rsp2.wrapping_add(i * 8);
+                            if let Some(v) = guest_longmode_read_u64_with_cr4(cr3, cr4_for_walk, va) {
+                                crate::serial_write_str("RAYOS_VMM:VMX:STACK[");
+                                crate::serial_write_hex_u64(i);
+                                crate::serial_write_str("]=0x");
+                                crate::serial_write_hex_u64(v);
+                                crate::serial_write_str("\n");
+                            } else {
+                                // Stop early if translation fails; dump a walk for the first slot.
+                                if i == 0 {
+                                    dump_guest_longmode_walk_with_cr4(cr3, cr4_for_walk, rsp2);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Re-arm timer for the next period.
+                let _ = vmwrite(VMX_PREEMPTION_TIMER_VALUE, 0x0100_0000);
+                0
+            }
+            0 => {
+                // Exception or NMI.
+                //
+                // For the Linux guest, reflect trapped exceptions back into the guest after
+                // logging (instead of halting the VM). This is critical for diagnosing
+                // early-boot hangs where Linux may be oopsing/panicking.
+                if linux_guest_active() && ok_intr {
+                    let intr_type = ((intr_info >> 8) & 0x7) as u8;
+                    let has_error = ((intr_info >> 11) & 1) != 0;
+                    let is_valid = ((intr_info >> 31) & 1) != 0;
+                    let vector = (intr_info & 0xFF) as u8;
+
+                    // intr_type values per SDM: 2=NMI, 3=hardware exception.
+                    if is_valid && (intr_type == 2 || intr_type == 3) {
+                        // Special-case #PF: trapping it is useful for getting a one-time
+                        // diagnostic dump, but reflecting it back into the guest via
+                        // VM-entry injection can be subtly wrong (e.g. CR2 semantics).
+                        // Instead, after logging the first trapped #PF, disable #PF
+                        // trapping and resume without injection so the guest takes the
+                        // fault architecturally on re-execution.
+                        if vector == 0x0E {
+                            let (ok_bm, bm) = vmread(EXCEPTION_BITMAP);
+                            if ok_bm {
+                                let _ = vmwrite(EXCEPTION_BITMAP, bm & !(1u64 << 14));
+                            }
+                            return 0;
+                        }
+
+                        let _ = vmwrite(VMCS_ENTRY_INTERRUPTION_INFO, intr_info);
+                        if has_error {
+                            let (ok_ec, ec) = vmread(VMCS_EXIT_INTERRUPTION_ERROR_CODE);
+                            if ok_ec {
+                                let _ = vmwrite(VMCS_ENTRY_EXCEPTION_ERROR_CODE, ec);
+                            }
+                        }
+                        // Do not advance RIP: faults are delivered at the faulting instruction.
+                        return 0;
+                    }
+                    return 1;
+                }
+
+                // Non-Linux guests: if we trapped a #PF, try a best-effort page-table fixup.
+                if ok_intr {
+                    let vector = (intr_info & 0xFF) as u8;
+                    if vector == 0x0E {
+                        let (ok_cr3, cr3) = vmread(GUEST_CR3);
+                        // Best-effort fault VA inference.
+                        // For #PF exits, Intel reports the faulting linear address in VM-exit
+                        // qualification. This has proven more reliable than CR2/GUEST_LINEAR
+                        // in our nested/bring-up environment.
+                        let mut fault_va = 0u64;
+                        if ok_q && qual != 0 {
+                            fault_va = qual;
+                        }
+                        let cr2 = read_cr2();
+                        if fault_va == 0 && cr2 != 0 {
+                            fault_va = cr2;
+                        }
+
+                        if fault_va == 0 {
+                            let mut insn = [0u8; 8];
+                            if ok_grip && read_guest_bytes(grip, &mut insn) {
+                                if insn[0..3] == [0x45, 0x88, 0x03] {
+                                    // mov byte ptr [r11], r8b
+                                    fault_va = regs.r11;
+                                } else if insn[0..5] == [0x66, 0x45, 0x89, 0x04, 0x4B] {
+                                    // mov word ptr [r11 + rcx*2], r8w  (REX.B selects r11 as base; SIB scale=2)
+                                    fault_va = regs.r11.wrapping_add(regs.rcx.wrapping_mul(2));
+                                }
+                            }
+                            if fault_va == 0 {
+                                let (ok_gla, gla) = vmread(GUEST_LINEAR_ADDRESS);
+                                if ok_gla && gla != 0 {
+                                    fault_va = gla;
+                                }
+                            }
+                        }
+
+                        if ok_cr3 {
+                            let mut candidates = [fault_va, regs.r11];
+                            // De-dup (common case: fault_va already came from r11).
+                            if candidates[0] == candidates[1] {
+                                candidates[1] = 0;
+                            }
+
+                            for cand in candidates {
+                                if cand == 0 {
+                                    continue;
+                                }
+                                let mut fixed = false;
+
+                                // Low identity mapping.
+                                if cand < (GUEST_RAM_SIZE_BYTES as u64) {
+                                    fixed |= try_fixup_longmode_map_2mb(cr3, cand, cand);
+                                }
+
+                                // Linux x86_64 physmap direct mapping (common base).
+                                if let Some(pa) = linux_physmap_pa_for_va(cand) {
+                                    if pa < (GUEST_RAM_SIZE_BYTES as u64) {
+                                        fixed |= try_fixup_longmode_map_2mb(cr3, cand, pa);
+                                    }
+                                }
+
+                                // If the access is near the end of a 2MB region, it may be an
+                                // indexed/word store that crosses into the next PDE.
+                                let off_in_2mb = cand & 0x1F_FFFF;
+                                if off_in_2mb >= 0x1FF000 {
+                                    let next_2mb = (cand & !0x1F_FFFF) + 0x20_0000;
+                                    // Identity next.
+                                    if next_2mb < (GUEST_RAM_SIZE_BYTES as u64) {
+                                        fixed |= try_fixup_longmode_map_2mb(cr3, next_2mb, next_2mb);
+                                    }
+                                    // Physmap next.
+                                    if let Some(pa) = linux_physmap_pa_for_va(next_2mb) {
+                                        if pa < (GUEST_RAM_SIZE_BYTES as u64) {
+                                            fixed |= try_fixup_longmode_map_2mb(cr3, next_2mb, pa);
+                                        }
+                                    }
+                                }
+
+                                if fixed {
+                                    let _ = unsafe { invvpid_all_contexts() };
+                                    // Retry the faulting instruction.
+                                    return 0;
+                                }
+                            }
+                        }
+                    }
+                }
+                1
+            }
+            28 => {
+                // Control-register access (MOV to/from CR0/CR3/CR4).
+                // We use CR4 guest/host mask + read shadow to let the guest believe CR4.VMXE=0
+                // while keeping the actual guest CR4 compliant with VMX fixed-bit requirements.
+                if !ok_q {
+                    return 1;
+                }
+
+                let cr_num = (qual & 0xF) as u8;
+                let access_type = ((qual >> 4) & 0x3) as u8;
+                let gpr = ((qual >> 8) & 0xF) as u8;
+
+                let get_gpr = |regs: &mut GuestRegs, idx: u8| -> Option<u64> {
+                    match idx {
+                        0 => Some(regs.rax),
+                        1 => Some(regs.rcx),
+                        2 => Some(regs.rdx),
+                        3 => Some(regs.rbx),
+                        4 => {
+                            let (ok, v) = unsafe { vmread(GUEST_RSP) };
+                            ok.then_some(v)
+                        }
+                        5 => Some(regs.rbp),
+                        6 => Some(regs.rsi),
+                        7 => Some(regs.rdi),
+                        8 => Some(regs.r8),
+                        9 => Some(regs.r9),
+                        10 => Some(regs.r10),
+                        11 => Some(regs.r11),
+                        12 => Some(regs.r12),
+                        13 => Some(regs.r13),
+                        14 => Some(regs.r14),
+                        15 => Some(regs.r15),
+                        _ => None,
+                    }
+                };
+                let set_gpr = |regs: &mut GuestRegs, idx: u8, value: u64| -> bool {
+                    match idx {
+                        0 => {
+                            regs.rax = value;
+                            true
+                        }
+                        1 => {
+                            regs.rcx = value;
+                            true
+                        }
+                        2 => {
+                            regs.rdx = value;
+                            true
+                        }
+                        3 => {
+                            regs.rbx = value;
+                            true
+                        }
+                        4 => unsafe { vmwrite(GUEST_RSP, value) },
+                        5 => {
+                            regs.rbp = value;
+                            true
+                        }
+                        6 => {
+                            regs.rsi = value;
+                            true
+                        }
+                        7 => {
+                            regs.rdi = value;
+                            true
+                        }
+                        8 => {
+                            regs.r8 = value;
+                            true
+                        }
+                        9 => {
+                            regs.r9 = value;
+                            true
+                        }
+                        10 => {
+                            regs.r10 = value;
+                            true
+                        }
+                        11 => {
+                            regs.r11 = value;
+                            true
+                        }
+                        12 => {
+                            regs.r12 = value;
+                            true
+                        }
+                        13 => {
+                            regs.r13 = value;
+                            true
+                        }
+                        14 => {
+                            regs.r14 = value;
+                            true
+                        }
+                        15 => {
+                            regs.r15 = value;
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+
+                // access_type: 0=mov to CR, 1=mov from CR, 2=clts, 3=lmsw
+                if access_type == 0 {
+                    let Some(val) = get_gpr(regs, gpr) else {
+                        return 1;
+                    };
+                    if cr_num == 4 {
+                        // Virtualize away VMXE for the guest.
+                        const CR4_VMXE: u64 = 1u64 << 13;
+                        let masked = val & !CR4_VMXE;
+                        // Guest-visible value in read shadow.
+                        let _ = unsafe { vmwrite(CR4_READ_SHADOW, masked) };
+
+                        // Enforced actual CR4 keeps VMXE set.
+                        let actual = masked | CR4_VMXE;
+                        let _ = unsafe { vmwrite(GUEST_CR4, actual) };
+                    } else {
+                        // For now, just let other CR writes go through.
+                        let field = match cr_num {
+                            0 => GUEST_CR0,
+                            3 => GUEST_CR3,
+                            4 => GUEST_CR4,
+                            _ => return 1,
+                        };
+                        let _ = unsafe { vmwrite(field, val) };
+                    }
+                } else if access_type == 1 {
+                    // Read CR into GPR.
+                    let value = match cr_num {
+                        4 => {
+                            let (ok, v) = unsafe { vmread(CR4_READ_SHADOW) };
+                            if ok { v } else { return 1 }
+                        }
+                        0 => {
+                            let (ok, v) = unsafe { vmread(CR0_READ_SHADOW) };
+                            if ok { v } else { return 1 }
+                        }
+                        3 => {
+                            let (ok, v) = unsafe { vmread(GUEST_CR3) };
+                            if ok { v } else { return 1 }
+                        }
+                        _ => return 1,
+                    };
+                    if !set_gpr(regs, gpr, value) {
+                        return 1;
+                    }
+                } else {
+                    // clts/lmsw not handled.
+                    return 1;
+                }
+
+                if ok_len && ok_grip {
+                    let _ = vmwrite(GUEST_RIP, grip.wrapping_add(ilen));
+                }
+                0
+            }
             30 => {
                 if ok_q {
                     // Intel SDM: I/O instruction exit qualification contains the port in bits 31:16.
@@ -1489,14 +2974,27 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
                         _ => 0,
                     };
 
-                    if !direction_in && port == 0x00E9 && size == 1 {
-                        let ch = (regs.rax & 0xFF) as u8;
-                        crate::serial_write_str("RAYOS_GUEST_E9:");
-                        crate::serial_write_byte(ch);
-                        crate::serial_write_str("\n");
+                    if size == 1 {
+                        if !direction_in && port == 0x00E9 {
+                            let ch = (regs.rax & 0xFF) as u8;
+                            crate::serial_write_str("RAYOS_GUEST_E9:");
+                            crate::serial_write_byte(ch);
+                            crate::serial_write_str("\n");
+                        }
+
+                        if com1_is_port(port) {
+                            let offset = port.wrapping_sub(COM1_BASE_PORT);
+                            if direction_in {
+                                let v = com1_uart_in(offset);
+                                regs.rax = (regs.rax & !0xFF) | (v as u64);
+                            } else {
+                                let v = (regs.rax & 0xFF) as u8;
+                                com1_uart_out(offset, v);
+                            }
+                        }
                     }
 
-                    if verbose {
+                    if verbose && !com1_is_port(port) {
                         crate::serial_write_str("RAYOS_VMM:VMX:IO_EXIT_PORT=0x");
                         crate::serial_write_hex_u64(port as u64);
                         crate::serial_write_str(" dir=");
@@ -1512,11 +3010,216 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
                 }
                 0
             }
+            31 => {
+                // RDMSR emulation.
+                // We don't currently use MSR-load/store lists, so for the handful of MSRs
+                // that Linux cares about early, mirror values in VMCS guest fields.
+                let msr = regs.rcx as u32;
+                let value = if linux_guest_active()
+                    && matches!(
+                        msr,
+                        IA32_FS_BASE
+                            | IA32_GS_BASE
+                            | IA32_KERNEL_GS_BASE
+                            | IA32_SYSENTER_CS
+                            | IA32_SYSENTER_ESP
+                            | IA32_SYSENTER_EIP
+                            | IA32_STAR
+                            | IA32_LSTAR
+                            | IA32_CSTAR
+                            | IA32_FMASK
+                    )
+                {
+                    // Linux depends on these MSRs for non-trapping instructions like SWAPGS
+                    // and SYSCALL/SYSRET. If we only virtualize them in software, the guest
+                    // will read stale values from the real MSRs and can fault (e.g. #GP on iretq).
+                    crate::rdmsr(msr)
+                } else {
+                    match msr {
+                    IA32_EFER => {
+                        let (ok, v) = unsafe { vmread(GUEST_IA32_EFER) };
+                        if ok { v } else { 0 }
+                    }
+                    IA32_FS_BASE => {
+                        let (ok, v) = unsafe { vmread(GUEST_FS_BASE) };
+                        if ok { v } else { 0 }
+                    }
+                    IA32_GS_BASE => {
+                        let (ok, v) = unsafe { vmread(GUEST_GS_BASE) };
+                        if ok { v } else { 0 }
+                    }
+                    IA32_PAT => {
+                        let (ok, v) = unsafe { vmread(GUEST_IA32_PAT) };
+                        if ok { v } else { 0 }
+                    }
+                    IA32_KERNEL_GS_BASE
+                    | IA32_SYSENTER_CS
+                    | IA32_SYSENTER_ESP
+                    | IA32_SYSENTER_EIP
+                    | IA32_STAR
+                    | IA32_LSTAR
+                    | IA32_CSTAR
+                    | IA32_FMASK
+                    | IA32_APIC_BASE => unsafe { guest_msr_get(msr).unwrap_or(0) },
+                    _ => 0,
+                    }
+                };
+
+                regs.rax = (regs.rax & !0xFFFF_FFFF) | (value as u32 as u64);
+                regs.rdx = (regs.rdx & !0xFFFF_FFFF) | ((value >> 32) as u32 as u64);
+
+                if ok_len && ok_grip {
+                    let _ = vmwrite(GUEST_RIP, grip.wrapping_add(ilen));
+                }
+                0
+            }
+            32 => {
+                // WRMSR emulation.
+                let msr = regs.rcx as u32;
+                let value = ((regs.rdx as u64) << 32) | (regs.rax as u32 as u64);
+
+                // Linux relies on certain MSRs being truly written because other instructions
+                // consult the *hardware* MSRs directly (e.g. SWAPGS, SYSCALL/SYSRET). For those
+                // MSRs, write-through to hardware for the Linux guest.
+                if linux_guest_active()
+                    && matches!(
+                        msr,
+                        IA32_FS_BASE
+                            | IA32_GS_BASE
+                            | IA32_KERNEL_GS_BASE
+                            | IA32_SYSENTER_CS
+                            | IA32_SYSENTER_ESP
+                            | IA32_SYSENTER_EIP
+                            | IA32_STAR
+                            | IA32_LSTAR
+                            | IA32_CSTAR
+                            | IA32_FMASK
+                    )
+                {
+                    // Keep VMCS base fields in sync when applicable.
+                    match msr {
+                        IA32_FS_BASE => {
+                            let _ = unsafe { vmwrite(GUEST_FS_BASE, value) };
+                        }
+                        IA32_GS_BASE => {
+                            let _ = unsafe { vmwrite(GUEST_GS_BASE, value) };
+                        }
+                        _ => {}
+                    }
+
+                    crate::wrmsr(msr, value);
+
+                    if ok_len && ok_grip {
+                        let _ = vmwrite(GUEST_RIP, grip.wrapping_add(ilen));
+                    }
+                    return 0;
+                }
+
+                match msr {
+                    IA32_EFER => {
+                        let _ = unsafe { vmwrite(GUEST_IA32_EFER, value) };
+                    }
+                    IA32_FS_BASE => {
+                        let _ = unsafe { vmwrite(GUEST_FS_BASE, value) };
+                    }
+                    IA32_GS_BASE => {
+                        let _ = unsafe { vmwrite(GUEST_GS_BASE, value) };
+                    }
+                    IA32_PAT => {
+                        let _ = unsafe { vmwrite(GUEST_IA32_PAT, value) };
+                    }
+                    IA32_KERNEL_GS_BASE
+                    | IA32_SYSENTER_CS
+                    | IA32_SYSENTER_ESP
+                    | IA32_SYSENTER_EIP
+                    | IA32_STAR
+                    | IA32_LSTAR
+                    | IA32_CSTAR
+                    | IA32_FMASK
+                    | IA32_APIC_BASE => unsafe { guest_msr_set(msr, value) },
+                    _ => {
+                        // Keep trapping WRMSR for safety (MSR bitmap traps all writes).
+                        // For now, ignore unknown writes.
+                    }
+                }
+
+                if ok_len && ok_grip {
+                    let _ = vmwrite(GUEST_RIP, grip.wrapping_add(ilen));
+                }
+                0
+            }
             10 => {
                 // CPUID emulation: return host CPUID.
                 let leaf = regs.rax as u32;
                 let subleaf = regs.rcx as u32;
-                let r = cpuid(leaf, subleaf);
+                let mut r = cpuid(leaf, subleaf);
+
+                if linux_guest_active() {
+                    let (ok_cpu2, cpu2) = vmread(SECONDARY_VM_EXEC_CONTROL);
+                    let cpu2 = if ok_cpu2 { cpu2 as u32 } else { 0 };
+
+                    // Avoid advertising a hypervisor interface. Linux will otherwise select
+                    // pvclock/kvm-clock paths that expect a consistent KVM CPUID+MSR surface.
+                    // We currently do not fully implement that paravirt clock ABI.
+                    if leaf == 0x4000_0000 {
+                        // Report no hypervisor leaves.
+                        r.eax = 0;
+                        r.ebx = 0;
+                        r.ecx = 0;
+                        r.edx = 0;
+                    } else if (0x4000_0000..=0x4000_00FF).contains(&leaf) {
+                        r.eax = 0;
+                        r.ebx = 0;
+                        r.ecx = 0;
+                        r.edx = 0;
+                    } else if leaf == 0 {
+                        // Cap max basic leaf to keep topology/feature probing simple.
+                        // This avoids Linux relying on host-specific topology leaves.
+                        r.eax = r.eax.min(7);
+                    } else if leaf == 1 {
+                        // Clear CPUID.1:ECX[31] "hypervisor present".
+                        r.ecx &= !(1u32 << 31);
+
+                        // Bring-up simplification: avoid XSAVE/OSXSAVE/AVX so Linux won't execute
+                        // XSETBV (which would otherwise VM-exit and require full XCR0 emulation).
+                        r.ecx &= !(1u32 << 26); // XSAVE
+                        r.ecx &= !(1u32 << 27); // OSXSAVE
+                        r.ecx &= !(1u32 << 28); // AVX
+
+                        // Present a simple single-CPU topology.
+                        // CPUID.1:EBX[23:16] = logical processors per package.
+                        r.ebx = (r.ebx & !(0xffu32 << 16)) | (1u32 << 16);
+                        // CPUID.1:EBX[31:24] = initial APIC ID.
+                        r.ebx &= !(0xffu32 << 24);
+
+                        // Clear HTT flag (CPUID.1:EDX[28]) to discourage SMP assumptions.
+                        r.edx &= !(1u32 << 28);
+                    } else if leaf == 7 && subleaf == 0 {
+                        // INVPCID is only legal in VMX non-root if enabled via secondary controls.
+                        if (cpu2 & CPU2_CTL_ENABLE_INVPCID) == 0 {
+                            // CPUID.(EAX=7,ECX=0):EBX[10] == INVPCID
+                            r.ebx &= !(1u32 << 10);
+                        }
+
+                        // Avoid advertising 5-level paging support (LA57). If Linux enables
+                        // CR4.LA57 it changes paging structure depth and complicates bring-up.
+                        // CPUID.(EAX=7,ECX=0):ECX[16] == LA57
+                        r.ecx &= !(1u32 << 16);
+                    } else if leaf == 0xB || leaf == 0x1F {
+                        // Do not expose extended topology enumeration.
+                        r.eax = 0;
+                        r.ebx = 0;
+                        r.ecx = 0;
+                        r.edx = 0;
+                    } else if leaf == 0x8000_0001 {
+                        // RDTSCP is only legal in VMX non-root if enabled via secondary controls.
+                        if (cpu2 & CPU2_CTL_ENABLE_RDTSCP) == 0 {
+                            // CPUID.(EAX=0x80000001):EDX[27] == RDTSCP
+                            r.edx &= !(1u32 << 27);
+                        }
+                    }
+                }
+
                 regs.rax = r.eax as u64;
                 regs.rbx = r.ebx as u64;
                 regs.rcx = r.ecx as u64;
@@ -1529,6 +3232,37 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
             }
             12 => {
                 // HLT: advance and let the guest continue (our test guest jumps back after HLT).
+                let n = HLTEXIT_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                if n == 1 {
+                    crate::serial_write_str("RAYOS_VMM:VMX:HLT_SEEN\n");
+
+                    let (ok_rip, rip) = vmread(GUEST_RIP);
+                    let (ok_rflags, rflags) = vmread(GUEST_RFLAGS);
+                    let (ok_cr3, cr3) = vmread(GUEST_CR3);
+                    let (ok_int, int_state) = vmread(GUEST_INTERRUPTIBILITY_STATE);
+                    let (ok_act, act_state) = vmread(GUEST_ACTIVITY_STATE);
+                    if ok_rip && ok_rflags && ok_cr3 {
+                        crate::serial_write_str("RAYOS_VMM:VMX:HLT_STATE rip=0x");
+                        crate::serial_write_hex_u64(rip);
+                        crate::serial_write_str(" rflags=0x");
+                        crate::serial_write_hex_u64(rflags);
+                        crate::serial_write_str(" cr3=0x");
+                        crate::serial_write_hex_u64(cr3);
+                        if ok_int {
+                            crate::serial_write_str(" int_state=0x");
+                            crate::serial_write_hex_u64(int_state);
+                        }
+                        if ok_act {
+                            crate::serial_write_str(" act_state=0x");
+                            crate::serial_write_hex_u64(act_state);
+                        }
+                        crate::serial_write_str("\n");
+                    }
+                } else if n == 100_000 || n == 1_000_000 {
+                    crate::serial_write_str("RAYOS_VMM:VMX:HLT_COUNT=0x");
+                    crate::serial_write_hex_u64(n as u64);
+                    crate::serial_write_str("\n");
+                }
                 if ok_len && ok_grip {
                     let _ = vmwrite(GUEST_RIP, grip.wrapping_add(ilen));
                 }
@@ -1543,7 +3277,25 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
                 // Unknown exit: stop for now.
                 1
             }
+        };
+
+        // If we're going to halt the VMM, always print at least minimal exit context,
+        // even when verbose logging is suppressed.
+        if action != 0 && !verbose {
+            crate::serial_write_str("RAYOS_VMM:VMX:HALT_EXIT_REASON=0x");
+            crate::serial_write_hex_u64(reason);
+            crate::serial_write_str(" exit_basic=0x");
+            crate::serial_write_hex_u64(exit_basic as u64);
+            crate::serial_write_str(" name=");
+            crate::serial_write_str(exit_reason_name(exit_basic));
+            if ok_intr {
+                crate::serial_write_str(" intr_info=0x");
+                crate::serial_write_hex_u64(intr_info);
+            }
+            crate::serial_write_str("\n");
         }
+
+        action
     }
 }
 
@@ -1582,6 +3334,65 @@ fn handle_ept_violation(
     };
 
     if ok_gpa {
+        // Special-case the guest local APIC MMIO page (0xFEE0_0000). With EPT enabled we do not
+        // identity-map MMIO ranges, so Linux will otherwise hit an EPT violation very early.
+        // For the Linux guest we need LAPIC register semantics (timer/IPIs/EOI), so prefer mapping
+        // the real LAPIC MMIO page through EPT as UC.
+        if linux_guest_active() {
+            let lapic_page_gpa = gpa & !0xFFF;
+            if lapic_page_gpa == 0xFEE0_0000 {
+                unsafe {
+                    // First try identity-mapping the LAPIC page so the guest can program the APIC.
+                    let (ok_eptp, eptp) = vmread(EPT_POINTER);
+                    if ok_eptp && ept_map_4k_page(eptp, 0xFEE0_0000, 0xFEE0_0000, EPT_MEMTYPE_UC) {
+                        return 0;
+                    }
+
+                    // Fallback: map the 4KB LAPIC page to a host-allocated backing page (UC) so
+                    // reads/writes succeed even if LAPIC passthrough is not possible.
+                    if GUEST_FAKE_LAPIC_PAGE_PHYS == 0 {
+                        if let Some(p) = alloc_zeroed_page() {
+                            GUEST_FAKE_LAPIC_PAGE_PHYS = p;
+                            let v = crate::phys_to_virt(p) as *mut u32;
+                            // LAPIC ID (offset 0x20): APIC ID is bits 24..31.
+                            core::ptr::write_volatile(v.add(0x20 / 4), 0u32);
+                            // LAPIC Version (offset 0x30): pick a plausible version.
+                            core::ptr::write_volatile(v.add(0x30 / 4), 0x14u32);
+                        }
+                    }
+
+                    if GUEST_FAKE_LAPIC_PAGE_PHYS != 0 {
+                        let (ok_eptp, eptp) = vmread(EPT_POINTER);
+                        if ok_eptp
+                            && ept_map_4k_page(
+                                eptp,
+                                0xFEE0_0000,
+                                GUEST_FAKE_LAPIC_PAGE_PHYS,
+                                EPT_MEMTYPE_UC,
+                            )
+                        {
+                            return 0;
+                        }
+                    }
+                }
+            }
+        }
+
+        // For nested bring-up under QEMU, Linux will probe PCI devices whose BARs live in the
+        // conventional MMIO window (e.g. 0x8000_0000+). Our default EPT only maps guest RAM and
+        // RayOS synthetic MMIO, so allow identity-mapping this window on-demand.
+        if linux_guest_active() {
+            let page_gpa = gpa & !0xFFF;
+            if (0x8000_0000..0x9000_0000).contains(&page_gpa) {
+                unsafe {
+                    let (ok_eptp, eptp) = vmread(EPT_POINTER);
+                    if ok_eptp && ept_map_4k_page(eptp, page_gpa, page_gpa, EPT_MEMTYPE_UC) {
+                        return 0;
+                    }
+                }
+            }
+        }
+
         if let Some(region) = find_mmio_region(gpa) {
             if emulate_mmio_access(&region, regs, gpa, qual, grip, ilen, ok_len, ok_grip) {
                 return 0;
@@ -1655,6 +3466,663 @@ fn read_u32(gpa: u64) -> Option<u32> {
     } else {
         None
     }
+}
+
+fn read_u64(gpa: u64) -> Option<u64> {
+    let mut buf = [0u8; 8];
+    if read_guest_bytes(gpa, &mut buf) {
+        Some(u64::from_le_bytes(buf))
+    } else {
+        None
+    }
+}
+
+fn dump_guest_pae_walk(cr3: u64, va: u64) {
+    // PAE paging (32-bit with CR4.PAE=1, EFER.LMA=0):
+    //  CR3 points to a 32-byte PDPT containing 4 x 64-bit PDPTEs.
+    //  va[31:30] selects PDPT entry.
+    //  va[29:21] selects PDE.
+    //  va[20:12] selects PTE.
+    let pdpt_base = cr3 & 0xFFFF_FFFF_FFFF_F000;
+    let pdpt_idx = ((va >> 30) & 0x3) as u64;
+    let pd_idx = ((va >> 21) & 0x1FF) as u64;
+    let pt_idx = ((va >> 12) & 0x1FF) as u64;
+
+    crate::serial_write_str("RAYOS_VMM:VMX:PAE_PDPT_BASE=0x");
+    crate::serial_write_hex_u64(pdpt_base);
+    crate::serial_write_str(" idx=0x");
+    crate::serial_write_hex_u64(pdpt_idx);
+    crate::serial_write_str("\n");
+
+    let pdpte_gpa = pdpt_base.wrapping_add(pdpt_idx * 8);
+    let Some(pdpte) = read_u64(pdpte_gpa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:PAE_PDPTE_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:PAE_PDPTE=0x");
+    crate::serial_write_hex_u64(pdpte);
+    crate::serial_write_str("\n");
+
+    if (pdpte & 0x1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:PAE_PDPTE_NOT_PRESENT\n");
+        return;
+    }
+
+    let pd_base = pdpte & 0xFFFF_FFFF_FFFF_F000;
+    let pde_gpa = pd_base.wrapping_add(pd_idx * 8);
+    let Some(pde) = read_u64(pde_gpa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:PAE_PDE_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:PAE_PD_BASE=0x");
+    crate::serial_write_hex_u64(pd_base);
+    crate::serial_write_str(" idx=0x");
+    crate::serial_write_hex_u64(pd_idx);
+    crate::serial_write_str(" PDE=0x");
+    crate::serial_write_hex_u64(pde);
+    crate::serial_write_str("\n");
+
+    if (pde & 0x1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:PAE_PDE_NOT_PRESENT\n");
+        return;
+    }
+
+    let ps = (pde >> 7) & 1;
+    if ps != 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:PAE_PDE_PS_2MB\n");
+        return;
+    }
+
+    let pt_base = pde & 0xFFFF_FFFF_FFFF_F000;
+    let pte_gpa = pt_base.wrapping_add(pt_idx * 8);
+    let Some(pte) = read_u64(pte_gpa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:PAE_PTE_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:PAE_PT_BASE=0x");
+    crate::serial_write_hex_u64(pt_base);
+    crate::serial_write_str(" idx=0x");
+    crate::serial_write_hex_u64(pt_idx);
+    crate::serial_write_str(" PTE=0x");
+    crate::serial_write_hex_u64(pte);
+    crate::serial_write_str("\n");
+
+    if (pte & 0x1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:PAE_PTE_NOT_PRESENT\n");
+        return;
+    }
+
+    let pa = (pte & 0xFFFF_FFFF_FFFF_F000) | (va & 0xFFF);
+    crate::serial_write_str("RAYOS_VMM:VMX:PAE_TRANSL_PA=0x");
+    crate::serial_write_hex_u64(pa);
+    crate::serial_write_str("\n");
+}
+
+fn dump_guest_longmode_walk(cr3: u64, va: u64) {
+    // 4-level paging (IA-32e):
+    //  CR3 -> PML4 -> PDPT -> PD -> PT.
+    let pml4_base = cr3 & 0xFFFF_FFFF_FFFF_F000;
+    let pml4_idx = ((va >> 39) & 0x1FF) as u64;
+    let pdpt_idx = ((va >> 30) & 0x1FF) as u64;
+    let pd_idx = ((va >> 21) & 0x1FF) as u64;
+    let pt_idx = ((va >> 12) & 0x1FF) as u64;
+
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_PML4_BASE=0x");
+    crate::serial_write_hex_u64(pml4_base);
+    crate::serial_write_str(" idx=0x");
+    crate::serial_write_hex_u64(pml4_idx);
+    crate::serial_write_str("\n");
+
+    let pml4e_gpa = pml4_base.wrapping_add(pml4_idx * 8);
+    let Some(pml4e) = read_u64(pml4e_gpa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PML4E_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_PML4E=0x");
+    crate::serial_write_hex_u64(pml4e);
+    crate::serial_write_str("\n");
+    if (pml4e & 0x1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PML4E_NOT_PRESENT\n");
+        return;
+    }
+
+    let pdpt_base = pml4e & 0xFFFF_FFFF_FFFF_F000;
+    let pdpte_gpa = pdpt_base.wrapping_add(pdpt_idx * 8);
+    let Some(pdpte) = read_u64(pdpte_gpa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDPTE_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_PDPT_BASE=0x");
+    crate::serial_write_hex_u64(pdpt_base);
+    crate::serial_write_str(" idx=0x");
+    crate::serial_write_hex_u64(pdpt_idx);
+    crate::serial_write_str(" PDPTE=0x");
+    crate::serial_write_hex_u64(pdpte);
+    crate::serial_write_str("\n");
+    if (pdpte & 0x1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDPTE_NOT_PRESENT\n");
+        return;
+    }
+    let ps1g = (pdpte >> 7) & 1;
+    if ps1g != 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDPTE_PS_1GB\n");
+        return;
+    }
+
+    let pd_base = pdpte & 0xFFFF_FFFF_FFFF_F000;
+    let pde_gpa = pd_base.wrapping_add(pd_idx * 8);
+    let Some(pde) = read_u64(pde_gpa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDE_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_PD_BASE=0x");
+    crate::serial_write_hex_u64(pd_base);
+    crate::serial_write_str(" idx=0x");
+    crate::serial_write_hex_u64(pd_idx);
+    crate::serial_write_str(" PDE=0x");
+    crate::serial_write_hex_u64(pde);
+    crate::serial_write_str("\n");
+    if (pde & 0x1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDE_NOT_PRESENT\n");
+        return;
+    }
+    let ps2m = (pde >> 7) & 1;
+    if ps2m != 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDE_PS_2MB\n");
+        return;
+    }
+
+    let pt_base = pde & 0xFFFF_FFFF_FFFF_F000;
+    let pte_gpa = pt_base.wrapping_add(pt_idx * 8);
+    let Some(pte) = read_u64(pte_gpa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PTE_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_PT_BASE=0x");
+    crate::serial_write_hex_u64(pt_base);
+    crate::serial_write_str(" idx=0x");
+    crate::serial_write_hex_u64(pt_idx);
+    crate::serial_write_str(" PTE=0x");
+    crate::serial_write_hex_u64(pte);
+    crate::serial_write_str("\n");
+    if (pte & 0x1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PTE_NOT_PRESENT\n");
+        return;
+    }
+
+    let pa = (pte & 0xFFFF_FFFF_FFFF_F000) | (va & 0xFFF);
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_TRANSL_PA=0x");
+    crate::serial_write_hex_u64(pa);
+    crate::serial_write_str("\n");
+}
+
+fn guest_longmode_translate_pa_with_cr4(cr3: u64, cr4: u64, va: u64) -> Option<u64> {
+    // IA-32e paging:
+    // - 4-level: CR3 -> PML4 -> PDPT -> PD -> PT
+    // - 5-level (LA57): CR3 -> PML5 -> PML4 -> PDPT -> PD -> PT
+    // Mask to the address portion (bits 51:12). Do not propagate NX/attr bits.
+    let base = cr3 & 0x000F_FFFF_FFFF_F000;
+    if base == 0 {
+        return None;
+    }
+
+    let la57 = (cr4 & (1u64 << 12)) != 0;
+    let (pml5_idx, pml4_idx) = if la57 {
+        (((va >> 48) & 0x1FF) as u64, ((va >> 39) & 0x1FF) as u64)
+    } else {
+        (0, ((va >> 39) & 0x1FF) as u64)
+    };
+    let pdpt_idx = ((va >> 30) & 0x1FF) as u64;
+    let pd_idx = ((va >> 21) & 0x1FF) as u64;
+    let pt_idx = ((va >> 12) & 0x1FF) as u64;
+
+    let pml4_base = if la57 {
+        let pml5e_gpa = base.wrapping_add(pml5_idx * 8);
+        let pml5e = read_u64(pml5e_gpa)?;
+        if (pml5e & 0x1) == 0 {
+            return None;
+        }
+        pml5e & 0x000F_FFFF_FFFF_F000
+    } else {
+        base
+    };
+
+    let pml4e_gpa = pml4_base.wrapping_add(pml4_idx * 8);
+    let pml4e = read_u64(pml4e_gpa)?;
+    if (pml4e & 0x1) == 0 {
+        return None;
+    }
+
+    let pdpt_base = pml4e & 0x000F_FFFF_FFFF_F000;
+    let pdpte_gpa = pdpt_base.wrapping_add(pdpt_idx * 8);
+    let pdpte = read_u64(pdpte_gpa)?;
+    if (pdpte & 0x1) == 0 {
+        return None;
+    }
+    if ((pdpte >> 7) & 1) != 0 {
+        // 1GB page.
+        let pa_base = pdpte & 0x000F_FFFF_C000_0000;
+        return Some(pa_base | (va & 0x3FFF_FFFF));
+    }
+
+    let pd_base = pdpte & 0x000F_FFFF_FFFF_F000;
+    let pde_gpa = pd_base.wrapping_add(pd_idx * 8);
+    let pde = read_u64(pde_gpa)?;
+    if (pde & 0x1) == 0 {
+        return None;
+    }
+    if ((pde >> 7) & 1) != 0 {
+        // 2MB page.
+        let pa_base = pde & 0x000F_FFFF_FFE0_0000;
+        return Some(pa_base | (va & 0x1F_FFFF));
+    }
+
+    let pt_base = pde & 0x000F_FFFF_FFFF_F000;
+    let pte_gpa = pt_base.wrapping_add(pt_idx * 8);
+    let pte = read_u64(pte_gpa)?;
+    if (pte & 0x1) == 0 {
+        return None;
+    }
+
+    let pa = (pte & 0x000F_FFFF_FFFF_F000) | (va & 0xFFF);
+    Some(pa)
+}
+
+fn guest_longmode_translate_pa(cr3: u64, va: u64) -> Option<u64> {
+    // Backwards-compatible wrapper used in bring-up paths where CR4 isn't available.
+    guest_longmode_translate_pa_with_cr4(cr3, 0, va)
+}
+
+fn guest_longmode_read_u64_with_cr4(cr3: u64, cr4: u64, va: u64) -> Option<u64> {
+    let pa = guest_longmode_translate_pa_with_cr4(cr3, cr4, va)?;
+    read_u64(pa)
+}
+
+fn guest_longmode_read_u64(cr3: u64, va: u64) -> Option<u64> {
+    let pa = guest_longmode_translate_pa(cr3, va)?;
+    read_u64(pa)
+}
+
+fn dump_guest_longmode_walk_with_cr4(cr3: u64, cr4: u64, va: u64) {
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_WALK_BEGIN va=0x");
+    crate::serial_write_hex_u64(va);
+    crate::serial_write_str(" cr3=0x");
+    crate::serial_write_hex_u64(cr3);
+    crate::serial_write_str(" cr4=0x");
+    crate::serial_write_hex_u64(cr4);
+    crate::serial_write_str("\n");
+
+    let base = cr3 & 0x000F_FFFF_FFFF_F000;
+    let la57 = (cr4 & (1u64 << 12)) != 0;
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_WALK_BASE=0x");
+    crate::serial_write_hex_u64(base);
+    crate::serial_write_str(" la57=");
+    crate::serial_write_hex_u64(if la57 { 1 } else { 0 });
+    crate::serial_write_str("\n");
+    if base == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_WALK_CR3_ZERO\n");
+        return;
+    }
+
+    let pml5_idx = ((va >> 48) & 0x1FF) as u64;
+    let pml4_idx = ((va >> 39) & 0x1FF) as u64;
+    let pdpt_idx = ((va >> 30) & 0x1FF) as u64;
+    let pd_idx = ((va >> 21) & 0x1FF) as u64;
+    let pt_idx = ((va >> 12) & 0x1FF) as u64;
+
+    let pml4_base = if la57 {
+        let pml5e_pa = base.wrapping_add(pml5_idx * 8);
+        let Some(pml5e) = read_u64(pml5e_pa) else {
+            crate::serial_write_str("RAYOS_VMM:VMX:LM_PML5E_READ_FAIL\n");
+            return;
+        };
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PML5E idx=0x");
+        crate::serial_write_hex_u64(pml5_idx);
+        crate::serial_write_str(" val=0x");
+        crate::serial_write_hex_u64(pml5e);
+        crate::serial_write_str("\n");
+        if (pml5e & 1) == 0 {
+            crate::serial_write_str("RAYOS_VMM:VMX:LM_PML5E_NOT_PRESENT\n");
+            return;
+        }
+        pml5e & 0x000F_FFFF_FFFF_F000
+    } else {
+        base
+    };
+
+    let pml4e_pa = pml4_base.wrapping_add(pml4_idx * 8);
+    let Some(pml4e) = read_u64(pml4e_pa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PML4E_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_PML4E idx=0x");
+    crate::serial_write_hex_u64(pml4_idx);
+    crate::serial_write_str(" val=0x");
+    crate::serial_write_hex_u64(pml4e);
+    crate::serial_write_str("\n");
+    if (pml4e & 1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PML4E_NOT_PRESENT\n");
+        return;
+    }
+
+    let pdpt_base = pml4e & 0x000F_FFFF_FFFF_F000;
+    let pdpte_pa = pdpt_base.wrapping_add(pdpt_idx * 8);
+    let Some(pdpte) = read_u64(pdpte_pa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDPTE_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_PDPTE idx=0x");
+    crate::serial_write_hex_u64(pdpt_idx);
+    crate::serial_write_str(" val=0x");
+    crate::serial_write_hex_u64(pdpte);
+    crate::serial_write_str("\n");
+    if (pdpte & 1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDPTE_NOT_PRESENT\n");
+        return;
+    }
+
+    if ((pdpte >> 7) & 1) != 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDPTE_PS_1GB\n");
+        return;
+    }
+
+    let pd_base = pdpte & 0x000F_FFFF_FFFF_F000;
+    let pde_pa = pd_base.wrapping_add(pd_idx * 8);
+    let Some(pde) = read_u64(pde_pa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDE_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_PDE idx=0x");
+    crate::serial_write_hex_u64(pd_idx);
+    crate::serial_write_str(" val=0x");
+    crate::serial_write_hex_u64(pde);
+    crate::serial_write_str("\n");
+    if (pde & 1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDE_NOT_PRESENT\n");
+        return;
+    }
+
+    if ((pde >> 7) & 1) != 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PDE_PS_2MB\n");
+        return;
+    }
+
+    let pt_base = pde & 0x000F_FFFF_FFFF_F000;
+    let pte_pa = pt_base.wrapping_add(pt_idx * 8);
+    let Some(pte) = read_u64(pte_pa) else {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PTE_READ_FAIL\n");
+        return;
+    };
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_PTE idx=0x");
+    crate::serial_write_hex_u64(pt_idx);
+    crate::serial_write_str(" val=0x");
+    crate::serial_write_hex_u64(pte);
+    crate::serial_write_str("\n");
+    if (pte & 1) == 0 {
+        crate::serial_write_str("RAYOS_VMM:VMX:LM_PTE_NOT_PRESENT\n");
+        return;
+    }
+
+    let pa = (pte & 0x000F_FFFF_FFFF_F000) | (va & 0xFFF);
+    crate::serial_write_str("RAYOS_VMM:VMX:LM_WALK_PA=0x");
+    crate::serial_write_hex_u64(pa);
+    crate::serial_write_str("\n");
+}
+
+fn try_fixup_longmode_map_2mb(cr3: u64, va: u64, pa: u64) -> bool {
+    // Install a 2MB mapping for `va` into the guest's current paging structures if the
+    // paging structures exist but the PDE is missing.
+    // Bring-up aid only.
+    let pml4_base = cr3 & 0xFFFF_FFFF_FFFF_F000;
+    if pml4_base == 0 {
+        return false;
+    }
+    let pml4_idx = ((va >> 39) & 0x1FF) as u64;
+    let pml4e_pa = pml4_base + pml4_idx * 8;
+    static mut LOW_IDENTITY_PDPT_BASE: u64 = 0;
+
+    let mut pml4e = match read_u64(pml4e_pa) {
+        Some(v) => v,
+        None => return false,
+    };
+
+    // If the current PML4 does not map the needed region at all, try to graft back the
+    // previously-observed low identity PDPT.
+    if (pml4e & 1) == 0 {
+        unsafe {
+            let ram_top = GUEST_RAM_SIZE_BYTES as u64;
+
+            // For physmap faults (and sometimes for low identity after Linux switches CR3),
+            // build fresh paging structures in a reserved guest RAM region so we don't rely
+            // on older page tables that Linux may have repurposed.
+            let want_fresh_slot = va >= LINUX_X86_64_PHYSMAP_BASE || (pml4_idx == 0 && va < ram_top);
+            if want_fresh_slot {
+                if let Some(new_pdpt_gpa) = pf_fixup_alloc_zeroed_guest_page() {
+                    let new_pml4e = (new_pdpt_gpa & 0xFFFF_FFFF_FFFF_F000) | 0x63;
+                    if write_guest_bytes(pml4e_pa, &new_pml4e.to_le_bytes()) {
+                        pml4e = new_pml4e;
+
+                        if va >= LINUX_X86_64_PHYSMAP_BASE
+                            && PHYSMAP_PML4E_FRESH_LOGGED
+                                .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+                                .is_ok()
+                        {
+                            crate::serial_write_str("RAYOS_VMM:VMX:PF_FIXUP:PHYSMAP_FRESH_PML4E_OK va=0x");
+                            crate::serial_write_hex_u64(va);
+                            crate::serial_write_str(" cr3=0x");
+                            crate::serial_write_hex_u64(cr3);
+                            crate::serial_write_str(" pml4e_pa=0x");
+                            crate::serial_write_hex_u64(pml4e_pa);
+                            crate::serial_write_str(" new_pdpt=0x");
+                            crate::serial_write_hex_u64(new_pdpt_gpa);
+                            crate::serial_write_str(" new_pml4e=0x");
+                            crate::serial_write_hex_u64(new_pml4e);
+                            crate::serial_write_str("\n");
+                        }
+
+                        // Eagerly map all guest RAM using 2MB pages to avoid a #PF storm.
+                        // This is especially important for the Linux physmap direct map.
+                        let needed_pdpt = ((ram_top + ((1u64 << 30) - 1)) >> 30) as u64; // ceil / 1GB
+                        let max_pdpt = core::cmp::min(512u64, needed_pdpt);
+                        for slot in 0..max_pdpt {
+                            if let Some(new_pd_gpa) = pf_fixup_alloc_zeroed_guest_page() {
+                                // Pre-fill this PD with 2MB mappings for its 1GB chunk.
+                                let chunk_base = slot << 30;
+                                if chunk_base < ram_top {
+                                    let chunk_size = core::cmp::min(1u64 << 30, ram_top - chunk_base);
+                                    let pde_count = ((chunk_size + 0x1F_FFFF) >> 21) as u64; // ceil / 2MB
+                                    let max_pde = core::cmp::min(512u64, pde_count);
+                                    for i in 0..max_pde {
+                                        let pa_base_2mb = chunk_base + (i << 21);
+                                        let pde = (pa_base_2mb & 0xFFFF_FFFF_FFE0_0000) | 0x1E3;
+                                        let _ = write_guest_bytes(new_pd_gpa + i * 8, &pde.to_le_bytes());
+                                    }
+                                }
+
+                                let new_pdpte = (new_pd_gpa & 0xFFFF_FFFF_FFFF_F000) | 0x63;
+                                let _ = write_guest_bytes(new_pdpt_gpa + slot * 8, &new_pdpte.to_le_bytes());
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // If we still don't have a PML4E, fall back to grafting back a previously-observed
+            // identity PDPT (best-effort).
+            if (pml4e & 1) == 0 {
+                // For low addresses we only graft slot 0; for physmap addresses, graft the
+                // corresponding slot as well so VA->PA behaves like a direct map.
+                if va >= LINUX_X86_64_PHYSMAP_BASE && LOW_IDENTITY_PDPT_BASE == 0 {
+                    crate::serial_write_str("RAYOS_VMM:VMX:PF_FIXUP:PHYSMAP_PML4E_MISSING_LOW_PDPT_BASE_0 va=0x");
+                    crate::serial_write_hex_u64(va);
+                    crate::serial_write_str(" cr3=0x");
+                    crate::serial_write_hex_u64(cr3);
+                    crate::serial_write_str(" pml4_idx=0x");
+                    crate::serial_write_hex_u64(pml4_idx);
+                    crate::serial_write_str("\n");
+                }
+
+                if (pml4_idx == 0 || va >= LINUX_X86_64_PHYSMAP_BASE) && LOW_IDENTITY_PDPT_BASE != 0 {
+                    if va >= LINUX_X86_64_PHYSMAP_BASE {
+                        crate::serial_write_str("RAYOS_VMM:VMX:PF_FIXUP:GRAFT_PHYSMAP_SLOT va=0x");
+                        crate::serial_write_hex_u64(va);
+                        crate::serial_write_str(" low_pdpt=0x");
+                        crate::serial_write_hex_u64(LOW_IDENTITY_PDPT_BASE);
+                        crate::serial_write_str("\n");
+                    }
+                    // present|rw|user + no other special bits
+                    let new_pml4e = (LOW_IDENTITY_PDPT_BASE & 0xFFFF_FFFF_FFFF_F000) | 0x63;
+                    if write_guest_bytes(pml4e_pa, &new_pml4e.to_le_bytes()) {
+                        pml4e = new_pml4e;
+                        if va >= LINUX_X86_64_PHYSMAP_BASE {
+                            crate::serial_write_str(
+                                "RAYOS_VMM:VMX:PF_FIXUP:GRAFT_PHYSMAP_SLOT_OK new_pml4e=0x",
+                            );
+                            crate::serial_write_hex_u64(new_pml4e);
+                            crate::serial_write_str("\n");
+                        }
+                    } else if va >= LINUX_X86_64_PHYSMAP_BASE {
+                        crate::serial_write_str(
+                            "RAYOS_VMM:VMX:PF_FIXUP:GRAFT_PHYSMAP_SLOT_WRITE_FAIL pml4e_pa=0x",
+                        );
+                        crate::serial_write_hex_u64(pml4e_pa);
+                        crate::serial_write_str("\n");
+                    }
+                }
+            }
+        }
+    }
+
+    if (pml4e & 1) == 0 {
+        return false;
+    }
+
+    // Remember a working low PDPT base for future CR3 switches.
+    unsafe {
+        if pml4_idx == 0 {
+            LOW_IDENTITY_PDPT_BASE = pml4e & 0xFFFF_FFFF_FFFF_F000;
+        }
+    }
+
+    let pdpt_base = pml4e & 0xFFFF_FFFF_FFFF_F000;
+    let pdpt_idx = ((va >> 30) & 0x1FF) as u64;
+    let pdpte_pa = pdpt_base + pdpt_idx * 8;
+    let mut pdpte = match read_u64(pdpte_pa) {
+        Some(v) => v,
+        None => return false,
+    };
+    if (pdpte & 1) == 0 {
+        if va < LINUX_X86_64_PHYSMAP_BASE {
+            return false;
+        }
+        unsafe {
+            if let Some(new_pd_gpa) = pf_fixup_alloc_zeroed_guest_page() {
+                // Pre-fill this PD with 2MB direct-map PDEs for the portion of guest RAM
+                // covered by this PDPT entry. This dramatically reduces physmap page-fault
+                // storms during Linux bring-up.
+                let chunk_base = pdpt_idx << 30; // 1GB per PDPT slot
+                let ram_top = GUEST_RAM_SIZE_BYTES as u64;
+                if chunk_base < ram_top {
+                    let chunk_size = core::cmp::min(1u64 << 30, ram_top - chunk_base);
+                    let pde_count = ((chunk_size + 0x1F_FFFF) >> 21) as u64; // ceil / 2MB
+                    let max_pde = core::cmp::min(512u64, pde_count);
+                    for i in 0..max_pde {
+                        let pa_base_2mb = chunk_base + (i << 21);
+                        let pde = (pa_base_2mb & 0xFFFF_FFFF_FFE0_0000) | 0x1E3;
+                        let _ = write_guest_bytes(new_pd_gpa + i * 8, &pde.to_le_bytes());
+                    }
+                }
+
+                let new_pdpte = (new_pd_gpa & 0xFFFF_FFFF_FFFF_F000) | 0x63;
+                if write_guest_bytes(pdpte_pa, &new_pdpte.to_le_bytes()) {
+                    pdpte = new_pdpte;
+                }
+            }
+        }
+    }
+    if (pdpte & 1) == 0 {
+        return false;
+    }
+
+    let pd_base = pdpte & 0xFFFF_FFFF_FFFF_F000;
+    let pd_idx = ((va >> 21) & 0x1FF) as u64;
+    let pde_pa = pd_base + pd_idx * 8;
+    let Some(pde) = read_u64(pde_pa) else {
+        return false;
+    };
+
+    // If we have an existing PD but it's empty, pre-fill a full set of 2MB mappings for
+    // all guest RAM. This avoids spending dozens/hundreds of VM exits on sequential faults.
+    if (pde & 1) == 0 {
+        let ram_top = GUEST_RAM_SIZE_BYTES as u64;
+        let is_physmap = va >= LINUX_X86_64_PHYSMAP_BASE;
+
+        // Low identity: only consider PDPT slot 0.
+        if !is_physmap && pdpt_idx == 0 && LOW_IDENTITY_PREFILL_DONE.load(Ordering::Relaxed) == 0 {
+            let chunk_base = 0u64;
+            let chunk_size = core::cmp::min(1u64 << 30, ram_top.saturating_sub(chunk_base));
+            let pde_count = ((chunk_size + 0x1F_FFFF) >> 21) as u64; // ceil / 2MB
+            let max_pde = core::cmp::min(512u64, pde_count);
+            for i in 0..max_pde {
+                let slot_pa = pd_base + i * 8;
+                if let Some(existing) = read_u64(slot_pa) {
+                    if existing & 1 != 0 {
+                        continue;
+                    }
+                }
+                let pa_base_2mb = chunk_base + (i << 21);
+                let new_pde = (pa_base_2mb & 0xFFFF_FFFF_FFE0_0000) | 0x1E3;
+                let _ = write_guest_bytes(slot_pa, &new_pde.to_le_bytes());
+            }
+            LOW_IDENTITY_PREFILL_DONE.store(1, Ordering::Relaxed);
+            return true;
+        }
+
+        // Physmap: similarly prefill PDPT slot 0 once.
+        if is_physmap && pdpt_idx == 0 && PHYSMAP_PREFILL_DONE.load(Ordering::Relaxed) == 0 {
+            let chunk_base = 0u64;
+            let chunk_size = core::cmp::min(1u64 << 30, ram_top.saturating_sub(chunk_base));
+            let pde_count = ((chunk_size + 0x1F_FFFF) >> 21) as u64; // ceil / 2MB
+            let max_pde = core::cmp::min(512u64, pde_count);
+            for i in 0..max_pde {
+                let slot_pa = pd_base + i * 8;
+                if let Some(existing) = read_u64(slot_pa) {
+                    if existing & 1 != 0 {
+                        continue;
+                    }
+                }
+                let pa_base_2mb = chunk_base + (i << 21);
+                let new_pde = (pa_base_2mb & 0xFFFF_FFFF_FFE0_0000) | 0x1E3;
+                let _ = write_guest_bytes(slot_pa, &new_pde.to_le_bytes());
+            }
+            PHYSMAP_PREFILL_DONE.store(1, Ordering::Relaxed);
+            return true;
+        }
+    }
+
+    if (pde & 1) != 0 {
+        // Already present. If it's a 4KB page table (PS=0), it may still fault due to missing PTEs.
+        // For physmap bring-up, prefer forcing a 2MB mapping to keep Linux moving forward.
+        let ps2m = (pde >> 7) & 1;
+        if ps2m != 0 {
+            // Mapping is already a 2MB page. For bring-up purposes, treat this as a successful
+            // fixup so the caller retries the faulting instruction (with a TLB flush).
+            return true;
+        }
+        if va < LINUX_X86_64_PHYSMAP_BASE {
+            return false;
+        }
+        // Fall through and overwrite with a 2MB PDE.
+    }
+
+    // Mirror typical Linux early-boot 2MB PDE flags (present|rw|user|pwt|pcd|accessed|dirty|ps).
+    let flags: u64 = 0x1E3;
+    let pa_base_2mb = pa & 0xFFFF_FFFF_FFE0_0000;
+    let new_pde = pa_base_2mb | flags;
+    let bytes = new_pde.to_le_bytes();
+    write_guest_bytes(pde_pa, &bytes)
 }
 
 fn write_guest_bytes(gpa: u64, data: &[u8]) -> bool {
@@ -1744,6 +4212,29 @@ fn fill_descriptor_payload(addr: u64, len: u32, pattern: u8) -> bool {
     true
 }
 
+unsafe fn pf_fixup_alloc_zeroed_guest_page() -> Option<u64> {
+    let ram_top = GUEST_RAM_SIZE_BYTES as u64;
+    let base = ram_top.saturating_sub(PF_FIXUP_PT_RESERVE_BYTES);
+    let end = base.saturating_add(PF_FIXUP_PT_RESERVE_BYTES);
+
+    if PF_FIXUP_PT_RESERVE_BYTES < 4096 {
+        return None;
+    }
+
+    if PF_FIXUP_PT_ALLOC_NEXT_GPA == 0 {
+        PF_FIXUP_PT_ALLOC_NEXT_GPA = base;
+    }
+    let gpa = PF_FIXUP_PT_ALLOC_NEXT_GPA;
+    if gpa < base || gpa.saturating_add(4096) > end {
+        return None;
+    }
+    PF_FIXUP_PT_ALLOC_NEXT_GPA = gpa + 4096;
+    if !fill_descriptor_payload(gpa, 4096, 0) {
+        return None;
+    }
+    Some(gpa)
+}
+
 fn respond_with_status(addr: u64, len: u32, status: u8) -> bool {
     if len == 0 {
         return true;
@@ -1816,8 +4307,22 @@ fn virtio_blk_disk_init_once() {
         if VIRTIO_BLK_DISK_INITIALIZED {
             return;
         }
-        for b in VIRTIO_BLK_DISK.iter_mut() {
-            *b = VIRTIO_BLK_READ_PATTERN;
+
+        #[cfg(feature = "vmm_virtio_blk_image")]
+        {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:DISK_INIT_IMAGE\n");
+            let n = core::cmp::min(VIRTIO_BLK_DISK_IMAGE.len(), VIRTIO_BLK_DISK.len());
+            VIRTIO_BLK_DISK[..n].copy_from_slice(&VIRTIO_BLK_DISK_IMAGE[..n]);
+            for b in VIRTIO_BLK_DISK[n..].iter_mut() {
+                *b = 0;
+            }
+        }
+
+        #[cfg(not(feature = "vmm_virtio_blk_image"))]
+        {
+            for b in VIRTIO_BLK_DISK.iter_mut() {
+                *b = VIRTIO_BLK_READ_PATTERN;
+            }
         }
         VIRTIO_BLK_DISK_INITIALIZED = true;
     }
@@ -2468,6 +4973,12 @@ fn log_descriptor_chain(
                     #[cfg(feature = "vmm_virtio_console")]
                     VIRTIO_CONSOLE_DEVICE_ID => {
                         // VIRTIO console uses separate queues: data queue (0) and control queue (1).
+                        // If the chain only contains a single non-writable descriptor that actually
+                        // holds payload, treat it as a data descriptor so handlers see the bytes.
+                        if data_desc_count == 0 {
+                            data_descs[0] = header;
+                            data_desc_count = 1;
+                        }
                         if queue_index == 0 {
                             let used_len = unsafe { handle_virtio_console_dataq(header, &data_descs[..data_desc_count]) };
                             return Some(used_len);
@@ -2518,11 +5029,12 @@ unsafe fn handle_virtio_gpu_chain(header: VirtqDesc, descs: &[VirtqDesc]) -> u32
     // Run the controlq handler and log result; the device model will publish
     // scanout/meta updates and call GuestScanoutPublisher.frame_ready() which
     // emits the first-frame marker on transition.
-    let written = VIRTIO_GPU_DEVICE.handle_controlq(
+    let written = VIRTIO_GPU_DEVICE.handle_controlq_gpa(
         req.addr,
         req.len as usize,
         resp_desc.addr,
         resp_desc.len as usize,
+        guest_gpa_to_phys,
     );
     crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:CONTROLQ_DONE\n");
     written as u32
@@ -3027,29 +5539,60 @@ unsafe fn setup_vmcs_minimal_host_and_controls() {
         )
     };
 
+    let linux_guest = {
+        #[cfg(feature = "vmm_linux_guest")]
+        {
+            unsafe { LINUX_GUEST_ENTRY_RIP != 0 && LINUX_GUEST_BOOT_PARAMS_GPA != 0 }
+        }
+        #[cfg(not(feature = "vmm_linux_guest"))]
+        {
+            false
+        }
+    };
+
     // Required bits are forced by adjust_vmx_controls.
     // - Request HLT exiting (CPU-based bit 7) so our trivial guest reliably VM-exits.
     // - Request CPUID exiting + I/O bitmaps so we can emulate guest-visible CPU/port I/O.
+    // - Request MSR bitmaps so we can avoid trapping most RDMSR while still trapping all WRMSR.
     // - Request 64-bit host mode for VM-exit (exit ctl bit 9).
-    // - Request IA-32e guest (entry ctl bit 9) + load IA32_EFER (entry ctl bit 15).
+    // - By default, request an IA-32e guest (entry ctl bit 9). When booting a Linux bzImage
+    //   directly via the boot protocol, enter at the 32-bit protected-mode entrypoint instead.
     // - Request save/load IA32_EFER on exit (exit ctl bits 20/21).
-    let pin = adjust_vmx_controls(msr_pin, 0);
-    // Request secondary controls so we can enable EPT as the next foundation step.
-    let cpu = adjust_vmx_controls(
-        msr_cpu,
-        CPU_CTL_HLT_EXITING
-            | CPU_CTL_CPUID_EXITING
-            | CPU_CTL_USE_IO_BITMAPS
-            | CPU_CTL_ACTIVATE_SECONDARY_CONTROLS,
-    );
+    // For debugging hangs in the Linux guest, request the VMX-preemption timer (if supported)
+    // so we can force periodic VM-exits even when the guest is executing pure compute loops.
+    let desired_pin = if linux_guest { PIN_CTL_VMX_PREEMPTION_TIMER } else { 0 };
+    let pin = adjust_vmx_controls(msr_pin, desired_pin);
     let exit_ctl = adjust_vmx_controls(
         msr_exit,
         EXIT_CTL_HOST_ADDR_SPACE_SIZE | EXIT_CTL_SAVE_IA32_EFER | EXIT_CTL_LOAD_IA32_EFER,
     );
-    let entry_ctl = adjust_vmx_controls(
-        msr_entry,
-        ENTRY_CTL_IA32E_MODE_GUEST | ENTRY_CTL_LOAD_IA32_EFER,
-    );
+    // Request secondary controls so we can enable EPT as the next foundation step.
+    // For the Linux guest, keep CPUID exiting enabled so we can present a stable,
+    // minimal CPUID surface (avoiding host-specific feature leaks like LA57).
+    let desired_cpu = if linux_guest {
+        // Debugging aid: exit on HLT so we can observe whether Linux is stuck in idle/wfi.
+        // (The HLT exit handler is throttled to avoid log spam.)
+        CPU_CTL_HLT_EXITING
+            | CPU_CTL_CPUID_EXITING
+            | CPU_CTL_USE_IO_BITMAPS
+            | CPU_CTL_USE_MSR_BITMAPS
+            | CPU_CTL_ACTIVATE_SECONDARY_CONTROLS
+    } else {
+        CPU_CTL_HLT_EXITING
+            | CPU_CTL_CPUID_EXITING
+            | CPU_CTL_USE_IO_BITMAPS
+            | CPU_CTL_USE_MSR_BITMAPS
+            | CPU_CTL_ACTIVATE_SECONDARY_CONTROLS
+    };
+    let cpu = adjust_vmx_controls(msr_cpu, desired_cpu);
+    let desired_entry = if linux_guest {
+        // Enter the Linux bzImage using the 64-bit boot protocol entry (loaded kernel + 0x200).
+        // This requires an IA-32e guest and a consistent EFER/CR0/CR4/CR3 setup.
+        ENTRY_CTL_IA32E_MODE_GUEST | ENTRY_CTL_LOAD_IA32_EFER
+    } else {
+        ENTRY_CTL_IA32E_MODE_GUEST | ENTRY_CTL_LOAD_IA32_EFER
+    };
+    let entry_ctl = adjust_vmx_controls(msr_entry, desired_entry);
 
     crate::serial_write_str("RAYOS_VMM:VMX:CTL_PIN=0x");
     crate::serial_write_hex_u64(pin as u64);
@@ -3069,12 +5612,48 @@ unsafe fn setup_vmcs_minimal_host_and_controls() {
     let _ = vmcs_write_or_log(VM_EXIT_CONTROLS, exit_ctl as u64);
     let _ = vmcs_write_or_log(VM_ENTRY_CONTROLS, entry_ctl as u64);
 
+    // Read back key controls to catch any unexpected adjustments.
+    let (ok_cpu_ctl, cpu_ctl_rb) = vmread(CPU_BASED_VM_EXEC_CONTROL);
+    if ok_cpu_ctl {
+        crate::serial_write_str("RAYOS_VMM:VMX:VMCS_CPU_CTL=0x");
+        crate::serial_write_hex_u64(cpu_ctl_rb);
+        crate::serial_write_str("\n");
+    }
+
+    // Exception bitmap: a set bit requests a VM-exit on the corresponding exception vector.
+    //
+    // For the Linux guest, we generally want the guest to handle its own exceptions.
+    // However, trapping *rare* fatal exceptions (#UD/#GP) is extremely useful for diagnosing
+    // early-boot hangs: we can log the faulting RIP/insn bytes, then reflect the exception
+    // back into the guest so it can still oops/panic normally.
+    let exception_bitmap = if linux_guest {
+        // #UD (6), #GP (13), #PF (14)
+        (1u32 << 6) | (1u32 << 13) | (1u32 << 14)
+    } else {
+        // #GP (13), #PF (14)
+        (1u32 << 13) | (1u32 << 14)
+    };
+    let _ = vmcs_write_or_log(EXCEPTION_BITMAP, exception_bitmap as u64);
+
+    // Arm VMX-preemption timer if enabled.
+    if (pin as u32 & PIN_CTL_VMX_PREEMPTION_TIMER) != 0 {
+        let _ = vmcs_write_or_log(VMX_PREEMPTION_TIMER_VALUE, 0x0100_0000);
+    }
+
     if (cpu & CPU_CTL_USE_IO_BITMAPS) != 0 {
         if ensure_io_bitmaps() {
             let _ = vmcs_write_or_log(IO_BITMAP_A, unsafe { IO_BITMAP_A_PHYS });
             let _ = vmcs_write_or_log(IO_BITMAP_B, unsafe { IO_BITMAP_B_PHYS });
         } else {
             crate::serial_write_str("RAYOS_VMM:VMX:ALLOC_IO_BITMAPS_FAIL\n");
+        }
+    }
+
+    if (cpu & CPU_CTL_USE_MSR_BITMAPS) != 0 {
+        if ensure_msr_bitmaps() {
+            let _ = vmcs_write_or_log(MSR_BITMAPS, unsafe { MSR_BITMAPS_PHYS });
+        } else {
+            crate::serial_write_str("RAYOS_VMM:VMX:ALLOC_MSR_BITMAPS_FAIL\n");
         }
     }
 
@@ -3092,7 +5671,25 @@ unsafe fn setup_vmcs_minimal_host_and_controls() {
     // If the CPU-based controls enable/require secondary controls, program them too.
     // Bit 31 == "activate secondary controls".
     if (cpu & (1 << 31)) != 0 {
-        let cpu2 = adjust_vmx_controls(IA32_VMX_PROCBASED_CTLS2, CPU2_CTL_ENABLE_EPT);
+        let linux_guest = {
+            #[cfg(feature = "vmm_linux_guest")]
+            {
+                unsafe { LINUX_GUEST_ENTRY_RIP != 0 && LINUX_GUEST_BOOT_PARAMS_GPA != 0 }
+            }
+            #[cfg(not(feature = "vmm_linux_guest"))]
+            {
+                false
+            }
+        };
+        let desired_cpu2 = if linux_guest {
+            CPU2_CTL_ENABLE_EPT
+                | CPU2_CTL_UNRESTRICTED_GUEST
+                | CPU2_CTL_ENABLE_INVPCID
+                | CPU2_CTL_ENABLE_RDTSCP
+        } else {
+            CPU2_CTL_ENABLE_EPT
+        };
+        let cpu2 = adjust_vmx_controls(IA32_VMX_PROCBASED_CTLS2, desired_cpu2);
         crate::serial_write_str("RAYOS_VMM:VMX:CTL_CPU2=0x");
         crate::serial_write_hex_u64(cpu2 as u64);
         crate::serial_write_str("\n");
@@ -3176,45 +5773,120 @@ unsafe fn setup_vmcs_minimal_host_and_controls() {
 unsafe fn setup_vmcs_minimal_guest_state() {
     crate::serial_write_str("RAYOS_VMM:VMX:GUEST_SETUP_BEGIN\n");
 
-    // WARNING: This mirrors host paging/address space. This is bring-up only.
-    let guest_cr0 = read_cr0();
-    let guest_cr4 = read_cr4();
-    let _ = vmcs_write_or_log(GUEST_CR0, guest_cr0);
+    let linux_guest = {
+        #[cfg(feature = "vmm_linux_guest")]
+        {
+            unsafe { LINUX_GUEST_ENTRY_RIP != 0 && LINUX_GUEST_BOOT_PARAMS_GPA != 0 }
+        }
+        #[cfg(not(feature = "vmm_linux_guest"))]
+        {
+            false
+        }
+    };
+
+    // WARNING: The smoke guest mirrors host paging/address space.
+    // For Linux bzImage boot protocol (64-bit), enter at load+0x200 with paging enabled.
     let guest_pml4_gpa = guest_ram_gpa(0);
-    let _ = vmcs_write_or_log(GUEST_CR3, guest_pml4_gpa);
-    let _ = vmcs_write_or_log(GUEST_CR4, guest_cr4);
+    if linux_guest {
+        let cr0_fixed0 = crate::rdmsr(IA32_VMX_CR0_FIXED0);
+        let cr0_fixed1 = crate::rdmsr(IA32_VMX_CR0_FIXED1);
+        let cr4_fixed0 = crate::rdmsr(IA32_VMX_CR4_FIXED0);
+        let cr4_fixed1 = crate::rdmsr(IA32_VMX_CR4_FIXED1);
+
+        // 64-bit boot protocol requires paging enabled with IA-32e active.
+        // Provide an identity-mapped 4-level page table rooted at PML4.
+        let desired_cr0 = (1u64 << 0)
+            | (1u64 << 1)
+            | (1u64 << 4)
+            | (1u64 << 5)
+            | (1u64 << 31); // PE|MP|ET|NE|PG
+        let desired_cr4 = (1u64 << 5); // PAE
+
+        let guest_cr0 = (desired_cr0 | cr0_fixed0) & cr0_fixed1;
+        let guest_cr4 = (desired_cr4 | cr4_fixed0) & cr4_fixed1;
+
+        let _ = vmcs_write_or_log(GUEST_CR0, guest_cr0);
+        let _ = vmcs_write_or_log(GUEST_CR3, guest_pml4_gpa);
+
+        // Many CPUs require CR4.VMXE=1 while running in VMX non-root, via IA32_VMX_CR4_FIXED0.
+        // Linux does not expect VMXE to be set, and will attempt to write CR4 without it.
+        // Virtualize it away using mask+shadow, while keeping the actual guest CR4 VMXE-compliant.
+        const CR4_VMXE: u64 = 1u64 << 13;
+        let actual_cr4 = guest_cr4 | CR4_VMXE;
+        let _ = vmcs_write_or_log(GUEST_CR4, actual_cr4);
+        let _ = vmcs_write_or_log(CR4_GUEST_HOST_MASK, CR4_VMXE);
+        let _ = vmcs_write_or_log(CR4_READ_SHADOW, guest_cr4 & !CR4_VMXE);
+        let _ = vmcs_write_or_log(CR0_GUEST_HOST_MASK, 0);
+        let _ = vmcs_write_or_log(CR0_READ_SHADOW, guest_cr0);
+    } else {
+        let guest_cr0 = read_cr0();
+        let guest_cr4 = read_cr4();
+        let _ = vmcs_write_or_log(GUEST_CR0, guest_cr0);
+        let _ = vmcs_write_or_log(GUEST_CR3, guest_pml4_gpa);
+        let _ = vmcs_write_or_log(GUEST_CR4, guest_cr4);
+
+        let _ = vmcs_write_or_log(CR0_GUEST_HOST_MASK, 0);
+        let _ = vmcs_write_or_log(CR4_GUEST_HOST_MASK, 0);
+        let _ = vmcs_write_or_log(CR0_READ_SHADOW, guest_cr0);
+        let _ = vmcs_write_or_log(CR4_READ_SHADOW, guest_cr4);
+    }
 
     let _ = vmcs_write_or_log(GUEST_RFLAGS, 0x2);
     let guest_code_rip = guest_ram_gpa(GUEST_CODE_PAGE_INDEX);
-    let _ = vmcs_write_or_log(GUEST_RIP, guest_code_rip);
-    crate::serial_write_str("RAYOS_VMM:VMX:GUEST_CODE_RIP=0x");
-    crate::serial_write_hex_u64(guest_code_rip);
+    let guest_rip = {
+        #[cfg(feature = "vmm_linux_guest")]
+        {
+            if LINUX_GUEST_ENTRY_RIP != 0 {
+                LINUX_GUEST_ENTRY_RIP
+            } else {
+                guest_code_rip
+            }
+        }
+        #[cfg(not(feature = "vmm_linux_guest"))]
+        {
+            guest_code_rip
+        }
+    };
+    let _ = vmcs_write_or_log(GUEST_RIP, guest_rip);
+    crate::serial_write_str("RAYOS_VMM:VMX:GUEST_RIP=0x");
+    crate::serial_write_hex_u64(guest_rip);
     crate::serial_write_str("\n");
 
-    // Sanity: confirm the guest code bytes we installed are still present.
-    // For `out imm8, al` the port immediate is the following byte.
-    let code_phys = guest_ram_phys(GUEST_CODE_PAGE_INDEX);
-    let code_ptr = crate::phys_to_virt(code_phys) as *const u8;
-    let out0_imm = core::ptr::read_volatile(code_ptr.add(3)) as u64;
-    let out1_imm = core::ptr::read_volatile(code_ptr.add(7)) as u64;
-    crate::serial_write_str("RAYOS_VMM:VMX:GUEST_CODE_OUT_IMM0=0x");
-    crate::serial_write_hex_u64(out0_imm);
-    crate::serial_write_str("\n");
-    crate::serial_write_str("RAYOS_VMM:VMX:GUEST_CODE_OUT_IMM1=0x");
-    crate::serial_write_hex_u64(out1_imm);
-    crate::serial_write_str("\n");
+    // Sanity: confirm the guest code bytes we installed are still present (guest-driver mode only).
+    #[cfg(not(feature = "vmm_linux_guest"))]
+    {
+        // For `out imm8, al` the port immediate is the following byte.
+        let code_phys = guest_ram_phys(GUEST_CODE_PAGE_INDEX);
+        let code_ptr = crate::phys_to_virt(code_phys) as *const u8;
+        let out0_imm = core::ptr::read_volatile(code_ptr.add(3)) as u64;
+        let out1_imm = core::ptr::read_volatile(code_ptr.add(7)) as u64;
+        crate::serial_write_str("RAYOS_VMM:VMX:GUEST_CODE_OUT_IMM0=0x");
+        crate::serial_write_hex_u64(out0_imm);
+        crate::serial_write_str("\n");
+        crate::serial_write_str("RAYOS_VMM:VMX:GUEST_CODE_OUT_IMM1=0x");
+        crate::serial_write_hex_u64(out1_imm);
+        crate::serial_write_str("\n");
+    }
     let guest_stack_top = guest_ram_gpa(GUEST_STACK_START_INDEX + GUEST_STACK_PAGES);
     let _ = vmcs_write_or_log(GUEST_RSP, guest_stack_top - 0x10);
     crate::serial_write_str("RAYOS_VMM:VMX:GUEST_STACK_TOP=0x");
     crate::serial_write_hex_u64(guest_stack_top);
     crate::serial_write_str("\n");
 
-    // Guest EFER must be consistent with IA-32e entry controls.
-    let efer = crate::rdmsr(IA32_EFER);
+    // Guest EFER must be consistent with VM-entry controls.
+    let efer = if linux_guest {
+        // LME=1 and LMA=1 for IA-32e guest with paging enabled.
+        (1u64 << 8) | (1u64 << 10)
+    } else {
+        crate::rdmsr(IA32_EFER)
+    };
     let _ = vmcs_write_or_log(GUEST_IA32_EFER, efer);
 
-    let code_selector = GUEST_CODE_SELECTOR as u64;
-    let data_selector = GUEST_DATA_SELECTOR as u64;
+    let (code_selector, data_selector) = if linux_guest {
+        (LINUX_BOOT_CS_SELECTOR as u64, LINUX_BOOT_DS_SELECTOR as u64)
+    } else {
+        (GUEST_CODE_SELECTOR as u64, GUEST_DATA_SELECTOR as u64)
+    };
 
     let _ = vmcs_write_or_log(GUEST_CS_SELECTOR, code_selector);
     let _ = vmcs_write_or_log(GUEST_SS_SELECTOR, data_selector);
@@ -3222,7 +5894,14 @@ unsafe fn setup_vmcs_minimal_guest_state() {
     let _ = vmcs_write_or_log(GUEST_ES_SELECTOR, data_selector);
     let _ = vmcs_write_or_log(GUEST_FS_SELECTOR, data_selector);
     let _ = vmcs_write_or_log(GUEST_GS_SELECTOR, data_selector);
-    let _ = vmcs_write_or_log(GUEST_TR_SELECTOR, GUEST_TSS_SELECTOR as u64);
+    let _ = vmcs_write_or_log(
+        GUEST_TR_SELECTOR,
+        if linux_guest {
+            LINUX_TSS_SELECTOR as u64
+        } else {
+            GUEST_TSS_SELECTOR as u64
+        },
+    );
     let _ = vmcs_write_or_log(GUEST_LDTR_SELECTOR, 0);
 
     let _ = vmcs_write_or_log(GUEST_CS_BASE, 0);
@@ -3234,30 +5913,45 @@ unsafe fn setup_vmcs_minimal_guest_state() {
     let _ = vmcs_write_or_log(GUEST_TR_BASE, unsafe { GUEST_TSS_PHYS_VALUE });
     let _ = vmcs_write_or_log(GUEST_LDTR_BASE, 0);
 
-    let _ = vmcs_write_or_log(GUEST_CS_LIMIT, GUEST_SEGMENT_LIMIT_VALUE);
-    let _ = vmcs_write_or_log(GUEST_SS_LIMIT, GUEST_SEGMENT_LIMIT_VALUE);
-    let _ = vmcs_write_or_log(GUEST_DS_LIMIT, GUEST_SEGMENT_LIMIT_VALUE);
-    let _ = vmcs_write_or_log(GUEST_ES_LIMIT, GUEST_SEGMENT_LIMIT_VALUE);
-    let _ = vmcs_write_or_log(GUEST_FS_LIMIT, GUEST_SEGMENT_LIMIT_VALUE);
-    let _ = vmcs_write_or_log(GUEST_GS_LIMIT, GUEST_SEGMENT_LIMIT_VALUE);
-    let _ = vmcs_write_or_log(GUEST_TR_LIMIT, unsafe { GUEST_TSS_LIMIT_VALUE });
+    let seg_limit = if linux_guest { 0xFFFF_FFFF } else { GUEST_SEGMENT_LIMIT_VALUE };
+    let _ = vmcs_write_or_log(GUEST_CS_LIMIT, seg_limit);
+    let _ = vmcs_write_or_log(GUEST_SS_LIMIT, seg_limit);
+    let _ = vmcs_write_or_log(GUEST_DS_LIMIT, seg_limit);
+    let _ = vmcs_write_or_log(GUEST_ES_LIMIT, seg_limit);
+    let _ = vmcs_write_or_log(GUEST_FS_LIMIT, seg_limit);
+    let _ = vmcs_write_or_log(GUEST_GS_LIMIT, seg_limit);
+    let _ = vmcs_write_or_log(
+        GUEST_TR_LIMIT,
+        unsafe { GUEST_TSS_LIMIT_VALUE },
+    );
     let _ = vmcs_write_or_log(GUEST_LDTR_LIMIT, 0);
 
-    let _ = vmcs_write_or_log(GUEST_CS_AR_BYTES, GUEST_CS_AR_VALUE);
+    let cs_ar = if linux_guest { LINUX_CS_AR_VALUE } else { GUEST_CS_AR_VALUE };
+    let _ = vmcs_write_or_log(GUEST_CS_AR_BYTES, cs_ar);
     let _ = vmcs_write_or_log(GUEST_SS_AR_BYTES, GUEST_DS_AR_VALUE);
     let _ = vmcs_write_or_log(GUEST_DS_AR_BYTES, GUEST_DS_AR_VALUE);
     let _ = vmcs_write_or_log(GUEST_ES_AR_BYTES, GUEST_DS_AR_VALUE);
     let _ = vmcs_write_or_log(GUEST_FS_AR_BYTES, GUEST_DS_AR_VALUE);
     let _ = vmcs_write_or_log(GUEST_GS_AR_BYTES, GUEST_DS_AR_VALUE);
-    let _ = vmcs_write_or_log(GUEST_TR_AR_BYTES, unsafe { GUEST_TSS_AR_VALUE });
+    let _ = vmcs_write_or_log(
+        GUEST_TR_AR_BYTES,
+        unsafe { GUEST_TSS_AR_VALUE },
+    );
     let _ = vmcs_write_or_log(GUEST_LDTR_AR_BYTES, 1u64 << 16);
 
     let guest_gdt_gpa = guest_ram_gpa(GUEST_GDT_PAGE_INDEX);
     let guest_idt_gpa = guest_ram_gpa(GUEST_IDT_PAGE_INDEX);
     let _ = vmcs_write_or_log(GUEST_GDTR_BASE, guest_gdt_gpa);
-    let _ = vmcs_write_or_log(GUEST_IDTR_BASE, guest_idt_gpa);
-    let _ = vmcs_write_or_log(GUEST_GDTR_LIMIT, GUEST_GDT_LIMIT_VALUE);
-    let _ = vmcs_write_or_log(GUEST_IDTR_LIMIT, GUEST_IDTR_LIMIT_VALUE);
+    let _ = vmcs_write_or_log(GUEST_IDTR_BASE, if linux_guest { 0 } else { guest_idt_gpa });
+    let _ = vmcs_write_or_log(
+        GUEST_GDTR_LIMIT,
+        if linux_guest {
+            LINUX_GDT_LIMIT_VALUE
+        } else {
+            GUEST_GDT_LIMIT_VALUE
+        },
+    );
+    let _ = vmcs_write_or_log(GUEST_IDTR_LIMIT, if linux_guest { 0 } else { GUEST_IDTR_LIMIT_VALUE });
 
     let _ = vmcs_write_or_log(GUEST_DR7, 0x400);
 
@@ -3269,6 +5963,11 @@ unsafe fn setup_vmcs_minimal_guest_state() {
 unsafe fn log_guest_vmcs_state() {
     crate::serial_write_str("RAYOS_VMM:VMX:GUEST_SEGMENT_STATE\n");
     let fields: &[(u64, &str)] = &[
+        (VM_ENTRY_CONTROLS, "VM_ENTRY_CONTROLS"),
+        (GUEST_CR0, "GUEST_CR0"),
+        (GUEST_CR3, "GUEST_CR3"),
+        (GUEST_CR4, "GUEST_CR4"),
+        (GUEST_IA32_EFER, "GUEST_IA32_EFER"),
         (GUEST_CS_SELECTOR, "GUEST_CS_SELECTOR"),
         (GUEST_SS_SELECTOR, "GUEST_SS_SELECTOR"),
         (GUEST_DS_SELECTOR, "GUEST_DS_SELECTOR"),
@@ -3692,6 +6391,16 @@ pub fn try_init_vmx_skeleton() -> bool {
 
     if !cpu_supports_vmx() {
         crate::serial_write_str("RAYOS_VMM:VMX:UNSUPPORTED\n");
+        #[cfg(feature = "vmm_hypervisor_smoke")]
+        {
+            crate::serial_write_str("RAYOS_VMM:VMX:SMOKE_FALLBACK\n");
+            // Prepare guest memory and install guest code so smoke-mode tests can be exercised
+            // even when VMX isn't available in the current environment.
+            if !prepare_guest_memory() {
+                crate::serial_write_str("RAYOS_VMM:VMX:SMOKE_PREP_FAIL\n");
+                return false;
+            }
+        }
         return false;
     }
     crate::serial_write_str("RAYOS_VMM:VMX:SUPPORTED\n");
@@ -3810,7 +6519,20 @@ pub fn try_init_vmx_skeleton() -> bool {
         // Attempt a VMLAUNCH into a trivial guest loop that executes HLT forever.
         // With HLT exiting enabled, this should produce a fast, deterministic VM-exit.
         crate::serial_write_str("RAYOS_VMM:VMX:VMLAUNCH_ATTEMPT\n");
-        let (launch_ok, rflags) = unsafe { vmlaunch() };
+        let (launch_ok, rflags) = unsafe {
+            #[cfg(feature = "vmm_linux_guest")]
+            {
+                if LINUX_GUEST_ENTRY_RIP != 0 && LINUX_GUEST_BOOT_PARAMS_GPA != 0 {
+                    vmlaunch_with_linux_boot_params(LINUX_GUEST_BOOT_PARAMS_GPA)
+                } else {
+                    vmlaunch()
+                }
+            }
+            #[cfg(not(feature = "vmm_linux_guest"))]
+            {
+                vmlaunch()
+            }
+        };
         if launch_ok {
             // If we ever get here, it means we entered a guest and returned via some path.
             crate::serial_write_str("RAYOS_VMM:VMX:VMLAUNCH_OK_UNEXPECTED\n");

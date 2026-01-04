@@ -67,6 +67,14 @@ vmm_inject_force_all_fail = []
 # Self-test: run an in-kernel backoff retry selftest at boot to verify counters/logs.
 vmm_inject_backoff_selftest = []
 
+# P1: initialize virtio-blk backing store from an embedded disk image.
+# This keeps existing synthetic-pattern behavior as the default, so existing tests
+# remain stable.
+vmm_virtio_blk_image = []
+
+# P1 (WIP): boot a real Linux guest under the in-kernel VMM.
+vmm_linux_guest = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"

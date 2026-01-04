@@ -88,6 +88,87 @@ pub mod virtio_gpu {
             }
         }
 
+        /// Handle a single controlq request where request/response addresses are guest-physical
+        /// (GPA) addresses.
+        ///
+        /// The caller provides a translation function that maps a GPA to a host physical
+        /// address that is accessible via `phys_to_virt()`.
+        ///
+        /// This exists for the in-kernel VMM path where virtqueue descriptors contain GPAs.
+        ///
+        /// Safety:
+        /// - `translate_gpa_to_phys` must return valid host physical addresses for the passed GPAs.
+        /// - The translated ranges must be mapped and writable where required.
+        pub unsafe fn handle_controlq_gpa(
+            &mut self,
+            req_gpa: u64,
+            req_len: usize,
+            resp_gpa: u64,
+            resp_len: usize,
+            translate_gpa_to_phys: fn(u64) -> Option<u64>,
+        ) -> usize {
+            let Some(req_phys) = translate_gpa_to_phys(req_gpa) else {
+                return 0;
+            };
+            let Some(resp_phys) = translate_gpa_to_phys(resp_gpa) else {
+                return 0;
+            };
+
+            if req_len < mem::size_of::<proto::VirtioGpuCtrlHdr>()
+                || resp_len < mem::size_of::<proto::VirtioGpuCtrlHdr>()
+            {
+                let hdr = proto::VirtioGpuCtrlHdr {
+                    type_: proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                    flags: 0,
+                    fence_id: 0,
+                    ctx_id: 0,
+                    padding: 0,
+                };
+                phys_write_unaligned(resp_phys, hdr);
+                return mem::size_of::<proto::VirtioGpuCtrlHdr>();
+            }
+
+            let req_hdr: proto::VirtioGpuCtrlHdr = phys_read_unaligned(req_phys);
+            if req_hdr.type_ != proto::VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING {
+                return self.handle_controlq(req_phys, req_len, resp_phys, resp_len);
+            }
+
+            // Special-case RESOURCE_ATTACH_BACKING: translate embedded GPA backing address
+            // into a host physical address so scanout publication uses CPU-visible memory.
+            if req_len
+                < mem::size_of::<proto::VirtioGpuResourceAttachBackingHdr>()
+                    + mem::size_of::<proto::VirtioGpuMemEntry>()
+            {
+                let hdr = init_resp_hdr_from_req(
+                    &req_hdr,
+                    proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                );
+                phys_write_unaligned(resp_phys, hdr);
+                return mem::size_of::<proto::VirtioGpuCtrlHdr>();
+            }
+
+            let base: proto::VirtioGpuResourceAttachBackingHdr = phys_read_unaligned(req_phys);
+            let entry_phys = req_phys
+                + mem::size_of::<proto::VirtioGpuResourceAttachBackingHdr>() as u64;
+            let mut entry: proto::VirtioGpuMemEntry = phys_read_unaligned(entry_phys);
+
+            let Some(backing_phys) = translate_gpa_to_phys(entry.addr) else {
+                let hdr = init_resp_hdr_from_req(
+                    &req_hdr,
+                    proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
+                );
+                phys_write_unaligned(resp_phys, hdr);
+                return mem::size_of::<proto::VirtioGpuCtrlHdr>();
+            };
+            entry.addr = backing_phys;
+
+            let mut hdr = init_resp_hdr_from_req(&req_hdr, proto::VIRTIO_GPU_RESP_OK_NODATA);
+            self.model
+                .handle_resource_attach_backing_single(base.resource_id, entry, &mut hdr);
+            phys_write_unaligned(resp_phys, hdr);
+            mem::size_of::<proto::VirtioGpuCtrlHdr>()
+        }
+
         /// Handle a single controlq request.
         ///
         /// This is a low-level building block for a future virtqueue transport:

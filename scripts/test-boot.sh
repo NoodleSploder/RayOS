@@ -1334,6 +1334,15 @@ BOOT_EFI_SRC="${BOOT_EFI_SRC:-$ROOT_DIR/crates/bootloader/target/x86_64-unknown-
 KERNEL_BIN_SRC="${KERNEL_BIN_SRC:-$ROOT_DIR/crates/kernel-bare/target/x86_64-unknown-none/release/kernel-bare}"
 MODEL_BIN_SRC="${MODEL_BIN_SRC:-}"
 
+# Optional: stage Linux guest artifacts for the in-kernel VMM.
+# If provided, these are copied into:
+#   EFI/RAYOS/linux/vmlinuz
+#   EFI/RAYOS/linux/initrd
+#   EFI/RAYOS/linux/cmdline.txt
+RAYOS_LINUX_GUEST_KERNEL_SRC="${RAYOS_LINUX_GUEST_KERNEL_SRC:-}"
+RAYOS_LINUX_GUEST_INITRD_SRC="${RAYOS_LINUX_GUEST_INITRD_SRC:-}"
+RAYOS_LINUX_GUEST_CMDLINE_SRC="${RAYOS_LINUX_GUEST_CMDLINE_SRC:-}"
+
 # Local LLM model staging:
 # - If MODEL_BIN_SRC is set, that file is copied into EFI/RAYOS/model.bin
 # - Otherwise, AUTO_GENERATE_MODEL_BIN=1 will generate a small model into $WORK_DIR/model.bin
@@ -1349,6 +1358,34 @@ if [ -f "$BOOT_EFI_SRC" ]; then
 fi
 if [ -f "$KERNEL_BIN_SRC" ]; then
     cp "$KERNEL_BIN_SRC" "$STAGE_DIR/EFI/RAYOS/kernel.bin"
+fi
+
+if [ -n "$RAYOS_LINUX_GUEST_KERNEL_SRC" ] || [ -n "$RAYOS_LINUX_GUEST_INITRD_SRC" ] || [ -n "$RAYOS_LINUX_GUEST_CMDLINE_SRC" ]; then
+    mkdir -p "$STAGE_DIR/EFI/RAYOS/linux"
+
+    if [ -n "$RAYOS_LINUX_GUEST_KERNEL_SRC" ]; then
+        if [ -f "$RAYOS_LINUX_GUEST_KERNEL_SRC" ]; then
+            cp "$RAYOS_LINUX_GUEST_KERNEL_SRC" "$STAGE_DIR/EFI/RAYOS/linux/vmlinuz"
+        else
+            echo "Warning: RAYOS_LINUX_GUEST_KERNEL_SRC set but not found: $RAYOS_LINUX_GUEST_KERNEL_SRC" >&2
+        fi
+    fi
+
+    if [ -n "$RAYOS_LINUX_GUEST_INITRD_SRC" ]; then
+        if [ -f "$RAYOS_LINUX_GUEST_INITRD_SRC" ]; then
+            cp "$RAYOS_LINUX_GUEST_INITRD_SRC" "$STAGE_DIR/EFI/RAYOS/linux/initrd"
+        else
+            echo "Warning: RAYOS_LINUX_GUEST_INITRD_SRC set but not found: $RAYOS_LINUX_GUEST_INITRD_SRC" >&2
+        fi
+    fi
+
+    if [ -n "$RAYOS_LINUX_GUEST_CMDLINE_SRC" ]; then
+        if [ -f "$RAYOS_LINUX_GUEST_CMDLINE_SRC" ]; then
+            cp "$RAYOS_LINUX_GUEST_CMDLINE_SRC" "$STAGE_DIR/EFI/RAYOS/linux/cmdline.txt"
+        else
+            echo "Warning: RAYOS_LINUX_GUEST_CMDLINE_SRC set but not found: $RAYOS_LINUX_GUEST_CMDLINE_SRC" >&2
+        fi
+    fi
 fi
 
 if [ -z "${MODEL_BIN_SRC}" ] && [ "$AUTO_GENERATE_MODEL_BIN" != "0" ]; then

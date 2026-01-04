@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 const PAGE_SIZE: usize = 4096;
 const MMIO_COUNTER_BASE: u64 = 16 * 1024 * 1024;
@@ -117,6 +118,26 @@ struct VirtqDesc {
     next: u16,
 }
 
+fn guest_driver_blob_output_path() -> PathBuf {
+    // This generator is invoked in a few different ways:
+    // - from the repo root (developer convenience)
+    // - from the scripts/ directory (smoke scripts)
+    // Avoid accidentally writing to scripts/crates/... when run from scripts/.
+    let candidates = [
+        "crates/kernel-bare/src/guest_driver_template.bin",
+        "../crates/kernel-bare/src/guest_driver_template.bin",
+    ];
+
+    for candidate in candidates {
+        let p = Path::new(candidate);
+        if p.parent().is_some_and(|d| d.exists()) {
+            return p.to_path_buf();
+        }
+    }
+
+    PathBuf::from("crates/kernel-bare/src/guest_driver_template.bin")
+}
+
 fn main() -> std::io::Result<()> {
     let net_mode: bool = std::env::var("RAYOS_GUEST_NET_ENABLED")
         .ok()
@@ -130,6 +151,12 @@ fn main() -> std::io::Result<()> {
 
     eprintln!("DEBUG: RAYOS_GUEST_NET_ENABLED={:?}, net_mode={} RAYOS_GUEST_CONSOLE_ENABLED={:?}, console_mode={}",
         std::env::var("RAYOS_GUEST_NET_ENABLED"), net_mode, std::env::var("RAYOS_GUEST_CONSOLE_ENABLED"), console_mode);
+
+    if net_mode && console_mode {
+        eprintln!(
+            "WARN: both RAYOS_GUEST_NET_ENABLED and RAYOS_GUEST_CONSOLE_ENABLED are set; preferring console mode"
+        );
+    }
 
     let req0_type: u32 = std::env::var("RAYOS_GUEST_REQ0_TYPE")
         .ok()
@@ -150,12 +177,12 @@ fn main() -> std::io::Result<()> {
 
     let mut emitter = CodeEmitter::new();
 
-    if net_mode {
-        return emit_network_test(&mut emitter);
-    }
-
     if console_mode {
         return emit_console_test(&mut emitter);
+    }
+
+    if net_mode {
+        return emit_network_test(&mut emitter);
     }
 
     emitter.emit_bytes(&[0xB0, 0x41]);
@@ -333,7 +360,8 @@ fn main() -> std::io::Result<()> {
     println!("desc_data_offset={}", desc_data_offset);
     println!("desc_data_patch={}", desc_data_patch);
 
-    let mut file = File::create("crates/kernel-bare/src/guest_driver_template.bin")?;
+    let out_path = guest_driver_blob_output_path();
+    let mut file = File::create(out_path)?;
     file.write_all(&emitter.bytes)?;
     Ok(())
 }
@@ -341,9 +369,6 @@ fn main() -> std::io::Result<()> {
 fn emit_console_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     // Simple virtio-console data queue test: write a message into guest memory,
     // point a single descriptor at it, and notify queue 0 so the host sees the message.
-
-    emitter.emit_bytes(&[0xB0, 0x43]); // mov al, 'C'
-    emitter.emit_bytes(&[0xE6, 0xE9]); // out 0xE9, al
 
     let virtio_features = MMIO_VIRTIO_BASE + 0x010;
     let virtio_driver_features = MMIO_VIRTIO_BASE + 0x020;
@@ -354,6 +379,68 @@ fn emit_console_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     let queue_used_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_USED_OFFSET;
     let queue_size_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_SIZE_OFFSET;
     let queue_ready_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_READY_OFFSET;
+
+    // Build descriptor 0 bytes to be copied into guest desc area.
+    let mut desc_bytes = Vec::new();
+    desc_bytes.extend_from_slice(&VIRTIO_CONSOLE_MSG_GPA.to_le_bytes());
+    desc_bytes.extend_from_slice(&(VIRTIO_CONSOLE_MSG_LEN.to_le_bytes()));
+    desc_bytes.extend_from_slice(&(0u16.to_le_bytes())); // flags
+    desc_bytes.extend_from_slice(&(0u16.to_le_bytes())); // next
+    let desc_len = desc_bytes.len() as u64;
+
+    // IMPORTANT: the kernel patches a u64 at a fixed offset inside this blob.
+    // That offset must land on the imm64 of `mov r6, imm64`.
+    // Keep the prelude minimal and pad with NOPs to hit the canonical location.
+    emitter.emit_bytes(&[0xB0, 0x43]); // mov al, 'C'
+    emitter.emit_bytes(&[0xE6, 0xE9]); // out 0xE9, al
+
+    // Ensure the imm64 of `mov r6, imm64` begins at the kernel's expected patch offset.
+    // mov r6, imm64 encoding is: 48 BE <imm64>  (imm64 starts 2 bytes after opcode)
+    const GUEST_DRIVER_DESC_DATA_PTR_OFFSET: usize = 176;
+    if emitter.bytes.len() > (GUEST_DRIVER_DESC_DATA_PTR_OFFSET - 2) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "console blob prelude exceeds patch offset budget",
+        ));
+    }
+    while emitter.bytes.len() < (GUEST_DRIVER_DESC_DATA_PTR_OFFSET - 2) {
+        emitter.emit_byte(0x90); // nop
+    }
+    let _desc_data_patch = emitter.mov_reg64_imm(6, 0);
+
+    // Place descriptor bytes at the canonical offset, but do NOT execute them.
+    // Insert a jump that skips over the (padded) data region.
+    let jmp_start = emitter.bytes.len();
+    emitter.emit_byte(0xE9); // jmp rel32
+    let jmp_rel32_off = emitter.bytes.len();
+    emitter.emit_bytes(&[0, 0, 0, 0]);
+
+    const GUEST_DRIVER_DESC_DATA_OFFSET: usize = 501;
+    if emitter.bytes.len() > GUEST_DRIVER_DESC_DATA_OFFSET {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "console blob grew past canonical desc data offset",
+        ));
+    }
+
+    while emitter.bytes.len() < GUEST_DRIVER_DESC_DATA_OFFSET {
+        emitter.emit_byte(0x90); // nop padding (skipped by the jmp)
+    }
+
+    // Emit descriptor bytes at exactly the canonical offset.
+    emitter.emit_bytes(&desc_bytes);
+
+    // Patch jump displacement to land after the descriptor bytes.
+    let continue_off = emitter.bytes.len();
+    let rel = (continue_off as i64) - ((jmp_start + 5) as i64);
+    if rel < i32::MIN as i64 || rel > i32::MAX as i64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "jmp displacement overflow",
+        ));
+    }
+    let rel32: i32 = rel as i32;
+    emitter.bytes[jmp_rel32_off..jmp_rel32_off + 4].copy_from_slice(&rel32.to_le_bytes());
 
     // Negotiate features
     emitter.mov_rax_mem(virtio_features);
@@ -389,52 +476,18 @@ fn emit_console_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
         }
     }
 
-    // Build descriptor 0 bytes to be copied into guest desc area via rep movs (reliable placement)
-    let mut desc_bytes = Vec::new();
-    desc_bytes.extend_from_slice(&VIRTIO_CONSOLE_MSG_GPA.to_le_bytes());
-    desc_bytes.extend_from_slice(&((VIRTIO_CONSOLE_MSG_LEN as u32).to_le_bytes()));
-    desc_bytes.extend_from_slice(&(0u16.to_le_bytes())); // flags
-    desc_bytes.extend_from_slice(&(0u16.to_le_bytes())); // next
-    let desc_len = desc_bytes.len() as u64;
-
-    // Ensure the mov imm for R6 is placed at the kernel's expected patch offset
-    const GUEST_DRIVER_DESC_DATA_PTR_OFFSET: usize = 176;
-    while emitter.bytes.len() < GUEST_DRIVER_DESC_DATA_PTR_OFFSET {
-        emitter.emit_byte(0x90); // nop
-    }
-    let _desc_data_patch = emitter.mov_reg64_imm(6, 0);
-
     // R7 -> dest (VIRTIO_QUEUE_DESC_GPA), R1 -> len
     emitter.mov_reg64_imm(7, VIRTIO_QUEUE_DESC_GPA);
     emitter.mov_reg64_imm(1, desc_len);
     emitter.emit_bytes(&[0xF3, 0xA4]); // rep movsb (src=R6 dest=R7 count=R1)
 
-    // Submit avail ring: write desc index 0 into avail.ring[0]; set avail.idx=1
+    // Submit avail ring: set avail.idx=1 and avail.ring[0]=0.
+    // Layout: flags(u16) @ +0, idx(u16) @ +2, ring(u16[]) @ +4
     emitter.mov_rdi_imm(VIRTIO_QUEUE_DRIVER_GPA);
-    emitter.emit_bytes(&[0xB0, 0x00]); // mov al, 0
-    emitter.emit_bytes(&[0x88, 0x47, 0x04]); // mov [rdi+4], al
-    emitter.mov_reg64_imm(0, 0x01);
-    emitter.mov_mem_rdi_disp8_rax(2); // mov [rdi+2], rax
-
-    // Append descriptor bytes into the emitter *at the canonical data offset* so the
-    // kernel-side installer (which patches GUEST_DRIVER_DESC_DATA_PTR_OFFSET) can point
-    // R6 at code_gpa + GUEST_DRIVER_DESC_DATA_OFFSET to copy them into the virtq desc area.
-    const GUEST_DRIVER_DESC_DATA_OFFSET: usize = 501;
-    if emitter.bytes.len() < GUEST_DRIVER_DESC_DATA_OFFSET {
-        // pad with zeros up to the expected offset
-        let pad = GUEST_DRIVER_DESC_DATA_OFFSET - emitter.bytes.len();
-        for _ in 0..pad {
-            emitter.emit_byte(0);
-        }
-    }
-    // overwrite/emit descriptor bytes at the canonical offset
-    for (i, b) in desc_bytes.iter().enumerate() {
-        if GUEST_DRIVER_DESC_DATA_OFFSET + i < emitter.bytes.len() {
-            emitter.bytes[GUEST_DRIVER_DESC_DATA_OFFSET + i] = *b;
-        } else {
-            emitter.emit_byte(*b);
-        }
-    }
+    // idx = 1 (write as 16-bit)
+    emitter.emit_bytes(&[0x66, 0xC7, 0x47, 0x02, 0x01, 0x00]); // mov word [rdi+2], 1
+    // ring[0] = 0
+    emitter.emit_bytes(&[0x66, 0xC7, 0x47, 0x04, 0x00, 0x00]); // mov word [rdi+4], 0
 
     // Notify queue 0
     emitter.mov_reg64_imm(0, 0);
@@ -462,6 +515,10 @@ fn emit_console_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
 
     emitter.emit_byte(0xF4); // hlt
     emitter.emit_bytes(&[0xEB, 0xFE]); // jmp $
+
+    let out_path = guest_driver_blob_output_path();
+    let mut file = File::create(out_path)?;
+    file.write_all(&emitter.bytes)?;
     Ok(())
 }
 
@@ -716,7 +773,8 @@ fn emit_network_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     println!("desc_data_offset=0");
     println!("desc_data_patch=0");
 
-    let mut file = File::create("crates/kernel-bare/src/guest_driver_template.bin")?;
+    let out_path = guest_driver_blob_output_path();
+    let mut file = File::create(out_path)?;
     file.write_all(&emitter.bytes)?;
     Ok(())
 }

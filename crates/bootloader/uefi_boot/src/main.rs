@@ -66,6 +66,15 @@ struct BootInfo {
     index_ptr: u64,
     index_size: u64,
 
+    // Optional Linux guest artifacts staged from the boot filesystem.
+    // Used by the in-kernel VMM to boot a Linux guest headless.
+    linux_kernel_ptr: u64,
+    linux_kernel_size: u64,
+    linux_initrd_ptr: u64,
+    linux_initrd_size: u64,
+    linux_cmdline_ptr: u64,
+    linux_cmdline_size: u64,
+
     // Best-effort UTC wall-clock time captured from UEFI before ExitBootServices.
     // If unavailable, boot_time_valid=0 and boot_unix_seconds=0.
     boot_unix_seconds: u64,
@@ -406,6 +415,36 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         Err(_) => (0u64, 0u64),
     };
 
+    // Optional: stage Linux guest artifacts for the in-kernel VMM.
+    // Best-effort; missing files simply mean "no Linux guest present".
+    let (linux_kernel_ptr, linux_kernel_size) = match read_optional_blob(
+        bt,
+        image_handle,
+        "EFI\\RAYOS\\linux\\vmlinuz",
+        64 * 1024 * 1024,
+    ) {
+        Ok(Some((ptr, sz))) => (ptr as u64, sz as u64),
+        _ => (0u64, 0u64),
+    };
+    let (linux_initrd_ptr, linux_initrd_size) = match read_optional_blob(
+        bt,
+        image_handle,
+        "EFI\\RAYOS\\linux\\initrd",
+        256 * 1024 * 1024,
+    ) {
+        Ok(Some((ptr, sz))) => (ptr as u64, sz as u64),
+        _ => (0u64, 0u64),
+    };
+    let (linux_cmdline_ptr, linux_cmdline_size) = match read_optional_blob(
+        bt,
+        image_handle,
+        "EFI\\RAYOS\\linux\\cmdline.txt",
+        16 * 1024,
+    ) {
+        Ok(Some((ptr, sz))) => (ptr as u64, sz as u64),
+        _ => (0u64, 0u64),
+    };
+
     // Optional: load an autorun prompt for host AI bridge testing.
     // If present, the aarch64 post-exit embedded loop will emit it as a RAYOS_INPUT line.
     #[cfg(target_arch = "aarch64")]
@@ -476,6 +515,12 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
                     embeddings_size,
                     index_ptr,
                     index_size,
+                    linux_kernel_ptr,
+                    linux_kernel_size,
+                    linux_initrd_ptr,
+                    linux_initrd_size,
+                    linux_cmdline_ptr,
+                    linux_cmdline_size,
                 ) {
                     Ok(ptr) => ptr,
                     Err(status) => {
@@ -569,6 +614,12 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         embeddings_size,
         index_ptr,
         index_size,
+        linux_kernel_ptr,
+        linux_kernel_size,
+        linux_initrd_ptr,
+        linux_initrd_size,
+        linux_cmdline_ptr,
+        linux_cmdline_size,
     ) {
         Ok(ptr) => ptr,
         Err(status) => {
@@ -631,6 +682,12 @@ fn prepare_boot_info_and_exit_boot_services(
     embeddings_size: u64,
     index_ptr: u64,
     index_size: u64,
+    linux_kernel_ptr: u64,
+    linux_kernel_size: u64,
+    linux_initrd_ptr: u64,
+    linux_initrd_size: u64,
+    linux_cmdline_ptr: u64,
+    linux_cmdline_size: u64,
 ) -> Result<*const BootInfo, Status> {
     // Find ACPI RSDP before exiting boot services.
     let mut rsdp_addr: u64 = 0;
@@ -745,6 +802,13 @@ fn prepare_boot_info_and_exit_boot_services(
 
             index_ptr,
             index_size,
+
+            linux_kernel_ptr,
+            linux_kernel_size,
+            linux_initrd_ptr,
+            linux_initrd_size,
+            linux_cmdline_ptr,
+            linux_cmdline_size,
 
             boot_unix_seconds,
             boot_time_valid,
