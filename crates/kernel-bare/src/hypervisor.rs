@@ -1088,17 +1088,32 @@ const VIRTIO_MMIO_VERSION_OFFSET: u64 = 0x004;
 const VIRTIO_MMIO_DEVICE_ID_OFFSET: u64 = 0x008;
 const VIRTIO_MMIO_VENDOR_ID_OFFSET: u64 = 0x00C;
 const VIRTIO_MMIO_DEVICE_FEATURES_OFFSET: u64 = 0x010;
+const VIRTIO_MMIO_DEVICE_FEATURES_SEL_OFFSET: u64 = 0x014;
 const VIRTIO_MMIO_DRIVER_FEATURES_OFFSET: u64 = 0x020;
+const VIRTIO_MMIO_DRIVER_FEATURES_SEL_OFFSET: u64 = 0x024;
 const VIRTIO_MMIO_INTERRUPT_STATUS_OFFSET: u64 = 0x060;
 const VIRTIO_MMIO_INTERRUPT_ACK_OFFSET: u64 = 0x064;
 const VIRTIO_MMIO_QUEUE_NOTIFY_OFFSET: u64 = 0x050;
 const VIRTIO_MMIO_QUEUE_SELECT_OFFSET: u64 = 0x030;
+const VIRTIO_MMIO_QUEUE_NUM_MAX_OFFSET: u64 = 0x034;
+const VIRTIO_MMIO_QUEUE_NUM_OFFSET: u64 = 0x038;
+const VIRTIO_MMIO_QUEUE_READY_OFFSET: u64 = 0x044;
 const VIRTIO_MMIO_STATUS_OFFSET: u64 = 0x070;
-const VIRTIO_MMIO_QUEUE_DESC_OFFSET: u64 = 0x080;
+const VIRTIO_MMIO_QUEUE_DESC_LOW_OFFSET: u64 = 0x080;
+const VIRTIO_MMIO_QUEUE_DESC_HIGH_OFFSET: u64 = 0x084;
+// Some guest test blobs use 64-bit writes to 0x080 for the whole QueueDesc.
+const VIRTIO_MMIO_QUEUE_DESC_OFFSET: u64 = VIRTIO_MMIO_QUEUE_DESC_LOW_OFFSET;
+
+const VIRTIO_MMIO_QUEUE_AVAIL_LOW_OFFSET: u64 = 0x090;
+const VIRTIO_MMIO_QUEUE_AVAIL_HIGH_OFFSET: u64 = 0x094;
+// Legacy alias used by older guest blobs in this repo.
 const VIRTIO_MMIO_QUEUE_DRIVER_OFFSET: u64 = 0x088;
-const VIRTIO_MMIO_QUEUE_USED_OFFSET: u64 = 0x090;
+
+const VIRTIO_MMIO_QUEUE_USED_LOW_OFFSET: u64 = 0x0A0;
+const VIRTIO_MMIO_QUEUE_USED_HIGH_OFFSET: u64 = 0x0A4;
+
+// Legacy alias used by older guest blobs in this repo.
 const VIRTIO_MMIO_QUEUE_SIZE_OFFSET: u64 = 0x098;
-const VIRTIO_MMIO_QUEUE_READY_OFFSET: u64 = 0x09C;
 const VIRTIO_MMIO_CONFIG_SPACE_OFFSET: u64 = 0x100;
 const VIRTIO_MMIO_FEATURES_VALUE: u32 = 1;
 const VIRTIO_QUEUE_DESC_GPA: u64 = 0x0010_0000;
@@ -1398,7 +1413,12 @@ static MMIO_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct VirtioMmioState {
     status: AtomicU32,
-    driver_features: AtomicU32,
+    // Driver-selected feature bits (two 32-bit words selected by DRIVER_FEATURES_SEL).
+    driver_features: [AtomicU32; 2],
+    driver_features_sel: AtomicU32,
+    // Device feature select (DEVICE_FEATURES_SEL). Device features themselves are computed
+    // from the active device_id.
+    device_features_sel: AtomicU32,
     interrupt_status: AtomicU32,
     // Pending retry flag: set to 1 when VM-entry injection fails and retries are needed.
     // Retry counter tracks how many retry attempts we've made.
@@ -1420,6 +1440,14 @@ struct VirtioMmioState {
     queue_size: [AtomicU32; 2],
     queue_ready: [AtomicU32; 2],
     queue_selected: AtomicU32,
+
+    // virtio-input config selection state (select/subsel fields).
+    // Linux-style virtio-input queries are modeled as reads from the MMIO config space
+    // after the guest writes select/subsel.
+    #[cfg(feature = "vmm_virtio_input")]
+    input_cfg_select: AtomicU32,
+    #[cfg(feature = "vmm_virtio_input")]
+    input_cfg_subsel: AtomicU32,
 }
 
 impl VirtioMmioState {
@@ -1449,7 +1477,9 @@ impl VirtioMmioState {
 
         Self {
             status: AtomicU32::new(0),
-            driver_features: AtomicU32::new(0),
+            driver_features: [AtomicU32::new(0), AtomicU32::new(0)],
+            driver_features_sel: AtomicU32::new(0),
+            device_features_sel: AtomicU32::new(0),
             interrupt_status: AtomicU32::new(0),
             interrupt_pending: AtomicU32::new(0),
             interrupt_pending_attempts: AtomicU32::new(0),
@@ -1467,11 +1497,31 @@ impl VirtioMmioState {
             queue_size: [AtomicU32::new(0), AtomicU32::new(0)],
             queue_ready: [AtomicU32::new(0), AtomicU32::new(0)],
             queue_selected: AtomicU32::new(0),
+
+            #[cfg(feature = "vmm_virtio_input")]
+            input_cfg_select: AtomicU32::new(0),
+            #[cfg(feature = "vmm_virtio_input")]
+            input_cfg_subsel: AtomicU32::new(0),
         }
     }
 }
 
 static VIRTIO_MMIO_STATE: VirtioMmioState = VirtioMmioState::new();
+
+fn virtio_device_features(device_id: u32) -> u64 {
+    // Keep this tiny and deterministic: advertise VERSION_1 plus a legacy low-bit so
+    // existing guest test blobs that only read the low word still see non-zero.
+    const VIRTIO_F_VERSION_1: u64 = 1u64 << 32;
+    let base = 1u64 | VIRTIO_F_VERSION_1;
+
+    match device_id {
+        VIRTIO_INPUT_DEVICE_ID => base,
+        VIRTIO_NET_DEVICE_ID => base,
+        VIRTIO_GPU_DEVICE_ID => base,
+        VIRTIO_CONSOLE_DEVICE_ID => base,
+        _ => base,
+    }
+}
 
 // --- virtio-input (P3) ---
 //
@@ -1490,6 +1540,233 @@ const VIRTIO_INPUT_EVENT_RING_SIZE: usize = 64; // power-of-two
 
 #[cfg(feature = "vmm_virtio_input")]
 const VIRTIO_INPUT_FREE_BUFS_SIZE: usize = 64; // power-of-two
+
+// --- virtio-input config space (minimal, Linux-ish) ---
+//
+// virtio-input exposes a device config structure starting at VIRTIO_MMIO_CONFIG_SPACE_OFFSET.
+// The guest writes select/subsel (offset 0/1) and then reads `size` (offset 2) and `data`
+// (offset 8+). We implement a small subset needed for basic pointer/buttons.
+
+#[cfg(feature = "vmm_virtio_input")]
+const VIRTIO_INPUT_CFG_ID_NAME: u8 = 1;
+#[cfg(feature = "vmm_virtio_input")]
+const VIRTIO_INPUT_CFG_ID_SERIAL: u8 = 2;
+#[cfg(feature = "vmm_virtio_input")]
+const VIRTIO_INPUT_CFG_ID_DEVIDS: u8 = 3;
+#[cfg(feature = "vmm_virtio_input")]
+const VIRTIO_INPUT_CFG_PROP_BITS: u8 = 0x10;
+#[cfg(feature = "vmm_virtio_input")]
+const VIRTIO_INPUT_CFG_EV_BITS: u8 = 0x11;
+#[cfg(feature = "vmm_virtio_input")]
+const VIRTIO_INPUT_CFG_ABS_INFO: u8 = 0x12;
+
+#[cfg(feature = "vmm_virtio_input")]
+const EV_SYN: u8 = 0x00;
+#[cfg(feature = "vmm_virtio_input")]
+const EV_KEY: u8 = 0x01;
+#[cfg(feature = "vmm_virtio_input")]
+const EV_ABS: u8 = 0x03;
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_cfg_name_bytes() -> &'static [u8] {
+    b"rayos-virtio-input\0"
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_cfg_serial_bytes() -> &'static [u8] {
+    b"rayos0\0"
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_cfg_devids_bytes() -> [u8; 8] {
+    // struct virtio_input_devids { u16 bustype, vendor, product, version }
+    // Use a stable but clearly-virtual identity.
+    let bustype: u16 = 0x0006; // BUS_VIRTUAL
+    let vendor: u16 = 0x1AF4; // virtio vendor
+    let product: u16 = 0x0012; // virtio-input device id (informational)
+    let version: u16 = 0x0001;
+    let mut out = [0u8; 8];
+    out[0..2].copy_from_slice(&bustype.to_le_bytes());
+    out[2..4].copy_from_slice(&vendor.to_le_bytes());
+    out[4..6].copy_from_slice(&product.to_le_bytes());
+    out[6..8].copy_from_slice(&version.to_le_bytes());
+    out
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_cfg_absinfo_bytes(subsel: u8) -> Option<[u8; 20]> {
+    // struct virtio_input_absinfo { i32 min, max, fuzz, flat, res }
+    // Expose ABS_X/ABS_Y with a common 0..32767 range.
+    const ABS_X: u8 = 0x00;
+    const ABS_Y: u8 = 0x01;
+    if subsel != ABS_X && subsel != ABS_Y {
+        return None;
+    }
+    let min: i32 = 0;
+    let max: i32 = 32767;
+    let fuzz: i32 = 0;
+    let flat: i32 = 0;
+    let res: i32 = 0;
+    let mut out = [0u8; 20];
+    out[0..4].copy_from_slice(&min.to_le_bytes());
+    out[4..8].copy_from_slice(&max.to_le_bytes());
+    out[8..12].copy_from_slice(&fuzz.to_le_bytes());
+    out[12..16].copy_from_slice(&flat.to_le_bytes());
+    out[16..20].copy_from_slice(&res.to_le_bytes());
+    Some(out)
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_cfg_bitmap_size_and_byte(ev_type: u8, idx: u64) -> (u8, u8) {
+    // Return (size_in_bytes, byte_at_idx). The returned `size` is the guest-visible size.
+    // Keep sizes small and deterministic.
+    match ev_type {
+        EV_SYN => {
+            // SYN_REPORT (0)
+            let b = if idx == 0 { 0x01 } else { 0x00 };
+            (1, b)
+        }
+        EV_ABS => {
+            // ABS_X (0), ABS_Y (1)
+            let b = if idx == 0 { 0x03 } else { 0x00 };
+            (1, b)
+        }
+        EV_KEY => {
+            // Advertise a small but useful set of keycodes that RayOS can generate today.
+            // Includes: ESC, 0-9, tab, backspace, enter, space, A-Z (subset), plus BTN_LEFT/BTN_RIGHT.
+            // Keep size large enough for BTN_* (0x110+): bit index 0x110 => byte 34 bit 0.
+            let size: u8 = 35;
+            let b = match idx {
+                // Key range (low codes):
+                // - ESC (1) + KEY_1..KEY_6 (2..7)
+                0 => 0xFE,
+                // - KEY_7..KEY_0 (8..11) + BACKSPACE (14) + TAB (15)
+                1 => 0xCF,
+                // - QWERTY row: Q..I (16..23)
+                2 => 0xFF,
+                // - O,P (24..25) + ENTER (28) + A,S (30..31)
+                3 => 0xD3,
+                // - D..L (32..38)
+                4 => 0x7F,
+                // - Z,X,C,V (44..47)
+                5 => 0xF0,
+                // - B,N,M (48..50)
+                6 => 0x07,
+                // - SPACE (57)
+                7 => 0x02,
+                // Button range:
+                // - BTN_LEFT (0x110), BTN_RIGHT (0x111)
+                34 => 0x03,
+                _ => 0x00,
+            };
+            (size, b)
+        }
+        _ => (0, 0),
+    }
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_cfg_read_byte(cfg_offset: u64) -> u8 {
+    // Layout:
+    //  0: select (rw)
+    //  1: subsel (rw)
+    //  2: size (ro)
+    //  3..7: reserved
+    //  8..: data
+    let select = VIRTIO_MMIO_STATE.input_cfg_select.load(Ordering::Relaxed) as u8;
+    let subsel = VIRTIO_MMIO_STATE.input_cfg_subsel.load(Ordering::Relaxed) as u8;
+
+    // Compute current payload size + data byte for the requested offset.
+    let mut size: u8 = 0;
+    let mut data_byte: u8 = 0;
+    if cfg_offset >= 8 {
+        let data_idx = cfg_offset - 8;
+        match select {
+            VIRTIO_INPUT_CFG_ID_NAME => {
+                let s = virtio_input_cfg_name_bytes();
+                size = core::cmp::min(s.len(), 128) as u8;
+                if (data_idx as usize) < s.len() {
+                    data_byte = s[data_idx as usize];
+                }
+            }
+            VIRTIO_INPUT_CFG_ID_SERIAL => {
+                let s = virtio_input_cfg_serial_bytes();
+                size = core::cmp::min(s.len(), 128) as u8;
+                if (data_idx as usize) < s.len() {
+                    data_byte = s[data_idx as usize];
+                }
+            }
+            VIRTIO_INPUT_CFG_ID_DEVIDS => {
+                let ids = virtio_input_cfg_devids_bytes();
+                size = 8;
+                if (data_idx as usize) < ids.len() {
+                    data_byte = ids[data_idx as usize];
+                }
+            }
+            VIRTIO_INPUT_CFG_PROP_BITS => {
+                // No special properties.
+                size = 0;
+            }
+            VIRTIO_INPUT_CFG_EV_BITS => {
+                let (s, b) = virtio_input_cfg_bitmap_size_and_byte(subsel, data_idx);
+                size = s;
+                data_byte = b;
+            }
+            VIRTIO_INPUT_CFG_ABS_INFO => {
+                if let Some(abs) = virtio_input_cfg_absinfo_bytes(subsel) {
+                    size = 20;
+                    if (data_idx as usize) < abs.len() {
+                        data_byte = abs[data_idx as usize];
+                    }
+                } else {
+                    size = 0;
+                }
+            }
+            _ => {
+                size = 0;
+            }
+        }
+    } else {
+        // cfg_offset < 8 handled below.
+        match select {
+            VIRTIO_INPUT_CFG_ID_NAME => size = core::cmp::min(virtio_input_cfg_name_bytes().len(), 128) as u8,
+            VIRTIO_INPUT_CFG_ID_SERIAL => size = core::cmp::min(virtio_input_cfg_serial_bytes().len(), 128) as u8,
+            VIRTIO_INPUT_CFG_ID_DEVIDS => size = 8,
+            VIRTIO_INPUT_CFG_PROP_BITS => size = 0,
+            VIRTIO_INPUT_CFG_EV_BITS => size = virtio_input_cfg_bitmap_size_and_byte(subsel, 0).0,
+            VIRTIO_INPUT_CFG_ABS_INFO => size = if virtio_input_cfg_absinfo_bytes(subsel).is_some() { 20 } else { 0 },
+            _ => size = 0,
+        }
+    }
+
+    match cfg_offset {
+        0 => select,
+        1 => subsel,
+        2 => size,
+        3..=7 => 0,
+        _ => {
+            // When out-of-range, return 0.
+            data_byte
+        }
+    }
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_cfg_write_byte(cfg_offset: u64, byte: u8) {
+    match cfg_offset {
+        0 => {
+            VIRTIO_MMIO_STATE
+                .input_cfg_select
+                .store(byte as u32, Ordering::Relaxed);
+        }
+        1 => {
+            VIRTIO_MMIO_STATE
+                .input_cfg_subsel
+                .store(byte as u32, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+}
 
 #[cfg(feature = "vmm_virtio_input")]
 #[derive(Copy, Clone, Default)]
@@ -1919,10 +2196,33 @@ fn virtio_mmio_handler(
             Some(VIRTIO_MMIO_VENDOR_ID_VALUE as u64)
         }
         (VIRTIO_MMIO_DEVICE_FEATURES_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_FEATURES_VALUE as u64)
+            let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+            let sel = VIRTIO_MMIO_STATE.device_features_sel.load(Ordering::Relaxed) & 1;
+            let feats = virtio_device_features(device_id);
+            let word = if sel == 0 { feats as u32 } else { (feats >> 32) as u32 };
+            Some(word as u64)
+        }
+        (VIRTIO_MMIO_DEVICE_FEATURES_SEL_OFFSET, MmioAccessKind::Read) => {
+            Some(VIRTIO_MMIO_STATE.device_features_sel.load(Ordering::Relaxed) as u64)
+        }
+        (VIRTIO_MMIO_DEVICE_FEATURES_SEL_OFFSET, MmioAccessKind::Write) => {
+            VIRTIO_MMIO_STATE
+                .device_features_sel
+                .store(write_value as u32, Ordering::Relaxed);
+            None
         }
         (VIRTIO_MMIO_DRIVER_FEATURES_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_STATE.driver_features.load(Ordering::Relaxed) as u64)
+            let sel = (VIRTIO_MMIO_STATE.driver_features_sel.load(Ordering::Relaxed) & 1) as usize;
+            Some(VIRTIO_MMIO_STATE.driver_features[sel].load(Ordering::Relaxed) as u64)
+        }
+        (VIRTIO_MMIO_DRIVER_FEATURES_SEL_OFFSET, MmioAccessKind::Read) => {
+            Some(VIRTIO_MMIO_STATE.driver_features_sel.load(Ordering::Relaxed) as u64)
+        }
+        (VIRTIO_MMIO_DRIVER_FEATURES_SEL_OFFSET, MmioAccessKind::Write) => {
+            VIRTIO_MMIO_STATE
+                .driver_features_sel
+                .store(write_value as u32, Ordering::Relaxed);
+            None
         }
         (VIRTIO_MMIO_INTERRUPT_STATUS_OFFSET, MmioAccessKind::Read) => {
             Some(VIRTIO_MMIO_STATE.interrupt_status.load(Ordering::Relaxed) as u64)
@@ -1933,19 +2233,12 @@ fn virtio_mmio_handler(
         (VIRTIO_MMIO_QUEUE_SELECT_OFFSET, MmioAccessKind::Read) => {
             Some(VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as u64)
         }
-        (VIRTIO_MMIO_QUEUE_DESC_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
-            Some(VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed))
+        (VIRTIO_MMIO_QUEUE_NUM_MAX_OFFSET, MmioAccessKind::Read) => {
+            // This VMM only supports a small queue size today.
+            let _qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some(VIRTIO_QUEUE_SIZE_VALUE)
         }
-        (VIRTIO_MMIO_QUEUE_DRIVER_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
-            Some(VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed))
-        }
-        (VIRTIO_MMIO_QUEUE_USED_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
-            Some(VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed))
-        }
-        (VIRTIO_MMIO_QUEUE_SIZE_OFFSET, MmioAccessKind::Read) => {
+        (VIRTIO_MMIO_QUEUE_NUM_OFFSET, MmioAccessKind::Read) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             Some(VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed) as u64)
         }
@@ -1953,22 +2246,79 @@ fn virtio_mmio_handler(
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             Some(VIRTIO_MMIO_STATE.queue_ready[qi].load(Ordering::Relaxed) as u64)
         }
+
+        // Modern split address registers (high parts).
+        (VIRTIO_MMIO_QUEUE_DESC_HIGH_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some((VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed) >> 32) as u64)
+        }
+        (VIRTIO_MMIO_QUEUE_AVAIL_HIGH_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some((VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed) >> 32) as u64)
+        }
+        (VIRTIO_MMIO_QUEUE_USED_LOW_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some((VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed) & 0xFFFF_FFFF) as u64)
+        }
+        (VIRTIO_MMIO_QUEUE_USED_HIGH_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some((VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed) >> 32) as u64)
+        }
+        (VIRTIO_MMIO_QUEUE_DESC_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let v = VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed);
+            if access.size == 4 {
+                Some((v & 0xFFFF_FFFF) as u64)
+            } else {
+                Some(v)
+            }
+        }
+        (VIRTIO_MMIO_QUEUE_DRIVER_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some(VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed))
+        }
+        (VIRTIO_MMIO_QUEUE_AVAIL_LOW_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let v = VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed);
+            if access.size == 8 {
+                Some(v)
+            } else {
+                Some((v & 0xFFFF_FFFF) as u64)
+            }
+        }
+        (VIRTIO_MMIO_QUEUE_SIZE_OFFSET, MmioAccessKind::Read) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            Some(VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed) as u64)
+        }
         (VIRTIO_MMIO_DRIVER_FEATURES_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE
-                .driver_features
-                .store(write_value as u32, Ordering::Relaxed);
+            let sel = (VIRTIO_MMIO_STATE.driver_features_sel.load(Ordering::Relaxed) & 1) as usize;
+            VIRTIO_MMIO_STATE.driver_features[sel].store(write_value as u32, Ordering::Relaxed);
             crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:DRIVER_FEATURES=");
             crate::serial_write_hex_u64(write_value);
             crate::serial_write_str("\n");
             None
         }
         (VIRTIO_MMIO_STATUS_OFFSET, MmioAccessKind::Write) => {
+            let old = VIRTIO_MMIO_STATE.status.load(Ordering::Relaxed);
             VIRTIO_MMIO_STATE
                 .status
                 .store(write_value as u32, Ordering::Relaxed);
             crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:STATUS=");
             crate::serial_write_hex_u64(write_value);
             crate::serial_write_str("\n");
+
+            #[cfg(feature = "vmm_virtio_input")]
+            {
+                // Emit a deterministic marker when the guest sets DRIVER_OK for virtio-input.
+                // This is a helpful milestone even when VMX-gated smokes are used.
+                const VIRTIO_STATUS_DRIVER_OK: u32 = 0x04;
+                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                    let newv = write_value as u32;
+                    if (old & VIRTIO_STATUS_DRIVER_OK) == 0 && (newv & VIRTIO_STATUS_DRIVER_OK) != 0 {
+                        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:DRIVER_OK\n");
+                    }
+                }
+            }
             None
         }
 
@@ -1978,9 +2328,63 @@ fn virtio_mmio_handler(
                 .store((write_value as u32) & 1, Ordering::Relaxed);
             None
         }
+
+        (VIRTIO_MMIO_QUEUE_NUM_OFFSET, MmioAccessKind::Write) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            VIRTIO_MMIO_STATE.queue_size[qi].store(write_value as u32, Ordering::Relaxed);
+            None
+        }
+
+        (VIRTIO_MMIO_QUEUE_READY_OFFSET, MmioAccessKind::Write) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            VIRTIO_MMIO_STATE.queue_ready[qi].store((write_value as u32) & 1, Ordering::Relaxed);
+            None
+        }
+
+        (VIRTIO_MMIO_QUEUE_DESC_HIGH_OFFSET, MmioAccessKind::Write) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let old = VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed);
+            let newv = (old & 0x0000_0000_FFFF_FFFF) | ((write_value as u32 as u64) << 32);
+            VIRTIO_MMIO_STATE.queue_desc_address[qi].store(newv, Ordering::Relaxed);
+            None
+        }
+        // Spec QueueAvailHigh.
+        (VIRTIO_MMIO_QUEUE_AVAIL_HIGH_OFFSET, MmioAccessKind::Write) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let old = VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed);
+            let newv = (old & 0x0000_0000_FFFF_FFFF) | ((write_value as u32 as u64) << 32);
+            VIRTIO_MMIO_STATE.queue_driver_address[qi].store(newv, Ordering::Relaxed);
+            None
+        }
+
+        (VIRTIO_MMIO_QUEUE_USED_LOW_OFFSET, MmioAccessKind::Write) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let old = VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed);
+            let newv = (old & 0xFFFF_FFFF_0000_0000) | (write_value as u32 as u64);
+            VIRTIO_MMIO_STATE.queue_used_address[qi].store(newv, Ordering::Relaxed);
+            None
+        }
+        (VIRTIO_MMIO_QUEUE_USED_HIGH_OFFSET, MmioAccessKind::Write) => {
+            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let old = VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed);
+            let newv = (old & 0x0000_0000_FFFF_FFFF) | ((write_value as u32 as u64) << 32);
+            VIRTIO_MMIO_STATE.queue_used_address[qi].store(newv, Ordering::Relaxed);
+            None
+        }
         (VIRTIO_MMIO_QUEUE_DESC_OFFSET, MmioAccessKind::Write) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
-            VIRTIO_MMIO_STATE.queue_desc_address[qi].store(write_value as u64, Ordering::Relaxed);
+            // Allow 64-bit whole writes at the base offset.
+            if access.size == 8 {
+                VIRTIO_MMIO_STATE
+                    .queue_desc_address[qi]
+                    .store(write_value as u64, Ordering::Relaxed);
+            } else {
+                let old = VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed);
+                let newv = (old & 0xFFFF_FFFF_0000_0000) | (write_value as u32 as u64);
+                VIRTIO_MMIO_STATE
+                    .queue_desc_address[qi]
+                    .store(newv, Ordering::Relaxed);
+            }
             None
         }
         (VIRTIO_MMIO_QUEUE_DRIVER_OFFSET, MmioAccessKind::Write) => {
@@ -1988,19 +2392,24 @@ fn virtio_mmio_handler(
             VIRTIO_MMIO_STATE.queue_driver_address[qi].store(write_value as u64, Ordering::Relaxed);
             None
         }
-        (VIRTIO_MMIO_QUEUE_USED_OFFSET, MmioAccessKind::Write) => {
+        (VIRTIO_MMIO_QUEUE_AVAIL_LOW_OFFSET, MmioAccessKind::Write) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
-            VIRTIO_MMIO_STATE.queue_used_address[qi].store(write_value as u64, Ordering::Relaxed);
+            if access.size == 8 {
+                VIRTIO_MMIO_STATE
+                    .queue_driver_address[qi]
+                    .store(write_value as u64, Ordering::Relaxed);
+            } else {
+                let old = VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed);
+                let newv = (old & 0xFFFF_FFFF_0000_0000) | (write_value as u32 as u64);
+                VIRTIO_MMIO_STATE
+                    .queue_driver_address[qi]
+                    .store(newv, Ordering::Relaxed);
+            }
             None
         }
         (VIRTIO_MMIO_QUEUE_SIZE_OFFSET, MmioAccessKind::Write) => {
             let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
             VIRTIO_MMIO_STATE.queue_size[qi].store(write_value as u32, Ordering::Relaxed);
-            None
-        }
-        (VIRTIO_MMIO_QUEUE_READY_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
-            VIRTIO_MMIO_STATE.queue_ready[qi].store((write_value as u32) & 1, Ordering::Relaxed);
             None
         }
         (VIRTIO_MMIO_QUEUE_NOTIFY_OFFSET, MmioAccessKind::Write) => {
@@ -2055,6 +2464,29 @@ fn virtio_mmio_handler(
                             Some(VIRTIO_NET_MAC[cfg_offset as usize] as u64)
                         } else {
                             None
+                        }
+                    }
+                    #[cfg(feature = "vmm_virtio_input")]
+                    VIRTIO_INPUT_DEVICE_ID => {
+                        let cfg_offset = access.offset - VIRTIO_MMIO_CONFIG_SPACE_OFFSET;
+                        match access.kind {
+                            MmioAccessKind::Read => {
+                                // Assemble little-endian value from byte reads.
+                                let mut out: u64 = 0;
+                                for i in 0..access.size {
+                                    let b = virtio_input_cfg_read_byte(cfg_offset + i as u64) as u64;
+                                    out |= b << (8 * i);
+                                }
+                                Some(out)
+                            }
+                            MmioAccessKind::Write => {
+                                // Split writes into bytes; only select/subsel (offset 0/1) are modeled.
+                                for i in 0..access.size {
+                                    let b = ((write_value >> (8 * i)) & 0xFF) as u8;
+                                    virtio_input_cfg_write_byte(cfg_offset + i as u64, b);
+                                }
+                                None
+                            }
                         }
                     }
                     _ => None,

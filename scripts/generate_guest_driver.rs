@@ -7,10 +7,11 @@ const MMIO_COUNTER_BASE: u64 = 16 * 1024 * 1024;
 const MMIO_COUNTER_SIZE: u64 = PAGE_SIZE as u64;
 const MMIO_VIRTIO_BASE: u64 = MMIO_COUNTER_BASE + MMIO_COUNTER_SIZE;
 const VIRTIO_MMIO_QUEUE_DESC_OFFSET: u64 = 0x080;
-const VIRTIO_MMIO_QUEUE_DRIVER_OFFSET: u64 = 0x088;
-const VIRTIO_MMIO_QUEUE_USED_OFFSET: u64 = 0x090;
-const VIRTIO_MMIO_QUEUE_SIZE_OFFSET: u64 = 0x098;
-const VIRTIO_MMIO_QUEUE_READY_OFFSET: u64 = 0x09c;
+// virtio-mmio v2 spec offsets (modern virtqueue layout)
+const VIRTIO_MMIO_QUEUE_DRIVER_OFFSET: u64 = 0x090; // QueueAvail
+const VIRTIO_MMIO_QUEUE_USED_OFFSET: u64 = 0x0A0; // QueueUsed
+const VIRTIO_MMIO_QUEUE_SIZE_OFFSET: u64 = 0x038; // QueueNum
+const VIRTIO_MMIO_QUEUE_READY_OFFSET: u64 = 0x044; // QueueReady
 const VIRTIO_MMIO_STATUS_OFFSET: u64 = 0x070;
 const VIRTIO_MMIO_INTERRUPT_STATUS_OFFSET: u64 = 0x060;
 const VIRTIO_MMIO_INTERRUPT_ACK_OFFSET: u64 = 0x064;
@@ -521,8 +522,59 @@ fn emit_input_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     emitter.emit_bytes(&[0xB0, 0x0A]); // '\n'
     emitter.emit_bytes(&[0xE6, 0xE9]);
 
+    // Wait for the host to complete at least one writable buffer (used.idx != 0).
+    // This gives us a guest-visible end-to-end success signal beyond VMM-side markers.
+    //
+    // rbx = used ring base
+    // ecx = countdown
+    emitter.emit_bytes(&[0x48, 0xBB]); // mov rbx, imm64
+    emitter.emit_imm64(VIRTIO_QUEUE_USED_GPA);
+    emitter.emit_byte(0xB9); // mov ecx, imm32
+    emitter.emit_bytes(&(2_000_000u32.to_le_bytes()));
+
+    // loop_start:
+    //   cmp word ptr [rbx+2], 0
+    //   jne got_event
+    //   sub ecx, 1
+    //   jnz loop_start
+    //   jmp timeout
+    emitter.emit_bytes(&[0x66, 0x83, 0x7B, 0x02, 0x00]); // cmp word [rbx+2], 0
+    emitter.emit_bytes(&[0x75, 0x0A]); // jne +10 (to got_event)
+    emitter.emit_bytes(&[0x83, 0xE9, 0x01]); // sub ecx, 1
+    emitter.emit_bytes(&[0x75, 0xF4]); // jnz -12 (back to loop_start)
+
+    // jmp rel32 timeout (patch later)
+    let jmp_timeout_rel32_off = emitter.bytes.len() + 1;
+    emitter.emit_byte(0xE9);
+    emitter.emit_bytes(&[0, 0, 0, 0]);
+
+    // got_event:
+    for &b in b"RAYOS_GUEST:VIRTIO_INPUT:EVENT_RX\n" {
+        emitter.emit_bytes(&[0xB0, b]);
+        emitter.emit_bytes(&[0xE6, 0xE9]);
+    }
     emitter.emit_byte(0xF4); // hlt
     emitter.emit_bytes(&[0xEB, 0xFE]); // jmp $
+
+    // timeout:
+    let timeout_off = emitter.bytes.len();
+    for &b in b"RAYOS_GUEST:VIRTIO_INPUT:TIMEOUT\n" {
+        emitter.emit_bytes(&[0xB0, b]);
+        emitter.emit_bytes(&[0xE6, 0xE9]);
+    }
+    emitter.emit_byte(0xF4); // hlt
+    emitter.emit_bytes(&[0xEB, 0xFE]); // jmp $
+
+    // Patch the jmp-to-timeout rel32.
+    let rel = (timeout_off as i64) - ((jmp_timeout_rel32_off + 4) as i64);
+    if rel < i32::MIN as i64 || rel > i32::MAX as i64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "input blob timeout jmp displacement overflow",
+        ));
+    }
+    emitter.bytes[jmp_timeout_rel32_off..jmp_timeout_rel32_off + 4]
+        .copy_from_slice(&(rel as i32).to_le_bytes());
 
     let out_path = guest_driver_blob_output_path();
     let mut file = File::create(out_path)?;

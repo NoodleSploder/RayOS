@@ -80,6 +80,8 @@ NEED_VMCS="RAYOS_VMM:VMX:VMCS_READY"
 NEED_INPUT_A="RAYOS_VMM:VIRTIO_INPUT:KEEPALIVE_WRITTEN"
 NEED_INPUT_B="RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITTEN"
 NEED_INPUT_C="RAYOS_VMM:VIRTIO_INPUT:BUF_STASHED"
+NEED_GUEST_OK="RAYOS_GUEST:VIRTIO_INPUT:EVENT_RX"
+NEED_GUEST_TIMEOUT="RAYOS_GUEST:VIRTIO_INPUT:TIMEOUT"
 
 if ! grep -F -a -q "$NEED_INIT" "$SERIAL_NORM"; then
   echo "FAIL: missing hypervisor init marker ($NEED_INIT)" >&2
@@ -88,13 +90,22 @@ fi
 
 # Gate strict assertions on VMX actually reaching VMCS_READY.
 if grep -F -a -q "$NEED_VMXON" "$SERIAL_NORM" && grep -F -a -q "$NEED_VMCS" "$SERIAL_NORM"; then
+  if grep -F -a -q "$NEED_GUEST_TIMEOUT" "$SERIAL_NORM"; then
+    echo "FAIL: guest timed out waiting for virtio-input completion ($NEED_GUEST_TIMEOUT)" >&2
+    tail -n 120 "$SERIAL_NORM" >&2 || true
+    exit 1
+  fi
+  if grep -F -a -q "$NEED_GUEST_OK" "$SERIAL_NORM"; then
+    echo "PASS: guest observed virtio-input event completion" >&2
+    exit 0
+  fi
   if grep -F -a -q "$NEED_INPUT_A" "$SERIAL_NORM" \
     || grep -F -a -q "$NEED_INPUT_B" "$SERIAL_NORM" \
     || grep -F -a -q "$NEED_INPUT_C" "$SERIAL_NORM"; then
     echo "PASS: virtio-input queue activity marker observed" >&2
     exit 0
   fi
-  echo "FAIL: missing virtio-input markers ($NEED_INPUT_A or $NEED_INPUT_B or $NEED_INPUT_C)" >&2
+  echo "FAIL: missing virtio-input markers ($NEED_GUEST_OK or $NEED_INPUT_A or $NEED_INPUT_B or $NEED_INPUT_C)" >&2
   tail -n 120 "$SERIAL_NORM" >&2 || true
   exit 1
 else

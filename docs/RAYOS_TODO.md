@@ -230,7 +230,10 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 		- Script: `./scripts/test-vmm-virtio-gpu-present-headless.sh` (skips strict marker assertions if VMX bring-up does not reach VMXON/VMCS_READY).
 
 	P3 (Must-have for usability): input routing + lifecycle
-	- [ ] Virtio-input device model + event injection from RayOS pointer/keyboard to the presented guest surface.
+	- [⏳] Virtio-input device model + event injection from RayOS pointer/keyboard to the presented guest surface.
+		- Implemented (v0): VMM stashes guest event buffers, pumps queued events into used-ring entries, and attempts IRQ injection; RayOS prompt commands route into virtio-input when a guest surface is Presented.
+		- Headless smoke: `./scripts/test-vmm-virtio-input-headless.sh` (VMX-gated; asserts guest-visible `RAYOS_GUEST:VIRTIO_INPUT:EVENT_RX` when VMCS is ready; falls back to VMM-side buffer stash / keepalive / event-written markers).
+		- Remaining: broaden Linux driver compatibility (virtio-input config semantics + richer key mapping) and add Linux guest-visible validation (e.g., in-guest `/dev/input/event*` consumption marker).
 	- [ ] Present/Hide semantics do not kill the VM by default (presentation is UI-only; lifecycle is policy-controlled).
 	- [ ] Reboot persistence test: boot → (Linux running hidden) → present → write marker on disk → reboot RayOS → marker persists.
 	- TODOs (milestone 1: single full-desktop surface):
