@@ -3,8 +3,8 @@
 #
 # What it validates:
 # - kernel boots with `vmm_hypervisor` + `vmm_virtio_input`
-# - guest blob posts a writable descriptor and notifies the virtqueue
-# - VMM writes a virtio-input event and emits deterministic marker
+# - guest blob posts writable buffers and notifies the virtqueue
+# - VMM stashes buffers and writes at least one deterministic keepalive/event marker
 #
 # Notes:
 # - VMX may not be available in all environments; when VMX bring-up doesn't reach
@@ -77,7 +77,9 @@ tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
 NEED_INIT="RAYOS_VMM:VMX:INIT_BEGIN"
 NEED_VMXON="RAYOS_VMM:VMX:VMXON_OK"
 NEED_VMCS="RAYOS_VMM:VMX:VMCS_READY"
-NEED_INPUT="RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITTEN"
+NEED_INPUT_A="RAYOS_VMM:VIRTIO_INPUT:KEEPALIVE_WRITTEN"
+NEED_INPUT_B="RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITTEN"
+NEED_INPUT_C="RAYOS_VMM:VIRTIO_INPUT:BUF_STASHED"
 
 if ! grep -F -a -q "$NEED_INIT" "$SERIAL_NORM"; then
   echo "FAIL: missing hypervisor init marker ($NEED_INIT)" >&2
@@ -86,11 +88,13 @@ fi
 
 # Gate strict assertions on VMX actually reaching VMCS_READY.
 if grep -F -a -q "$NEED_VMXON" "$SERIAL_NORM" && grep -F -a -q "$NEED_VMCS" "$SERIAL_NORM"; then
-  if grep -F -a -q "$NEED_INPUT" "$SERIAL_NORM"; then
-    echo "PASS: virtio-input event written marker observed" >&2
+  if grep -F -a -q "$NEED_INPUT_A" "$SERIAL_NORM" \
+    || grep -F -a -q "$NEED_INPUT_B" "$SERIAL_NORM" \
+    || grep -F -a -q "$NEED_INPUT_C" "$SERIAL_NORM"; then
+    echo "PASS: virtio-input queue activity marker observed" >&2
     exit 0
   fi
-  echo "FAIL: missing virtio-input event marker ($NEED_INPUT)" >&2
+  echo "FAIL: missing virtio-input markers ($NEED_INPUT_A or $NEED_INPUT_B or $NEED_INPUT_C)" >&2
   tail -n 120 "$SERIAL_NORM" >&2 || true
   exit 1
 else

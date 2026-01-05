@@ -8544,16 +8544,109 @@ fn kernel_main() -> ! {
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "shutting down Windows desktop...", 0xff_ff_88);
                             } else if let Some(keyspec) = parse_linux_sendkey(&line_buf[..len]) {
-                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDKEY:");
-                                serial_write_bytes(keyspec);
-                                serial_write_str("\n");
-                                chat.push_line(
-                                    b"SYS: ",
-                                    b"sending key to Linux desktop (host inject)",
-                                );
-                                render_chat_log(&chat);
-                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
-                                draw_text(140, 560, "sending key to Linux desktop...", 0xff_ff_88);
+                                #[cfg(feature = "vmm_virtio_input")]
+                                let virtio_ok = {
+                                    let presented = guest_surface::presentation_state()
+                                        == guest_surface::PresentationState::Presented;
+                                    if !presented {
+                                        false
+                                    } else {
+                                        // Minimal key mapping (common evdev codes). Keep this small and explicit.
+                                        fn keyspec_to_evdev_code(keyspec: &[u8]) -> Option<u16> {
+                                            let s = keyspec;
+                                            if eq_ignore_ascii_case(s, b"enter") {
+                                                return Some(28);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"esc")
+                                                || eq_ignore_ascii_case(s, b"escape")
+                                            {
+                                                return Some(1);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"tab") {
+                                                return Some(15);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"backspace")
+                                                || eq_ignore_ascii_case(s, b"bs")
+                                            {
+                                                return Some(14);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"space") {
+                                                return Some(57);
+                                            }
+
+                                            if s.len() == 1 {
+                                                let c = s[0];
+                                                // Digits: KEY_1..KEY_0
+                                                if c >= b'1' && c <= b'9' {
+                                                    return Some((c - b'1') as u16 + 2);
+                                                }
+                                                if c == b'0' {
+                                                    return Some(11);
+                                                }
+
+                                                // Letters (explicit evdev codes)
+                                                return match c {
+                                                    b'a' | b'A' => Some(30),
+                                                    b's' | b'S' => Some(31),
+                                                    b'd' | b'D' => Some(32),
+                                                    b'f' | b'F' => Some(33),
+                                                    b'g' | b'G' => Some(34),
+                                                    b'h' | b'H' => Some(35),
+                                                    b'j' | b'J' => Some(36),
+                                                    b'k' | b'K' => Some(37),
+                                                    b'l' | b'L' => Some(38),
+                                                    b'q' | b'Q' => Some(16),
+                                                    b'w' | b'W' => Some(17),
+                                                    b'e' | b'E' => Some(18),
+                                                    b'r' | b'R' => Some(19),
+                                                    b't' | b'T' => Some(20),
+                                                    b'y' | b'Y' => Some(21),
+                                                    b'u' | b'U' => Some(22),
+                                                    b'i' | b'I' => Some(23),
+                                                    b'o' | b'O' => Some(24),
+                                                    b'p' | b'P' => Some(25),
+                                                    b'z' | b'Z' => Some(44),
+                                                    b'x' | b'X' => Some(45),
+                                                    b'c' | b'C' => Some(46),
+                                                    b'v' | b'V' => Some(47),
+                                                    b'b' | b'B' => Some(48),
+                                                    b'n' | b'N' => Some(49),
+                                                    b'm' | b'M' => Some(50),
+                                                    _ => None,
+                                                };
+                                            }
+                                            None
+                                        }
+
+                                        if let Some(code) = keyspec_to_evdev_code(keyspec) {
+                                            crate::hypervisor::virtio_input_enqueue_key_press_release(code)
+                                        } else {
+                                            serial_write_str("SYS: unsupported virtio key spec; falling back to host inject\n");
+                                            false
+                                        }
+                                    }
+                                };
+
+                                #[cfg(not(feature = "vmm_virtio_input"))]
+                                let virtio_ok = false;
+
+                                if virtio_ok {
+                                    chat.push_line(b"SYS: ", b"sending key to Linux (virtio-input)");
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(140, 560, "sending key to Linux (virtio-input)...", 0xff_ff_88);
+                                } else {
+                                    serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_SENDKEY:");
+                                    serial_write_bytes(keyspec);
+                                    serial_write_str("\n");
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"sending key to Linux desktop (host inject)",
+                                    );
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(140, 560, "sending key to Linux desktop...", 0xff_ff_88);
+                                }
                             } else if let Some(keyspec) = parse_windows_sendkey(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:WINDOWS_SENDKEY:");
                                 serial_write_bytes(keyspec);
@@ -8571,34 +8664,97 @@ fn kernel_main() -> ! {
                                     0xff_ff_88,
                                 );
                             } else if let Some((x, y)) = parse_linux_mouse_abs(&line_buf[..len]) {
-                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_MOUSE_ABS:");
-                                serial_write_bytes(x);
-                                serial_write_byte(b':');
-                                serial_write_bytes(y);
-                                serial_write_str("\n");
-                                chat.push_line(
-                                    b"SYS: ",
-                                    b"moving pointer in Linux desktop (host inject)",
-                                );
-                                render_chat_log(&chat);
-                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
-                                draw_text(
-                                    140,
-                                    560,
-                                    "moving pointer in Linux desktop...",
-                                    0xff_ff_88,
-                                );
+                                #[cfg(feature = "vmm_virtio_input")]
+                                let virtio_ok = {
+                                    let presented = guest_surface::presentation_state()
+                                        == guest_surface::PresentationState::Presented;
+                                    if !presented {
+                                        false
+                                    } else if let (Some(xv), Some(yv)) =
+                                        (parse_u32_decimal(x), parse_u32_decimal(y))
+                                    {
+                                        crate::hypervisor::virtio_input_enqueue_mouse_abs(xv, yv)
+                                    } else {
+                                        false
+                                    }
+                                };
+
+                                #[cfg(not(feature = "vmm_virtio_input"))]
+                                let virtio_ok = false;
+
+                                if virtio_ok {
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"moving pointer in Linux (virtio-input)",
+                                    );
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(
+                                        140,
+                                        560,
+                                        "moving pointer in Linux (virtio-input)...",
+                                        0xff_ff_88,
+                                    );
+                                } else {
+                                    serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_MOUSE_ABS:");
+                                    serial_write_bytes(x);
+                                    serial_write_byte(b':');
+                                    serial_write_bytes(y);
+                                    serial_write_str("\n");
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"moving pointer in Linux desktop (host inject)",
+                                    );
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(
+                                        140,
+                                        560,
+                                        "moving pointer in Linux desktop...",
+                                        0xff_ff_88,
+                                    );
+                                }
                             } else if let Some(btn) = parse_linux_click(&line_buf[..len]) {
-                                serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_CLICK:");
-                                serial_write_bytes(btn);
-                                serial_write_str("\n");
-                                chat.push_line(
-                                    b"SYS: ",
-                                    b"clicking in Linux desktop (host inject)",
-                                );
-                                render_chat_log(&chat);
-                                draw_box(140, 560, 590, 20, 0x1a_1a_2e);
-                                draw_text(140, 560, "clicking in Linux desktop...", 0xff_ff_88);
+                                #[cfg(feature = "vmm_virtio_input")]
+                                let virtio_ok = {
+                                    let presented = guest_surface::presentation_state()
+                                        == guest_surface::PresentationState::Presented;
+                                    if !presented {
+                                        false
+                                    } else if eq_ignore_ascii_case(btn, b"left") {
+                                        crate::hypervisor::virtio_input_enqueue_click_left()
+                                    } else if eq_ignore_ascii_case(btn, b"right") {
+                                        crate::hypervisor::virtio_input_enqueue_click_right()
+                                    } else {
+                                        false
+                                    }
+                                };
+
+                                #[cfg(not(feature = "vmm_virtio_input"))]
+                                let virtio_ok = false;
+
+                                if virtio_ok {
+                                    chat.push_line(b"SYS: ", b"clicking in Linux (virtio-input)");
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(
+                                        140,
+                                        560,
+                                        "clicking in Linux (virtio-input)...",
+                                        0xff_ff_88,
+                                    );
+                                } else {
+                                    serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_CLICK:");
+                                    serial_write_bytes(btn);
+                                    serial_write_str("\n");
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"clicking in Linux desktop (host inject)",
+                                    );
+                                    render_chat_log(&chat);
+                                    draw_box(140, 560, 590, 20, 0x1a_1a_2e);
+                                    draw_text(140, 560, "clicking in Linux desktop...", 0xff_ff_88);
+                                }
                             } else {
                                 // Update transcript with the user's line.
                                 chat.push_line(b"YOU: ", &line_buf[..len]);

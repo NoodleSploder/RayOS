@@ -1473,6 +1473,331 @@ impl VirtioMmioState {
 
 static VIRTIO_MMIO_STATE: VirtioMmioState = VirtioMmioState::new();
 
+// --- virtio-input (P3) ---
+//
+// Minimal async-ish virtio-input eventq model:
+// - Guest posts writable buffers into queue 0 (eventq). We *stash* these buffers (do not
+//   immediately complete them into the used ring).
+// - RayOS enqueues input events (from the UI loop) into a small lock-free ring.
+// - On VM-exits (and after queue notifications), we pump: write events into stashed
+//   buffers, complete used-ring entries, and inject an interrupt.
+
+#[cfg(feature = "vmm_virtio_input")]
+const VIRTIO_INPUT_EVENTQ_INDEX: usize = 0;
+
+#[cfg(feature = "vmm_virtio_input")]
+const VIRTIO_INPUT_EVENT_RING_SIZE: usize = 64; // power-of-two
+
+#[cfg(feature = "vmm_virtio_input")]
+const VIRTIO_INPUT_FREE_BUFS_SIZE: usize = 64; // power-of-two
+
+#[cfg(feature = "vmm_virtio_input")]
+#[derive(Copy, Clone, Default)]
+struct VirtioInputBuf {
+    desc_id: u32,
+    addr: u64,
+    len: u32,
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+static VIRTIO_INPUT_EVENT_HEAD: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "vmm_virtio_input")]
+static VIRTIO_INPUT_EVENT_TAIL: AtomicUsize = AtomicUsize::new(0);
+
+// Packed linux-style input_event (type:u16, code:u16, value:i32) into a u64.
+#[cfg(feature = "vmm_virtio_input")]
+static VIRTIO_INPUT_EVENTS: [AtomicU64; VIRTIO_INPUT_EVENT_RING_SIZE] = {
+    const Z: AtomicU64 = AtomicU64::new(0);
+    [Z; VIRTIO_INPUT_EVENT_RING_SIZE]
+};
+
+#[cfg(feature = "vmm_virtio_input")]
+static mut VIRTIO_INPUT_FREE_BUFS: [VirtioInputBuf; VIRTIO_INPUT_FREE_BUFS_SIZE] =
+    [VirtioInputBuf {
+        desc_id: 0,
+        addr: 0,
+        len: 0,
+    }; VIRTIO_INPUT_FREE_BUFS_SIZE];
+#[cfg(feature = "vmm_virtio_input")]
+static mut VIRTIO_INPUT_FREE_HEAD: usize = 0;
+#[cfg(feature = "vmm_virtio_input")]
+static mut VIRTIO_INPUT_FREE_TAIL: usize = 0;
+
+#[cfg(feature = "vmm_virtio_input")]
+#[inline(always)]
+fn virtio_input_pack(ty: u16, code: u16, value: i32) -> u64 {
+    (ty as u64) | ((code as u64) << 16) | (((value as u32) as u64) << 32)
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+#[inline(always)]
+fn virtio_input_unpack_bytes(packed: u64) -> [u8; 8] {
+    let ty = (packed & 0xffff) as u16;
+    let code = ((packed >> 16) & 0xffff) as u16;
+    let value = (packed >> 32) as u32;
+    let mut ev = [0u8; 8];
+    ev[0..2].copy_from_slice(&ty.to_le_bytes());
+    ev[2..4].copy_from_slice(&code.to_le_bytes());
+    ev[4..8].copy_from_slice(&value.to_le_bytes());
+    ev
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_eventq_is_empty() -> bool {
+    let head = VIRTIO_INPUT_EVENT_HEAD.load(Ordering::Acquire);
+    let tail = VIRTIO_INPUT_EVENT_TAIL.load(Ordering::Acquire);
+    head == tail
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_eventq_push(packed: u64) -> bool {
+    let tail = VIRTIO_INPUT_EVENT_TAIL.load(Ordering::Relaxed);
+    let next = (tail + 1) & (VIRTIO_INPUT_EVENT_RING_SIZE - 1);
+    let head = VIRTIO_INPUT_EVENT_HEAD.load(Ordering::Acquire);
+    if next == head {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:EVENTQ_FULL\n");
+        return false;
+    }
+    VIRTIO_INPUT_EVENTS[tail].store(packed, Ordering::Relaxed);
+    VIRTIO_INPUT_EVENT_TAIL.store(next, Ordering::Release);
+    true
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_eventq_pop() -> Option<u64> {
+    let head = VIRTIO_INPUT_EVENT_HEAD.load(Ordering::Relaxed);
+    let tail = VIRTIO_INPUT_EVENT_TAIL.load(Ordering::Acquire);
+    if head == tail {
+        return None;
+    }
+    let packed = VIRTIO_INPUT_EVENTS[head].load(Ordering::Relaxed);
+    let next = (head + 1) & (VIRTIO_INPUT_EVENT_RING_SIZE - 1);
+    VIRTIO_INPUT_EVENT_HEAD.store(next, Ordering::Release);
+    Some(packed)
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+unsafe fn virtio_input_freebuf_push(buf: VirtioInputBuf) -> bool {
+    let next = (VIRTIO_INPUT_FREE_TAIL + 1) & (VIRTIO_INPUT_FREE_BUFS_SIZE - 1);
+    if next == VIRTIO_INPUT_FREE_HEAD {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:FREEBUF_FULL\n");
+        return false;
+    }
+    VIRTIO_INPUT_FREE_BUFS[VIRTIO_INPUT_FREE_TAIL] = buf;
+    VIRTIO_INPUT_FREE_TAIL = next;
+    true
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+unsafe fn virtio_input_freebuf_pop() -> Option<VirtioInputBuf> {
+    if VIRTIO_INPUT_FREE_HEAD == VIRTIO_INPUT_FREE_TAIL {
+        return None;
+    }
+    let buf = VIRTIO_INPUT_FREE_BUFS[VIRTIO_INPUT_FREE_HEAD];
+    VIRTIO_INPUT_FREE_HEAD = (VIRTIO_INPUT_FREE_HEAD + 1) & (VIRTIO_INPUT_FREE_BUFS_SIZE - 1);
+    Some(buf)
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_extract_writable_buf(
+    desc_base: u64,
+    queue_size: u32,
+    start_index: u32,
+) -> Option<VirtioInputBuf> {
+    if queue_size == 0 {
+        return None;
+    }
+    let mut idx = start_index;
+    for _ in 0..MAX_VIRTQ_DESC_CHAIN_ENTRIES {
+        if idx >= queue_size {
+            return None;
+        }
+        let desc = read_virtq_descriptor(desc_base, idx)?;
+        if (desc.flags & VIRTQ_DESC_F_WRITE) != 0 {
+            return Some(VirtioInputBuf {
+                desc_id: start_index,
+                addr: desc.addr,
+                len: desc.len,
+            });
+        }
+        if (desc.flags & VIRTQ_DESC_F_NEXT) == 0 {
+            break;
+        }
+        idx = desc.next as u32;
+    }
+    None
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+unsafe fn virtio_input_complete_used(
+    used_base: u64,
+    queue_size: u32,
+    qi: usize,
+    desc_id: u32,
+    used_len: u32,
+) -> bool {
+    if queue_size == 0 {
+        return false;
+    }
+    let queue_size_u64 = queue_size as u64;
+    let mut used_idx: u16 = VIRTIO_MMIO_STATE.queue_used_index[qi].load(Ordering::Relaxed);
+    let used_ring_pos = (used_idx as u64) % queue_size_u64;
+    let used_entry_offset =
+        used_base + VIRTQ_USED_RING_OFFSET + used_ring_pos * VIRTQ_USED_ENTRY_SIZE;
+    if !write_u32(used_entry_offset, desc_id) {
+        return false;
+    }
+    if !write_u32(used_entry_offset + 4, used_len) {
+        return false;
+    }
+
+    used_idx = used_idx.wrapping_add(1);
+    if !write_u16(used_base + VIRTQ_USED_IDX_OFFSET, used_idx) {
+        return false;
+    }
+    VIRTIO_MMIO_STATE.queue_used_index[qi].store(used_idx, Ordering::Relaxed);
+
+    let old_int = VIRTIO_MMIO_STATE
+        .interrupt_status
+        .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::Relaxed);
+    if (old_int & VIRTIO_MMIO_INT_VRING) == 0 {
+        if !inject_guest_interrupt(VIRTIO_MMIO_IRQ_VECTOR) {
+            VIRTIO_MMIO_STATE.interrupt_pending.store(1, Ordering::Relaxed);
+            VIRTIO_MMIO_STATE
+                .interrupt_pending_attempts
+                .store(0, Ordering::Relaxed);
+            VIRTIO_MMIO_STATE
+                .interrupt_pending_last_tick
+                .store(crate::TIMER_TICKS.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+    }
+
+    true
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+unsafe fn virtio_input_pump_queue0() {
+    if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) != VIRTIO_INPUT_DEVICE_ID {
+        return;
+    }
+
+    let qi = VIRTIO_INPUT_EVENTQ_INDEX;
+    if VIRTIO_MMIO_STATE.queue_ready[qi].load(Ordering::Relaxed) == 0 {
+        return;
+    }
+
+    let used_base = VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed);
+    let queue_size = VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed);
+    if used_base == 0 || queue_size == 0 {
+        return;
+    }
+
+    while let Some(packed) = virtio_input_eventq_pop() {
+        let Some(buf) = virtio_input_freebuf_pop() else {
+            // Put the event back by rewinding head one slot would be messy; just drop with a marker.
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:NO_FREEBUF\n");
+            break;
+        };
+
+        if buf.len < 8 {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:FREEBUF_TOO_SMALL\n");
+            continue;
+        }
+
+        let bytes = virtio_input_unpack_bytes(packed);
+        if !write_guest_bytes(buf.addr, &bytes) {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITE_FAIL\n");
+            continue;
+        }
+
+        if virtio_input_complete_used(used_base, queue_size, qi, buf.desc_id, 8) {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITTEN\n");
+        } else {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:USED_COMPLETE_FAIL\n");
+        }
+    }
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+pub fn virtio_input_enqueue_mouse_abs(x: u32, y: u32) -> bool {
+    // Linux-style event stream: ABS_X, ABS_Y, SYN_REPORT.
+    const EV_ABS: u16 = 0x03;
+    const ABS_X: u16 = 0x00;
+    const ABS_Y: u16 = 0x01;
+    const EV_SYN: u16 = 0x00;
+    const SYN_REPORT: u16 = 0x00;
+
+    let ok1 = virtio_input_eventq_push(virtio_input_pack(EV_ABS, ABS_X, x as i32));
+    let ok2 = virtio_input_eventq_push(virtio_input_pack(EV_ABS, ABS_Y, y as i32));
+    let ok3 = virtio_input_eventq_push(virtio_input_pack(EV_SYN, SYN_REPORT, 0));
+    if ok1 && ok2 && ok3 {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENQ_MOUSE_ABS\n");
+        true
+    } else {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENQ_MOUSE_ABS_FAIL\n");
+        false
+    }
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+pub fn virtio_input_enqueue_click_left() -> bool {
+    const EV_KEY: u16 = 0x01;
+    const BTN_LEFT: u16 = 0x110;
+    const EV_SYN: u16 = 0x00;
+    const SYN_REPORT: u16 = 0x00;
+
+    let ok1 = virtio_input_eventq_push(virtio_input_pack(EV_KEY, BTN_LEFT, 1));
+    let ok2 = virtio_input_eventq_push(virtio_input_pack(EV_SYN, SYN_REPORT, 0));
+    let ok3 = virtio_input_eventq_push(virtio_input_pack(EV_KEY, BTN_LEFT, 0));
+    let ok4 = virtio_input_eventq_push(virtio_input_pack(EV_SYN, SYN_REPORT, 0));
+    if ok1 && ok2 && ok3 && ok4 {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENQ_CLICK_LEFT\n");
+        true
+    } else {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENQ_CLICK_LEFT_FAIL\n");
+        false
+    }
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+pub fn virtio_input_enqueue_click_right() -> bool {
+    const EV_KEY: u16 = 0x01;
+    const BTN_RIGHT: u16 = 0x111;
+    const EV_SYN: u16 = 0x00;
+    const SYN_REPORT: u16 = 0x00;
+
+    let ok1 = virtio_input_eventq_push(virtio_input_pack(EV_KEY, BTN_RIGHT, 1));
+    let ok2 = virtio_input_eventq_push(virtio_input_pack(EV_SYN, SYN_REPORT, 0));
+    let ok3 = virtio_input_eventq_push(virtio_input_pack(EV_KEY, BTN_RIGHT, 0));
+    let ok4 = virtio_input_eventq_push(virtio_input_pack(EV_SYN, SYN_REPORT, 0));
+    if ok1 && ok2 && ok3 && ok4 {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENQ_CLICK_RIGHT\n");
+        true
+    } else {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENQ_CLICK_RIGHT_FAIL\n");
+        false
+    }
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+pub fn virtio_input_enqueue_key_press_release(evdev_code: u16) -> bool {
+    const EV_KEY: u16 = 0x01;
+    const EV_SYN: u16 = 0x00;
+    const SYN_REPORT: u16 = 0x00;
+
+    let ok1 = virtio_input_eventq_push(virtio_input_pack(EV_KEY, evdev_code, 1));
+    let ok2 = virtio_input_eventq_push(virtio_input_pack(EV_SYN, SYN_REPORT, 0));
+    let ok3 = virtio_input_eventq_push(virtio_input_pack(EV_KEY, evdev_code, 0));
+    let ok4 = virtio_input_eventq_push(virtio_input_pack(EV_SYN, SYN_REPORT, 0));
+    if ok1 && ok2 && ok3 && ok4 {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENQ_KEY\n");
+        true
+    } else {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENQ_KEY_FAIL\n");
+        false
+    }
+}
+
 fn find_mmio_region(gpa: u64) -> Option<MmioRegion> {
     unsafe {
         for slot in MMIO_REGIONS.iter() {
@@ -2379,6 +2704,14 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
         // Smoke harness expects this marker string.
         if count == 1 {
             crate::serial_write_str("RAYOS_VMM:VMX:VMEXIT\n");
+        }
+
+        #[cfg(feature = "vmm_virtio_input")]
+        {
+            // Opportunistically pump input events whenever we regain control.
+            // This lets the device complete stashed buffers even if the guest
+            // doesn't re-notify the queue.
+            virtio_input_pump_queue0();
         }
 
         let exit_basic = (reason & 0xffff) as u32;
@@ -6328,6 +6661,58 @@ fn try_retry_pending_if_due() {
             crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:AVAIL_DESC_OOB\n");
             break;
         }
+
+        // virtio-input eventq: take and stash writable buffers for later completion.
+        #[cfg(feature = "vmm_virtio_input")]
+        {
+            let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+            if device_id == VIRTIO_INPUT_DEVICE_ID && qi == VIRTIO_INPUT_EVENTQ_INDEX {
+                if let Some(buf) =
+                    virtio_input_extract_writable_buf(desc_base, queue_size, desc_index as u32)
+                {
+                    // If there are no queued events yet and no other free buffers, complete
+                    // exactly one keepalive SYN_REPORT to keep headless smoke deterministic.
+                    let free_empty = unsafe { VIRTIO_INPUT_FREE_HEAD == VIRTIO_INPUT_FREE_TAIL };
+                    if virtio_input_eventq_is_empty() && free_empty {
+                        // EV_SYN / SYN_REPORT / 0
+                        let keepalive = virtio_input_pack(0, 0, 0);
+                        if buf.len >= 8 {
+                            let bytes = virtio_input_unpack_bytes(keepalive);
+                            if write_guest_bytes(buf.addr, &bytes)
+                                && unsafe {
+                                    virtio_input_complete_used(
+                                        used_base,
+                                        queue_size,
+                                        qi,
+                                        buf.desc_id,
+                                        8,
+                                    )
+                                }
+                            {
+                                crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:KEEPALIVE_WRITTEN\n");
+                                avail_processed = avail_processed.wrapping_add(1);
+                                continue;
+                            }
+                        }
+                    }
+
+                    unsafe {
+                        if virtio_input_freebuf_push(buf) {
+                            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:BUF_STASHED\n");
+                        } else {
+                            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:BUF_STASH_FAIL\n");
+                        }
+                    }
+                } else {
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:NO_WRITABLE_DESC\n");
+                }
+
+                // Always advance the device-side avail cursor for taken buffers.
+                avail_processed = avail_processed.wrapping_add(1);
+                continue;
+            }
+        }
+
         let total_len =
             match log_descriptor_chain(desc_base, queue_size, desc_index as u32, queue_index) {
                 Some(len) => len,
@@ -6413,6 +6798,12 @@ fn try_retry_pending_if_due() {
     }
     VIRTIO_MMIO_STATE.queue_avail_index[qi].store(avail_processed, Ordering::Relaxed);
     VIRTIO_MMIO_STATE.queue_used_index[qi].store(used_idx, Ordering::Relaxed);
+
+    #[cfg(feature = "vmm_virtio_input")]
+    unsafe {
+        // If this device is virtio-input, try to pump queued events into stashed buffers.
+        virtio_input_pump_queue0();
+    }
 }
 
 #[inline(always)]

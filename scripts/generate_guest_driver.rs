@@ -42,7 +42,6 @@ const VIRTIO_NET_PKT_LEN: u32 = 64;  // Simple Ethernet frame
 
 // Virtio-input test support
 const VIRTIO_INPUT_EVENT_GPA: u64 = 0x0010_B000;
-const VIRTIO_INPUT_EVENT_LEN: u32 = 64;
 const VIRTIO_MMIO_DEVICE_ID_OFFSET: u64 = 0x008;
 
 const VIRTQ_DESC_F_NEXT: u16 = 1;
@@ -388,7 +387,7 @@ fn main() -> std::io::Result<()> {
 
 fn emit_input_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     // Minimal virtio-input eventq test:
-    // - publish a single writable buffer descriptor
+    // - publish multiple writable buffer descriptors
     // - notify queue 0
     // Hypervisor should write an event into the buffer and emit deterministic markers.
 
@@ -402,13 +401,18 @@ fn emit_input_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     let queue_size_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_SIZE_OFFSET;
     let queue_ready_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_READY_OFFSET;
 
-    // Build descriptor 0 bytes to be copied into guest desc area.
-    // Descriptor points to a device-writeable event buffer.
+    // Build descriptor bytes to be copied into guest desc area.
+    // Each descriptor points to a device-writeable 8-byte input event slot.
+    const NUM_BUFS: u16 = 8;
+    const EVENT_SLOT_LEN: u32 = 8;
     let mut desc_bytes = Vec::new();
-    desc_bytes.extend_from_slice(&VIRTIO_INPUT_EVENT_GPA.to_le_bytes());
-    desc_bytes.extend_from_slice(&VIRTIO_INPUT_EVENT_LEN.to_le_bytes());
-    desc_bytes.extend_from_slice(&VIRTQ_DESC_F_WRITE.to_le_bytes()); // flags
-    desc_bytes.extend_from_slice(&(0u16.to_le_bytes())); // next
+    for i in 0..NUM_BUFS {
+        let addr = VIRTIO_INPUT_EVENT_GPA + (i as u64) * (EVENT_SLOT_LEN as u64);
+        desc_bytes.extend_from_slice(&addr.to_le_bytes());
+        desc_bytes.extend_from_slice(&EVENT_SLOT_LEN.to_le_bytes());
+        desc_bytes.extend_from_slice(&VIRTQ_DESC_F_WRITE.to_le_bytes()); // flags
+        desc_bytes.extend_from_slice(&(0u16.to_le_bytes())); // next
+    }
     let desc_len = desc_bytes.len() as u64;
 
     // IMPORTANT: the kernel patches a u64 at a fixed offset inside this blob.
@@ -487,10 +491,13 @@ fn emit_input_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     emitter.mov_reg64_imm(1, desc_len);
     emitter.emit_bytes(&[0xF3, 0xA4]); // rep movsb (src=R6 dest=R7 count=R1)
 
-    // Submit avail ring: set avail.idx=1 and avail.ring[0]=0.
+    // Submit avail ring: set avail.idx=NUM_BUFS and avail.ring[i]=i.
     emitter.mov_rdi_imm(VIRTIO_QUEUE_DRIVER_GPA);
-    emitter.emit_bytes(&[0x66, 0xC7, 0x47, 0x02, 0x01, 0x00]); // mov word [rdi+2], 1
-    emitter.emit_bytes(&[0x66, 0xC7, 0x47, 0x04, 0x00, 0x00]); // mov word [rdi+4], 0
+    emitter.emit_bytes(&[0x66, 0xC7, 0x47, 0x02, (NUM_BUFS & 0xFF) as u8, (NUM_BUFS >> 8) as u8]); // mov word [rdi+2], NUM_BUFS
+    for i in 0..NUM_BUFS {
+        let off = 0x04u8 + (i as u8) * 2;
+        emitter.emit_bytes(&[0x66, 0xC7, 0x47, off, (i & 0xFF) as u8, (i >> 8) as u8]);
+    }
 
     // Notify queue 0
     emitter.mov_reg64_imm(0, 0);
