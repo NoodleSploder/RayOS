@@ -37,6 +37,9 @@ dev_scanout = []
 # This is intentionally off by default while the hypervisor runtime is built out.
 vmm_virtio_gpu = []
 
+# Scaffolding for a minimal virtio-input device model (P3 work).
+vmm_virtio_input = []
+
 # Scaffolding for virtio-console device model (P1 work).
 vmm_virtio_console = []
 

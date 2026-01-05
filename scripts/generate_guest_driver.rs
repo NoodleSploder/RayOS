@@ -39,6 +39,10 @@ const VIRTIO_CONSOLE_MSG_LEN: u32 = 64;
 const VIRTIO_NET_TX_PKT_GPA: u64 = 0x0010_9000;
 const VIRTIO_NET_RX_PKT_GPA: u64 = VIRTIO_NET_TX_PKT_GPA + 0x1000;
 const VIRTIO_NET_PKT_LEN: u32 = 64;  // Simple Ethernet frame
+
+// Virtio-input test support
+const VIRTIO_INPUT_EVENT_GPA: u64 = 0x0010_B000;
+const VIRTIO_INPUT_EVENT_LEN: u32 = 64;
 const VIRTIO_MMIO_DEVICE_ID_OFFSET: u64 = 0x008;
 
 const VIRTQ_DESC_F_NEXT: u16 = 1;
@@ -139,6 +143,11 @@ fn guest_driver_blob_output_path() -> PathBuf {
 }
 
 fn main() -> std::io::Result<()> {
+    let input_mode: bool = std::env::var("RAYOS_GUEST_INPUT_ENABLED")
+        .ok()
+        .map(|v| v == "1" || v.to_lowercase() == "true")
+        .unwrap_or(false);
+
     let net_mode: bool = std::env::var("RAYOS_GUEST_NET_ENABLED")
         .ok()
         .map(|v| v == "1" || v.to_lowercase() == "true")
@@ -149,12 +158,19 @@ fn main() -> std::io::Result<()> {
         .map(|v| v == "1" || v.to_lowercase() == "true")
         .unwrap_or(false);
 
-    eprintln!("DEBUG: RAYOS_GUEST_NET_ENABLED={:?}, net_mode={} RAYOS_GUEST_CONSOLE_ENABLED={:?}, console_mode={}",
-        std::env::var("RAYOS_GUEST_NET_ENABLED"), net_mode, std::env::var("RAYOS_GUEST_CONSOLE_ENABLED"), console_mode);
+    eprintln!(
+        "DEBUG: RAYOS_GUEST_INPUT_ENABLED={:?}, input_mode={} RAYOS_GUEST_NET_ENABLED={:?}, net_mode={} RAYOS_GUEST_CONSOLE_ENABLED={:?}, console_mode={}",
+        std::env::var("RAYOS_GUEST_INPUT_ENABLED"),
+        input_mode,
+        std::env::var("RAYOS_GUEST_NET_ENABLED"),
+        net_mode,
+        std::env::var("RAYOS_GUEST_CONSOLE_ENABLED"),
+        console_mode
+    );
 
-    if net_mode && console_mode {
+    if (input_mode && net_mode) || (input_mode && console_mode) || (net_mode && console_mode) {
         eprintln!(
-            "WARN: both RAYOS_GUEST_NET_ENABLED and RAYOS_GUEST_CONSOLE_ENABLED are set; preferring console mode"
+            "WARN: multiple guest modes set; preferring input > console > net"
         );
     }
 
@@ -176,6 +192,10 @@ fn main() -> std::io::Result<()> {
         .unwrap_or(0);
 
     let mut emitter = CodeEmitter::new();
+
+    if input_mode {
+        return emit_input_test(&mut emitter);
+    }
 
     if console_mode {
         return emit_console_test(&mut emitter);
@@ -359,6 +379,143 @@ fn main() -> std::io::Result<()> {
 
     println!("desc_data_offset={}", desc_data_offset);
     println!("desc_data_patch={}", desc_data_patch);
+
+    let out_path = guest_driver_blob_output_path();
+    let mut file = File::create(out_path)?;
+    file.write_all(&emitter.bytes)?;
+    Ok(())
+}
+
+fn emit_input_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
+    // Minimal virtio-input eventq test:
+    // - publish a single writable buffer descriptor
+    // - notify queue 0
+    // Hypervisor should write an event into the buffer and emit deterministic markers.
+
+    let virtio_features = MMIO_VIRTIO_BASE + 0x010;
+    let virtio_driver_features = MMIO_VIRTIO_BASE + 0x020;
+    let virtio_status = MMIO_VIRTIO_BASE + VIRTIO_MMIO_STATUS_OFFSET;
+    let virtio_queue_notify = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_NOTIFY_OFFSET;
+    let queue_desc_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_DESC_OFFSET;
+    let queue_driver_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_DRIVER_OFFSET;
+    let queue_used_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_USED_OFFSET;
+    let queue_size_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_SIZE_OFFSET;
+    let queue_ready_reg = MMIO_VIRTIO_BASE + VIRTIO_MMIO_QUEUE_READY_OFFSET;
+
+    // Build descriptor 0 bytes to be copied into guest desc area.
+    // Descriptor points to a device-writeable event buffer.
+    let mut desc_bytes = Vec::new();
+    desc_bytes.extend_from_slice(&VIRTIO_INPUT_EVENT_GPA.to_le_bytes());
+    desc_bytes.extend_from_slice(&VIRTIO_INPUT_EVENT_LEN.to_le_bytes());
+    desc_bytes.extend_from_slice(&VIRTQ_DESC_F_WRITE.to_le_bytes()); // flags
+    desc_bytes.extend_from_slice(&(0u16.to_le_bytes())); // next
+    let desc_len = desc_bytes.len() as u64;
+
+    // IMPORTANT: the kernel patches a u64 at a fixed offset inside this blob.
+    // That offset must land on the imm64 of `mov r6, imm64`.
+    emitter.emit_bytes(&[0xB0, 0x49]); // mov al, 'I'
+    emitter.emit_bytes(&[0xE6, 0xE9]); // out 0xE9, al
+
+    // mov r6, imm64 encoding is: 48 BE <imm64>  (imm64 starts 2 bytes after opcode)
+    const GUEST_DRIVER_DESC_DATA_PTR_OFFSET: usize = 176;
+    if emitter.bytes.len() > (GUEST_DRIVER_DESC_DATA_PTR_OFFSET - 2) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "input blob prelude exceeds patch offset budget",
+        ));
+    }
+    while emitter.bytes.len() < (GUEST_DRIVER_DESC_DATA_PTR_OFFSET - 2) {
+        emitter.emit_byte(0x90); // nop
+    }
+    let _desc_data_patch = emitter.mov_reg64_imm(6, 0);
+
+    // Jump over padded descriptor bytes region.
+    let jmp_start = emitter.bytes.len();
+    emitter.emit_byte(0xE9); // jmp rel32
+    let jmp_rel32_off = emitter.bytes.len();
+    emitter.emit_bytes(&[0, 0, 0, 0]);
+
+    const GUEST_DRIVER_DESC_DATA_OFFSET: usize = 501;
+    if emitter.bytes.len() > GUEST_DRIVER_DESC_DATA_OFFSET {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "input blob grew past canonical desc data offset",
+        ));
+    }
+    while emitter.bytes.len() < GUEST_DRIVER_DESC_DATA_OFFSET {
+        emitter.emit_byte(0x90); // nop padding (skipped by the jmp)
+    }
+
+    // Emit descriptor bytes at exactly the canonical offset.
+    emitter.emit_bytes(&desc_bytes);
+
+    // Patch the jump displacement to land after the descriptor bytes.
+    let continue_off = emitter.bytes.len();
+    let rel = (continue_off as i64) - ((jmp_start + 5) as i64);
+    if rel < i32::MIN as i64 || rel > i32::MAX as i64 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "jmp displacement overflow",
+        ));
+    }
+    let rel32: i32 = rel as i32;
+    emitter.bytes[jmp_rel32_off..jmp_rel32_off + 4].copy_from_slice(&rel32.to_le_bytes());
+
+    // Negotiate features
+    emitter.mov_rax_mem(virtio_features);
+    emitter.emit_bytes(&[0x48, 0xFF, 0xC0]); // inc rax
+    emitter.mov_mem_rax(virtio_driver_features);
+
+    // Set STATUS=ACKNOWLEDGE|DRIVER
+    emitter.mov_reg64_imm(0, 0x03);
+    emitter.mov_mem_rax(virtio_status);
+
+    // Setup queue 0 descriptors/driver/used
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_DESC_GPA);
+    emitter.mov_mem_rax(queue_desc_reg);
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_DRIVER_GPA);
+    emitter.mov_mem_rax(queue_driver_reg);
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_USED_GPA);
+    emitter.mov_mem_rax(queue_used_reg);
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_SIZE_VALUE);
+    emitter.mov_mem_rax(queue_size_reg);
+    emitter.mov_reg64_imm(0, VIRTIO_QUEUE_READY_VALUE);
+    emitter.mov_mem_rax(queue_ready_reg);
+
+    // Copy descriptor bytes into the guest descriptor table.
+    emitter.mov_reg64_imm(7, VIRTIO_QUEUE_DESC_GPA);
+    emitter.mov_reg64_imm(1, desc_len);
+    emitter.emit_bytes(&[0xF3, 0xA4]); // rep movsb (src=R6 dest=R7 count=R1)
+
+    // Submit avail ring: set avail.idx=1 and avail.ring[0]=0.
+    emitter.mov_rdi_imm(VIRTIO_QUEUE_DRIVER_GPA);
+    emitter.emit_bytes(&[0x66, 0xC7, 0x47, 0x02, 0x01, 0x00]); // mov word [rdi+2], 1
+    emitter.emit_bytes(&[0x66, 0xC7, 0x47, 0x04, 0x00, 0x00]); // mov word [rdi+4], 0
+
+    // Notify queue 0
+    emitter.mov_reg64_imm(0, 0);
+    emitter.mov_mem_rax(virtio_queue_notify);
+
+    // Guest emits a small serial marker
+    emitter.emit_bytes(&[0xB0, 0x47]); // 'G'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x3A]); // ':'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x49]); // 'I'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x4E]); // 'N'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x50]); // 'P'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x55]); // 'U'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x54]); // 'T'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+    emitter.emit_bytes(&[0xB0, 0x0A]); // '\n'
+    emitter.emit_bytes(&[0xE6, 0xE9]);
+
+    emitter.emit_byte(0xF4); // hlt
+    emitter.emit_bytes(&[0xEB, 0xFE]); // jmp $
 
     let out_path = guest_driver_blob_output_path();
     let mut file = File::create(out_path)?;
@@ -620,7 +777,7 @@ fn emit_network_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
 
     // Setup TX descriptor chain: single descriptor pointing to our packet
     // We'll use descriptor 0
-    let tx_desc_bytes = vec![
+    let _tx_desc_bytes = vec![
         // Descriptor 0: TX packet buffer (not writable)
         (VIRTIO_NET_TX_PKT_GPA as u32) as u8, // addr lo
         ((VIRTIO_NET_TX_PKT_GPA >> 8) as u32) as u8,
@@ -699,7 +856,7 @@ fn emit_network_test(emitter: &mut CodeEmitter) -> std::io::Result<()> {
     emitter.mov_mem_rax(queue_ready_reg);
 
     // Setup RX descriptor chain: single writable descriptor for received packets
-    let rx_desc_bytes = vec![
+    let _rx_desc_bytes = vec![
         // Descriptor 0: RX packet buffer (writable)
         ((VIRTIO_NET_RX_PKT_GPA) as u32) as u8, // addr lo
         ((VIRTIO_NET_RX_PKT_GPA >> 8) as u32) as u8,

@@ -1150,6 +1150,8 @@ const VIRTIO_MMIO_INT_VRING: u32 = 1;
 const VIRTIO_NET_DEVICE_ID: u32 = 0x0101;
 // Standard virtio device ID for virtio-gpu.
 const VIRTIO_GPU_DEVICE_ID: u32 = 16;
+// Standard virtio device ID for virtio-input.
+const VIRTIO_INPUT_DEVICE_ID: u32 = 18;
 // Standard virtio device ID for virtio-console (P1)
 const VIRTIO_CONSOLE_DEVICE_ID: u32 = 0x0107;
 
@@ -1426,12 +1428,20 @@ impl VirtioMmioState {
         // Otherwise preserve existing net-test and default behaviors.
         #[cfg(feature = "vmm_virtio_gpu")]
         let device_id = VIRTIO_GPU_DEVICE_ID;
+        #[cfg(all(not(feature = "vmm_virtio_gpu"), feature = "vmm_virtio_input"))]
+        let device_id = VIRTIO_INPUT_DEVICE_ID;
         #[cfg(all(not(feature = "vmm_virtio_gpu"), feature = "vmm_virtio_console"))]
         let device_id = VIRTIO_CONSOLE_DEVICE_ID;
-        #[cfg(all(not(feature = "vmm_virtio_gpu"), not(feature = "vmm_virtio_console"), feature = "vmm_hypervisor_net_test"))]
+        #[cfg(all(
+            not(feature = "vmm_virtio_gpu"),
+            not(feature = "vmm_virtio_input"),
+            not(feature = "vmm_virtio_console"),
+            feature = "vmm_hypervisor_net_test"
+        ))]
         let device_id = VIRTIO_NET_DEVICE_ID;
         #[cfg(all(
             not(feature = "vmm_virtio_gpu"),
+            not(feature = "vmm_virtio_input"),
             not(feature = "vmm_virtio_console"),
             not(feature = "vmm_hypervisor_net_test")
         ))]
@@ -1525,6 +1535,8 @@ fn init_hypervisor_mmio() {
         crate::serial_write_str("\n");
         if dev == VIRTIO_CONSOLE_DEVICE_ID {
             crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:ENABLED\n");
+        } else if dev == VIRTIO_INPUT_DEVICE_ID {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENABLED\n");
         }
     }
 }
@@ -4970,6 +4982,24 @@ fn log_descriptor_chain(
                         }
                     }
 
+                    VIRTIO_INPUT_DEVICE_ID => {
+                        #[cfg(feature = "vmm_virtio_input")]
+                        {
+                            let used_len = unsafe {
+                                handle_virtio_input_chain(
+                                    header,
+                                    &data_descs[..data_desc_count],
+                                )
+                            };
+                            return Some(used_len);
+                        }
+
+                        #[cfg(not(feature = "vmm_virtio_input"))]
+                        {
+                            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:FEATURE_DISABLED\n");
+                        }
+                    }
+
                     #[cfg(feature = "vmm_virtio_console")]
                     VIRTIO_CONSOLE_DEVICE_ID => {
                         // VIRTIO console uses separate queues: data queue (0) and control queue (1).
@@ -4998,6 +5028,52 @@ fn log_descriptor_chain(
     }
     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:CHAIN_TOO_LONG\n");
     None
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+unsafe fn handle_virtio_input_chain(header: VirtqDesc, descs: &[VirtqDesc]) -> u32 {
+    // Minimal virtio-input eventq support:
+    // - find the first device-writeable descriptor
+    // - write a single input event (SYN_REPORT)
+    // This is enough to prove the virtqueue transport can deliver an input event.
+
+    const EV_SYN: u16 = 0;
+    const SYN_REPORT: u16 = 0;
+
+    let mut target: Option<VirtqDesc> = None;
+    if (header.flags & VIRTQ_DESC_F_WRITE) != 0 {
+        target = Some(header);
+    } else {
+        for d in descs {
+            if (d.flags & VIRTQ_DESC_F_WRITE) != 0 {
+                target = Some(*d);
+                break;
+            }
+        }
+    }
+
+    let Some(out_desc) = target else {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:NO_WRITABLE_DESC\n");
+        return 0;
+    };
+
+    if out_desc.len < 8 {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:DESC_TOO_SMALL\n");
+        return 0;
+    }
+
+    let mut ev = [0u8; 8];
+    ev[0..2].copy_from_slice(&EV_SYN.to_le_bytes());
+    ev[2..4].copy_from_slice(&SYN_REPORT.to_le_bytes());
+    ev[4..8].copy_from_slice(&0u32.to_le_bytes());
+
+    if write_guest_bytes(out_desc.addr, &ev) {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITTEN\n");
+        8
+    } else {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITE_FAIL\n");
+        0
+    }
 }
 
 #[cfg(feature = "vmm_virtio_gpu")]
