@@ -211,7 +211,13 @@ if [ -n "$RAYOS_KERNEL_FEATURES" ] && echo ",$RAYOS_KERNEL_FEATURES," | grep -q 
 fi
 ENABLE_HOST_DESKTOP_BRIDGE="$ENABLE_HOST_DESKTOP_BRIDGE_WANTED"
 # Default behavior for interactive dev: prelaunch hidden desktops at boot.
-PRELAUNCH_HIDDEN_DESKTOPS="${PRELAUNCH_HIDDEN_DESKTOPS:-1}"
+if [ -z "${PRELAUNCH_HIDDEN_DESKTOPS+x}" ]; then
+    if [ "${HEADLESS:-0}" = "1" ]; then
+        PRELAUNCH_HIDDEN_DESKTOPS="0"
+    else
+        PRELAUNCH_HIDDEN_DESKTOPS="1"
+    fi
+fi
 DESKTOP_BRIDGE_PID=""
 DESKTOP_PID_FILE="$WORK_DIR/.linux-desktop-qemu.pid"
 DESKTOP_LAUNCH_LOG="$WORK_DIR/linux-desktop-launch.log"
@@ -543,18 +549,18 @@ desktop_running() {
         # after a failed start. Only treat them as "running" when we can verify
         # a live monitor socket or live PID.
 
-        # Monitor socket implies QEMU is up.
-        if [ -S "$DESKTOP_MON_SOCK" ]; then
-            DESKTOP_QEMU_PID=""
-            return 0
-        fi
-
         # Live PID implies QEMU is up.
         if [ -f "$DESKTOP_PID_FILE" ]; then
             DESKTOP_QEMU_PID="$(cat "$DESKTOP_PID_FILE" 2>/dev/null || true)"
             if [ -n "$DESKTOP_QEMU_PID" ] && kill -0 "$DESKTOP_QEMU_PID" 2>/dev/null; then
                 return 0
             fi
+        fi
+
+        # Monitor socket implies QEMU is up (PID may be unavailable).
+        if [ -S "$DESKTOP_MON_SOCK" ]; then
+            DESKTOP_QEMU_PID=""
+            return 0
         fi
 
         # Clear stale guards (older than ~30s) so the next request can recover.
@@ -779,41 +785,8 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE" != "0" ]; then
                         fi
                     fi
 
+                    if [ "${HEADLESS:-0}" != "1" ]; then
                         # Prefer the hidden prelaunched desktop when available.
-                        if [ -f "$HIDDEN_DESKTOP_PID_FILE" ]; then
-                        hidden_pid="$(cat "$HIDDEN_DESKTOP_PID_FILE" 2>/dev/null || true)"
-                        if [ -n "$hidden_pid" ] && kill -0 "$hidden_pid" 2>/dev/null; then
-                            target="localhost:0"
-                            if [ -f "$HIDDEN_VNC_TARGET_FILE" ]; then
-                                target="$(cat "$HIDDEN_VNC_TARGET_FILE" 2>/dev/null || echo "localhost:0")"
-                            fi
-                            if launch_vnc_viewer_linux "$target"; then
-                                emit_host_ack "SHOW_LINUX_DESKTOP" "ok" "showing_vnc"
-                                emit_host_marker "LINUX_DESKTOP_PRESENTED" "ok" "showing_vnc"
-                                continue
-                            else
-                                # Last-resort fallback: stop the hidden VM and launch a visible desktop.
-                                # This preserves disk state but not RAM state.
-                                echo "[host] No VNC viewer found; falling back to launching a visible Linux desktop VM." >&2
-                                emit_host_ack "SHOW_LINUX_DESKTOP" "err" "no_vnc_viewer_fallback_visible"
-                                kill "$hidden_pid" 2>/dev/null || true
-                                emit_host_marker "LINUX_DESKTOP_HIDDEN" "stopped" "viewer_missing"
-                                # Give the process a moment to exit so per-WORK_DIR locks release.
-                                for _ in $(seq 1 50); do
-                                    if ! kill -0 "$hidden_pid" 2>/dev/null; then
-                                        break
-                                    fi
-                                    sleep 0.05 2>/dev/null || true
-                                done
-                                rm -f "$HIDDEN_DESKTOP_PID_FILE" 2>/dev/null || true
-                                # Continue into normal launch path below.
-                            fi
-                        fi
-                    fi
-
-                    # If the hidden VM isn't running (or wasn't prelaunched), try starting it now.
-                    if [ ! -f "$HIDDEN_DESKTOP_PID_FILE" ] || ! kill -0 "$(cat "$HIDDEN_DESKTOP_PID_FILE" 2>/dev/null || echo 0)" 2>/dev/null; then
-                        start_linux_desktop_hidden || true
                         if [ -f "$HIDDEN_DESKTOP_PID_FILE" ]; then
                             hidden_pid="$(cat "$HIDDEN_DESKTOP_PID_FILE" 2>/dev/null || true)"
                             if [ -n "$hidden_pid" ] && kill -0 "$hidden_pid" 2>/dev/null; then
@@ -825,6 +798,43 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE" != "0" ]; then
                                     emit_host_ack "SHOW_LINUX_DESKTOP" "ok" "showing_vnc"
                                     emit_host_marker "LINUX_DESKTOP_PRESENTED" "ok" "showing_vnc"
                                     continue
+                                else
+                                    # Last-resort fallback: stop the hidden VM and launch a visible desktop.
+                                    # This preserves disk state but not RAM state.
+                                    echo "[host] No VNC viewer found; falling back to launching a visible Linux desktop VM." >&2
+                                    emit_host_ack "SHOW_LINUX_DESKTOP" "err" "no_vnc_viewer_fallback_visible"
+                                    kill "$hidden_pid" 2>/dev/null || true
+                                    emit_host_marker "LINUX_DESKTOP_HIDDEN" "stopped" "viewer_missing"
+                                    # Give the process a moment to exit so per-WORK_DIR locks release.
+                                    for _ in $(seq 1 50); do
+                                        if ! kill -0 "$hidden_pid" 2>/dev/null; then
+                                            break
+                                        fi
+                                        sleep 0.05 2>/dev/null || true
+                                    done
+                                    rm -f "$HIDDEN_DESKTOP_PID_FILE" 2>/dev/null || true
+                                    # Continue into normal launch path below.
+                                fi
+                            fi
+                        fi
+                    fi
+
+                    if [ "${HEADLESS:-0}" != "1" ]; then
+                        # If the hidden VM isn't running (or wasn't prelaunched), try starting it now.
+                        if [ ! -f "$HIDDEN_DESKTOP_PID_FILE" ] || ! kill -0 "$(cat "$HIDDEN_DESKTOP_PID_FILE" 2>/dev/null || echo 0)" 2>/dev/null; then
+                            start_linux_desktop_hidden || true
+                            if [ -f "$HIDDEN_DESKTOP_PID_FILE" ]; then
+                                hidden_pid="$(cat "$HIDDEN_DESKTOP_PID_FILE" 2>/dev/null || true)"
+                                if [ -n "$hidden_pid" ] && kill -0 "$hidden_pid" 2>/dev/null; then
+                                    target="localhost:0"
+                                    if [ -f "$HIDDEN_VNC_TARGET_FILE" ]; then
+                                        target="$(cat "$HIDDEN_VNC_TARGET_FILE" 2>/dev/null || echo "localhost:0")"
+                                    fi
+                                    if launch_vnc_viewer_linux "$target"; then
+                                        emit_host_ack "SHOW_LINUX_DESKTOP" "ok" "showing_vnc"
+                                        emit_host_marker "LINUX_DESKTOP_PRESENTED" "ok" "showing_vnc"
+                                        continue
+                                    fi
                                 fi
                             fi
                         fi
@@ -853,7 +863,11 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE" != "0" ]; then
 
                     # If a desktop QEMU is already running, do not relaunch.
                     if desktop_running; then
-                        echo "[host] Linux desktop already running (pid=$DESKTOP_QEMU_PID)" >&2
+                        if [ -n "${DESKTOP_QEMU_PID:-}" ]; then
+                            echo "[host] Linux desktop already running (pid=$DESKTOP_QEMU_PID)" >&2
+                        else
+                            echo "[host] Linux desktop already running (pid=unknown)" >&2
+                        fi
                         emit_host_ack "SHOW_LINUX_DESKTOP" "ok" "already_running"
                         rmdir "$DESKTOP_LAUNCH_LOCK_DIR" 2>/dev/null || true
                         continue
@@ -886,7 +900,8 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE" != "0" ]; then
                     DESKTOP_CHILD_PID="$!"
 
                     # Wait briefly for monitor socket or early exit to avoid relaunch races.
-                    for _ in $(seq 1 100); do
+                    # NOTE: first-time disk creation (mke2fs) can take a while before QEMU starts.
+                    for _ in $(seq 1 600); do
                         if [ -S "$DESKTOP_MON_SOCK" ]; then
                             break
                         fi
@@ -900,7 +915,11 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE" != "0" ]; then
                     if [ -S "$DESKTOP_MON_SOCK" ]; then
                         emit_host_ack "SHOW_LINUX_DESKTOP" "ok" "launching"
                     else
-                        emit_host_ack "SHOW_LINUX_DESKTOP" "err" "launch_failed_no_monitor"
+                        if kill -0 "$DESKTOP_CHILD_PID" 2>/dev/null; then
+                            emit_host_ack "SHOW_LINUX_DESKTOP" "ok" "launching_pending"
+                        else
+                            emit_host_ack "SHOW_LINUX_DESKTOP" "err" "launch_failed_no_monitor"
+                        fi
                     fi
                     rmdir "$DESKTOP_LAUNCH_LOCK_DIR" 2>/dev/null || true
                     ;;
@@ -920,8 +939,11 @@ if [ "$ENABLE_HOST_DESKTOP_BRIDGE" != "0" ]; then
                         emit_host_ack "HIDE_LINUX_DESKTOP" "err" "desktop_not_running"
                         continue
                     fi
-                    stop_linux_desktop "hide_requested"
-                    emit_host_ack "HIDE_LINUX_DESKTOP" "ok" "stopped"
+
+                    # Hide is presentation-only by default: keep the VM running.
+                    # This mirrors the intended in-OS "unpresent" semantics.
+                    echo "hidden" >"$DESKTOP_STATE_FILE" 2>/dev/null || true
+                    emit_host_ack "HIDE_LINUX_DESKTOP" "ok" "hidden"
                     ;;
 
                 *RAYOS_HOST_EVENT:HIDE_WINDOWS_DESKTOP*)

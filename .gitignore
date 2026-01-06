@@ -1,6 +1,11 @@
 # RayOS repo-root ignores
 /build/
 
+# Script-local build/cache artifacts
+/scripts/build/
+/scripts/generate_guest_driver
+/scripts/generate_guest_driver.exe
+
 # Rust build outputs
 **/target/
 **/*.rmeta

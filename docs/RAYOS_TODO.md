@@ -129,7 +129,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	- ✅ Desktop host-control bridge (v0): RayOS can ask host to `SHOW_LINUX_DESKTOP`, `LINUX_SENDTEXT:<text>`, `LINUX_SENDKEY:<spec>`, `LINUX_SHUTDOWN`.
 	- Current RayOS commands (type into the RayOS prompt / chat input):
 		- `show linux desktop` (or `show desktop`, `linux desktop`)
-		- `hide linux desktop` (currently stops the desktop VM; future: hide without stopping)
+		- `hide linux desktop` (unpresents only by default; VM keeps running)
 		- `type <text>` (types text + Enter into the Linux desktop VM)
 		- `press <key>` / `key <key>` (sends a single key or combo; examples: `press esc`, `press tab`, `press enter`, `press ctrl+l`, `press alt+f4`, `press up`)
 		- `mouse <x> <y>` (normalized 0..1 absolute pointer injection)
@@ -230,12 +230,21 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 		- Script: `./scripts/test-vmm-virtio-gpu-present-headless.sh` (skips strict marker assertions if VMX bring-up does not reach VMXON/VMCS_READY).
 
 	P3 (Must-have for usability): input routing + lifecycle
-	- [⏳] Virtio-input device model + event injection from RayOS pointer/keyboard to the presented guest surface.
+	- [✅] Virtio-input device model + event injection from RayOS pointer/keyboard to the presented guest surface.
 		- Implemented (v0): VMM stashes guest event buffers, pumps queued events into used-ring entries, and attempts IRQ injection; RayOS prompt commands route into virtio-input when a guest surface is Presented.
 		- Headless smoke: `./scripts/test-vmm-virtio-input-headless.sh` (VMX-gated; asserts guest-visible `RAYOS_GUEST:VIRTIO_INPUT:EVENT_RX` when VMCS is ready; falls back to VMM-side buffer stash / keepalive / event-written markers).
-		- Remaining: broaden Linux driver compatibility (virtio-input config semantics + richer key mapping) and add Linux guest-visible validation (e.g., in-guest `/dev/input/event*` consumption marker).
-	- [ ] Present/Hide semantics do not kill the VM by default (presentation is UI-only; lifecycle is policy-controlled).
-	- [ ] Reboot persistence test: boot → (Linux running hidden) → present → write marker on disk → reboot RayOS → marker persists.
+		- Linux guest-visible validation: `./scripts/test-vmm-linux-virtio-input-headless.sh` and `./scripts/test-vmm-linux-virtio-input-e2e-headless.sh` (explicitly **SKIP** when the current guest kernel/initramfs does not expose `/dev/input/event0`).
+		- Follow-ups: broaden Linux driver compatibility (virtio-input config semantics + richer key mapping).
+	- [✅] Present/Hide semantics do not kill the VM by default (presentation is UI-only; lifecycle is policy-controlled).
+		- Implemented (host bridge v0): `hide linux desktop` unpresents only (closes any VNC viewer) and keeps the desktop VM running.
+		- Headless smoke: `./scripts/test-desktop-show-hide-show-headless.sh`.
+	- [✅] Reboot persistence test: boot → write marker on disk → reboot RayOS → marker persists.
+		- Script: `./scripts/test-vmm-linux-persist-marker-reset-headless.sh` (uses QEMU monitor `system_reset` and asserts `RAYOS_LINUX_DISK_MARKER_PRESENT`).
+		- Gating: persist-marker behavior is enabled via the agent initramfs overlay marker (`/rayos_enable_persist_test`), requested by the host harness with `RAYOS_AGENT_ENABLE_PERSIST_TEST=1` when preparing the agent initrd.
+			- Rationale: avoid relying on unknown kernel cmdline parameters being forwarded into init argv.
+		- Harness behavior: headless smokes prefer monitor-driven early-exit over `timeout`-killing QEMU.
+			- Shared helper: `scripts/lib/headless_qemu.sh` (`quit_qemu` and marker wait helpers)
+			- Monitor commands used: `system_reset` (simulate a RayOS reboot), `quit` (terminate QEMU cleanly)
 	- TODOs (milestone 1: single full-desktop surface):
 		- ⏳ Implement hypervisor runtime skeleton (VMX/SVM detection + enable + VMXON/VMCS + minimal VM-exit loop stub).
 			- Milestone reached: VM-entry succeeds; deterministic VM-exits for `HLT` and port I/O; guest debug output via `out 0xE9` is trapped and printed (`RAYOS_GUEST_E9:<byte>`). See `scripts/test-vmm-hypervisor-boot.sh` markers `RAYOS_VMM:VMX:VMEXIT` + `RAYOS_GUEST_E9:`.

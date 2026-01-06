@@ -151,7 +151,7 @@ QEMU_DISPLAY=sdl ./scripts/test-dev-scanout.sh
 
 ## Hypervisor / In-OS VMM (experimental)
 
-RayOS includes an experimental in-kernel VMM (VMX-first on x86_64) so we can run a headless Linux guest inside RayOS without relying on an external QEMU instance for production-like validation. This work is intentionally incremental; the current status is "P0 complete, P1 in progress" (see `docs/RAYOS_TODO.md` for the full roadmap).
+RayOS includes an experimental in-kernel VMM (VMX-first on x86_64) so we can run a headless Linux guest inside RayOS without relying on an external QEMU instance for production-like validation. This work is intentionally incremental; see `docs/RAYOS_TODO.md` for the current P0–P* roadmap/status (including the Linux guest persistence smokes).
 
 Key implemented pieces (high level):
 
@@ -179,6 +179,25 @@ RAYOS_KERNEL_FEATURES="vmm_hypervisor,vmm_hypervisor_smoke" ./scripts/test-vmm-h
 # - exercise backoff selftest: add vmm_inject_force_all_fail,vmm_inject_backoff_selftest
 ```
 
+- Linux guest smokes (headless):
+
+```bash
+# Boot the Linux guest and wait for the guest agent ready marker
+./scripts/test-vmm-linux-guest-headless.sh
+
+# Persist-marker reset smoke: boot → write marker → QEMU monitor `system_reset` → boot → assert marker present
+./scripts/test-vmm-linux-persist-marker-reset-headless.sh
+
+# Virtio-blk persistence smoke using the VMM's persistent backing
+./scripts/test-vmm-virtio-blk-persist-reset-headless.sh
+```
+
+Headless harness note:
+
+- Most headless smokes prefer to stop QEMU by sending `quit` to the QEMU monitor socket once a PASS/SKIP marker appears, rather than relying on `timeout` to kill QEMU.
+- Some smokes use `system_reset` to simulate a RayOS reboot within the same QEMU process.
+- Shared helper used by multiple scripts: `scripts/lib/headless_qemu.sh`.
+
 Current work & next steps:
 
 - Convert the backoff boot selftest to a stable host-runnable unit test (blocked by a Cargo lockfile / toolchain mismatch; issue tracked in `docs/RAYOS_TODO.md`).
@@ -190,7 +209,9 @@ See `docs/RAYOS_TODO.md` for the hypervisor roadmap and more details.
 ## Documentation
 
 Start here:
-- `docs/QUICKSTART.md`
+- `docs/README.md`
+- `docs/RAYOS_TODO.md`
+- `docs/QUICKSTART.md` (historical; some sections are out of date)
 - `docs/BUILD_GUIDE.md`
 - `docs/BOOT_TROUBLESHOOTING.md`
 - `docs/SYSTEM_ARCHITECTURE.md`

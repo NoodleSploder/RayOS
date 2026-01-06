@@ -19,10 +19,13 @@ mkdir -p "$WORK_DIR"
 SERIAL_LOG="${SERIAL_LOG:-$WORK_DIR/serial-vmm-virtio-input.log}"
 SERIAL_NORM="$WORK_DIR/serial-vmm-virtio-input.norm.log"
 
+# Avoid mixing output from prior runs.
+: > "$SERIAL_LOG"
+
 export HEADLESS="${HEADLESS:-1}"
-if [ "$HEADLESS" != "0" ]; then
-  export QEMU_TIMEOUT_SECS="${QEMU_TIMEOUT_SECS:-12}"
-fi
+TEST_TIMEOUT_SECS="${TEST_TIMEOUT_SECS:-12}"
+
+source "$ROOT_DIR/scripts/lib/headless_qemu.sh"
 
 export PRESERVE_SERIAL_LOG=0
 export SERIAL_LOG
@@ -30,7 +33,7 @@ export SERIAL_LOG
 # Build a guest blob that posts a writeable event buffer descriptor.
 # Also ensure we restore the default (blk-oriented) blob on exit.
 pushd "$ROOT_DIR/scripts" >/dev/null
-rustc generate_guest_driver.rs -O -o ./generate_guest_driver >/dev/null || true
+rustc generate_guest_driver.rs -O -o ./generate_guest_driver >/dev/null 2>&1 || true
 
 cleanup() {
   # Best-effort restore of the default guest blob so running this test
@@ -40,7 +43,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-RAYOS_GUEST_INPUT_ENABLED=1 RAYOS_GUEST_NET_ENABLED=0 RAYOS_GUEST_CONSOLE_ENABLED=0 ./generate_guest_driver >/dev/null || true
+RAYOS_GUEST_INPUT_ENABLED=1 RAYOS_GUEST_NET_ENABLED=0 RAYOS_GUEST_CONSOLE_ENABLED=0 ./generate_guest_driver >/dev/null 2>&1 || true
+
 popd >/dev/null
 
 # Build kernel-bare with virtio-input enabled.
@@ -57,7 +61,7 @@ export QEMU_EXTRA_ARGS
 echo "Running virtio-input smoke test..." >&2
 echo "  RAYOS_KERNEL_FEATURES=$RAYOS_KERNEL_FEATURES" >&2
 echo "  SERIAL_LOG=$SERIAL_LOG" >&2
-echo "  QEMU_TIMEOUT_SECS=${QEMU_TIMEOUT_SECS:-}" >&2
+echo "  TEST_TIMEOUT_SECS=$TEST_TIMEOUT_SECS" >&2
 
 echo "Building kernel-bare (virtio-input enabled)..." >&2
 pushd "$ROOT_DIR/crates/kernel-bare" >/dev/null
@@ -70,7 +74,16 @@ RUSTC="$(rustup which rustc)" cargo build \
   >/dev/null
 popd >/dev/null
 
-BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless || true
+MON_SOCK="$WORK_DIR/qemu-monitor-vmm-virtio-input-headless.sock"
+
+run_headless_boot_until \
+  "$SERIAL_LOG" \
+  "$MON_SOCK" \
+  "$TEST_TIMEOUT_SECS" \
+  'RAYOS_GUEST:VIRTIO_INPUT:EVENT_RX' \
+  'RAYOS_GUEST:VIRTIO_INPUT:TIMEOUT' \
+  'RAYOS_VMM:VIRTIO_INPUT:(KEEPALIVE_WRITTEN|EVENT_WRITTEN|BUF_STASHED)' \
+  'RAYOS_VMM:VMX:VMCS_READY'
 
 tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
 

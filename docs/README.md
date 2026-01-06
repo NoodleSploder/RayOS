@@ -4,12 +4,15 @@
 
 ### Start Here
 
-1. **[QUICKSTART.md](QUICKSTART.md)** - Quick reference and common commands
-2. **[PHASE1_COMPLETE.md](PHASE1_COMPLETE.md)** - Complete Phase 1 architecture overview
-3. **[PHASE2_PLAN.md](PHASE2_PLAN.md)** - Phase 2 implementation options and roadmap
-4. **[LINUX_SUBSYSTEM_DESIGN.md](LINUX_SUBSYSTEM_DESIGN.md)** - Linux Subsystem high-level design + interface contract
-5. **[WINDOWS_SUBSYSTEM_DESIGN.md](WINDOWS_SUBSYSTEM_DESIGN.md)** - Windows Subsystem design notes
-6. **[INSTALLABLE_RAYOS_PLAN.md](INSTALLABLE_RAYOS_PLAN.md)** - Installability plan (USB boot + installer + boot manager tracking)
+0. **[../README.MD](../README.MD)** - Current build/boot + VMM/hypervisor smoke entrypoints
+1. **[RAYOS_TODO.md](RAYOS_TODO.md)** - Current roadmap/status (including Linux subsystem + hypervisor track)
+
+2. **[QUICKSTART.md](QUICKSTART.md)** - Historical quick reference (some sections are out of date)
+3. **[PHASE1_COMPLETE.md](PHASE1_COMPLETE.md)** - Complete Phase 1 architecture overview
+4. **[PHASE2_PLAN.md](PHASE2_PLAN.md)** - Phase 2 implementation options and roadmap
+5. **[LINUX_SUBSYSTEM_DESIGN.md](LINUX_SUBSYSTEM_DESIGN.md)** - Linux Subsystem high-level design + interface contract
+6. **[WINDOWS_SUBSYSTEM_DESIGN.md](WINDOWS_SUBSYSTEM_DESIGN.md)** - Windows Subsystem design notes
+7. **[INSTALLABLE_RAYOS_PLAN.md](INSTALLABLE_RAYOS_PLAN.md)** - Installability plan (USB boot + installer + boot manager tracking)
 
 
 ### Design Tracking (Draft Stubs)

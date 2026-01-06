@@ -6020,6 +6020,14 @@ extern "C" {
     static __kernel_end: u8;
 }
 
+// Reserved physical RAM ranges
+//
+// The in-kernel VMM virtio-blk model uses a reserved physical region as its backing
+// store so QEMU `system_reset` can be used for reboot-persistence smoke tests.
+// Keep this region out of the simple physical allocator.
+const VMM_VIRTIO_BLK_DISK_PHYS_BASE: u64 = 0x0600_0000; // 96 MiB
+const VMM_VIRTIO_BLK_DISK_BYTES: u64 = 64 * 1024; // must match VIRTIO_BLK_DISK_BYTES in hypervisor.rs
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 struct UsableRegion {
     start: u64,
@@ -6076,6 +6084,9 @@ fn phys_alloc_init_from_bootinfo(bi: &BootInfo) {
     let fb_start = bi.fb_base;
     let fb_end = bi.fb_base + (bi.fb_height as u64) * (bi.fb_stride as u64) * 4;
 
+    let vmm_blk_start = VMM_VIRTIO_BLK_DISK_PHYS_BASE;
+    let vmm_blk_end = VMM_VIRTIO_BLK_DISK_PHYS_BASE + VMM_VIRTIO_BLK_DISK_BYTES;
+
     let min_phys: u64 = 0x10_0000; // 1MiB
 
     for d in descs {
@@ -6108,6 +6119,17 @@ fn phys_alloc_init_from_bootinfo(bi: &BootInfo) {
             }
             if fb_end < end {
                 add_usable_region(fb_end, end);
+            }
+            continue;
+        }
+
+        // Exclude reserved VMM persistent disk backing store.
+        if ranges_overlap(start, end, vmm_blk_start, vmm_blk_end) {
+            if start < vmm_blk_start {
+                add_usable_region(start, vmm_blk_start);
+            }
+            if vmm_blk_end < end {
+                add_usable_region(vmm_blk_end, end);
             }
             continue;
         }
@@ -8332,16 +8354,31 @@ fn kernel_main() -> ! {
                                     }
                                 }
                             } else if is_hide_linux_desktop(&line_buf[..len]) {
-                                serial_write_str("RAYOS_HOST_EVENT_V0:HIDE_LINUX_DESKTOP\n");
+                                // In the in-kernel VMM/hypervisor path, hide/show is presentation-only;
+                                // do not request that the host stops a VM.
+                                #[cfg(not(feature = "vmm_hypervisor"))]
+                                {
+                                    serial_write_str("RAYOS_HOST_EVENT_V0:HIDE_LINUX_DESKTOP\n");
+                                }
                                 guest_surface::set_presentation_state(
                                     guest_surface::PresentationState::Hidden,
                                 );
                                 serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:HIDDEN\n");
-                                LINUX_DESKTOP_STATE.store(4, Ordering::Relaxed);
-                                chat.push_line(
-                                    b"SYS: ",
-                                    b"hiding Linux desktop (host will stop VM)",
-                                );
+                                #[cfg(feature = "vmm_hypervisor")]
+                                {
+                                    // 2 = available (running hidden)
+                                    LINUX_DESKTOP_STATE.store(2, Ordering::Relaxed);
+                                    chat.push_line(b"SYS: ", b"hiding Linux desktop (presentation only)");
+                                }
+                                #[cfg(not(feature = "vmm_hypervisor"))]
+                                {
+                                    // 4 = stopping
+                                    LINUX_DESKTOP_STATE.store(4, Ordering::Relaxed);
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"hiding Linux desktop (host will stop VM)",
+                                    );
+                                }
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "hiding Linux desktop...", 0xff_ff_88);
@@ -8352,14 +8389,24 @@ fn kernel_main() -> ! {
                                     render_linux_state(panel_bg, cur);
                                 }
                             } else if is_show_linux_desktop(&line_buf[..len]) {
-                                serial_write_str("RAYOS_HOST_EVENT_V0:SHOW_LINUX_DESKTOP\n");
-                                // Update lifecycle state first so the status line reflects the action
-                                // even if we switch into Presented mode immediately afterward.
-                                LINUX_DESKTOP_STATE.store(1, Ordering::Relaxed);
-                                chat.push_line(
-                                    b"SYS: ",
-                                    b"requesting Linux desktop (host will launch)",
-                                );
+                                // In the in-kernel VMM/hypervisor path, show/hide is presentation-only.
+                                #[cfg(not(feature = "vmm_hypervisor"))]
+                                {
+                                    serial_write_str("RAYOS_HOST_EVENT_V0:SHOW_LINUX_DESKTOP\n");
+                                    // Update lifecycle state first so the status line reflects the action
+                                    // even if we switch into Presented mode immediately afterward.
+                                    LINUX_DESKTOP_STATE.store(1, Ordering::Relaxed);
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"requesting Linux desktop (host will launch)",
+                                    );
+                                }
+                                #[cfg(feature = "vmm_hypervisor")]
+                                {
+                                    // 3 = running (presented)
+                                    LINUX_DESKTOP_STATE.store(3, Ordering::Relaxed);
+                                    chat.push_line(b"SYS: ", b"showing Linux desktop (presentation only)");
+                                }
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "launching Linux desktop...", 0xff_ff_88);

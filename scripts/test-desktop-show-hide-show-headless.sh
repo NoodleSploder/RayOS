@@ -3,8 +3,8 @@
 #
 # Validates v0 "presentation gating" semantics for the Linux desktop bridge:
 # - show linux desktop (starts VM)
-# - hide linux desktop (stops VM, keeps persistent disk)
-# - show linux desktop again (restarts)
+# - hide linux desktop (unpresents only; VM keeps running)
+# - show linux desktop again (re-presents)
 #
 set -euo pipefail
 
@@ -154,13 +154,17 @@ fi
 
 echo "[show-hide-show] hide linux desktop..." >&2
 send_to_rayos "hide linux desktop"
-if ! wait_for_log "RAYOS_HOST_ACK:HIDE_LINUX_DESKTOP:ok:stopped" "$TIMEOUT_SECS"; then
-  echo "FAIL: missing HIDE_LINUX_DESKTOP ok ACK" >&2
-  tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
-  exit 1
+if ! wait_for_log "RAYOS_HOST_ACK:HIDE_LINUX_DESKTOP:ok:hidden" "$TIMEOUT_SECS"; then
+  if ! wait_for_log "RAYOS_HOST_ACK:HIDE_LINUX_DESKTOP:ok:hiding_vnc" "$TIMEOUT_SECS"; then
+    echo "FAIL: missing HIDE_LINUX_DESKTOP ok ACK" >&2
+    tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
+    exit 1
+  fi
 fi
-if ! wait_for_sock_gone "$DESKTOP_MON_SOCK" "$TIMEOUT_SECS"; then
-  echo "FAIL: desktop monitor sock did not disappear after hide" >&2
+
+# Hide must not stop the VM: the desktop monitor socket should remain.
+if ! wait_for_sock "$DESKTOP_MON_SOCK" "$TIMEOUT_SECS"; then
+  echo "FAIL: desktop monitor sock disappeared after hide" >&2
   exit 1
 fi
 
@@ -172,7 +176,7 @@ if ! wait_for_log "RAYOS_HOST_ACK:SHOW_LINUX_DESKTOP:ok" "$TIMEOUT_SECS"; then
   exit 1
 fi
 if ! wait_for_sock "$DESKTOP_MON_SOCK" "$TIMEOUT_SECS"; then
-  echo "FAIL: desktop monitor sock not created on second show" >&2
+  echo "FAIL: desktop monitor sock not present after second show" >&2
   exit 1
 fi
 

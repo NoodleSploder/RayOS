@@ -75,8 +75,14 @@ vmm_inject_backoff_selftest = []
 # remain stable.
 vmm_virtio_blk_image = []
 
+# Dev-only self-test: verifies virtio-blk backing persistence across a QEMU `system_reset`.
+vmm_virtio_blk_persist_selftest = []
+
 # P1 (WIP): boot a real Linux guest under the in-kernel VMM.
 vmm_linux_guest = []
+
+# Debug-only: extremely verbose virtio-blk MMIO access tracing.
+vmm_trace_virtio_blk_mmio = []
 
 [profile.release]
 opt-level = 3

@@ -20,6 +20,26 @@ mkdir -p "$WORK_DIR"
 
 SERIAL_LOG="${SERIAL_LOG:-$WORK_DIR/serial-vmm-hypervisor-net.log}"
 SERIAL_NORM="$WORK_DIR/serial-vmm-hypervisor-net.norm.log"
+MON_SOCK="${MON_SOCK:-$WORK_DIR/qemu-monitor-vmm-hypervisor-net-headless.sock}"
+
+# Avoid mixing output from prior runs.
+: > "$SERIAL_LOG"
+
+source "$ROOT_DIR/scripts/lib/headless_qemu.sh"
+
+# Build a guest blob that exercises virtio-net (TX + RX + marker print).
+# Also ensure we restore the default (blk-oriented) blob on exit.
+pushd "$ROOT_DIR/scripts" >/dev/null
+rustc generate_guest_driver.rs -O -o ./generate_guest_driver >/dev/null 2>&1 || true
+
+cleanup() {
+  RAYOS_GUEST_INPUT_ENABLED=0 RAYOS_GUEST_NET_ENABLED=0 RAYOS_GUEST_CONSOLE_ENABLED=0 ./generate_guest_driver >/dev/null 2>&1 || true
+  rm -f ./generate_guest_driver >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+RAYOS_GUEST_INPUT_ENABLED=0 RAYOS_GUEST_NET_ENABLED=1 RAYOS_GUEST_CONSOLE_ENABLED=0 ./generate_guest_driver >/dev/null 2>&1 || true
+popd >/dev/null
 
 # Ensure the features are enabled (append if user provided other features).
 RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-}"
@@ -45,6 +65,7 @@ fi
 # Make sure we capture a fresh serial.
 export PRESERVE_SERIAL_LOG=0
 export SERIAL_LOG
+export MON_SOCK
 
 QEMU_EXTRA_ARGS="${QEMU_EXTRA_ARGS:-}"
 if [ -e /dev/kvm ]; then
@@ -73,10 +94,47 @@ RUSTC="$(rustup which rustc)" cargo build \
 popd >/dev/null
 
 if [ "$HEADLESS" = "0" ]; then
-  BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" || true
+  BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" &
 else
-  BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless || true
+  BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless &
 fi
+BOOT_PID=$!
+
+MON_WAIT_DEADLINE=$(( $(date +%s) + 20 ))
+while [ ! -S "$MON_SOCK" ]; do
+  if [ "$(date +%s)" -ge "$MON_WAIT_DEADLINE" ]; then
+    echo "FAIL: monitor socket not created: $MON_SOCK" >&2
+    kill "$BOOT_PID" 2>/dev/null || true
+    wait "$BOOT_PID" 2>/dev/null || true
+    exit 1
+  fi
+  sleep 0.1
+done
+
+DEADLINE=$(( $(date +%s) + ${QEMU_TIMEOUT_SECS:-15} ))
+while true; do
+  tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
+
+  if grep -F -a -q "RAYOS_VMM:VMX:UNSUPPORTED" "$SERIAL_NORM"; then
+    quit_qemu "$MON_SOCK" || true
+    break
+  fi
+
+  if grep -F -a -q "RAYOS_VMM:VMX:INIT_BEGIN" "$SERIAL_NORM" && \
+     grep -F -a -q "RAYOS_VMM:VMX:VMLAUNCH_ATTEMPT" "$SERIAL_NORM" && \
+     grep -F -a -q "RAYOS_VMM:VIRTIO_MMIO:NET_RX_INJECT" "$SERIAL_NORM"; then
+    quit_qemu "$MON_SOCK" || true
+    break
+  fi
+
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    quit_qemu "$MON_SOCK" || true
+    break
+  fi
+  sleep 0.2
+done
+
+wait "$BOOT_PID" 2>/dev/null || true
 
 # Normalize CRLF.
 tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
@@ -84,6 +142,11 @@ tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
 NEED1="RAYOS_VMM:VMX:INIT_BEGIN"
 NEED2="RAYOS_VMM:VMX:VMLAUNCH_ATTEMPT"
 NEED3="RAYOS_VMM:VIRTIO_MMIO:NET_RX_INJECT"
+
+if grep -F -a -q "RAYOS_VMM:VMX:UNSUPPORTED" "$SERIAL_NORM"; then
+  echo "SKIP: VMX unsupported in this QEMU configuration" >&2
+  exit 0
+fi
 
   if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM"; then
     echo "PASS: hypervisor init path executed (markers present)" >&2

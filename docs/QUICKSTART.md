@@ -6,6 +6,10 @@ For current build/boot commands, start from:
 - `README.MD`
 - `docs/RAYOS_TODO.md`
 
+Headless smoke tests (current behavior):
+- Most headless scripts stop QEMU by sending `quit` to the QEMU monitor socket once a PASS/SKIP marker appears (instead of `timeout`-killing QEMU).
+- Shared helper: `scripts/lib/headless_qemu.sh`.
+
 Linux desktop (dev harness, current behavior):
 - `show linux desktop` works only when the host bridge is enabled in `./scripts/test-boot.sh`.
 - Recommended for the “Linux hidden at boot, show only presents” lifecycle:

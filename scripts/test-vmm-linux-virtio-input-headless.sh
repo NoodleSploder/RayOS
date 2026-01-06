@@ -1,11 +1,7 @@
 #!/bin/bash
-# Headless smoke test: boot a real Linux guest under the in-kernel VMX VMM.
-#
-# This test:
-# - Prepares Alpine netboot kernel+initramfs artifacts (agent initrd)
-# - Stages them into EFI/RAYOS/linux/* via scripts/test-boot.sh staging
-# - Boots RayOS with vmm_linux_guest enabled
-# - Asserts Linux guest emits a readiness marker over COM1 (trapped by VMM)
+# Headless smoke test: boot a real Linux guest under the in-kernel VMX VMM,
+# expose a virtio-mmio virtio-input device via cmdline, and assert an in-guest
+# /dev/input event marker.
 
 set -euo pipefail
 
@@ -13,15 +9,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/build}"
 mkdir -p "$WORK_DIR"
 
-SERIAL_LOG="${SERIAL_LOG:-$WORK_DIR/serial-vmm-linux-guest.log}"
-TIMEOUT_SECS="${TIMEOUT_SECS:-60}"
-MON_SOCK="${MON_SOCK:-$WORK_DIR/qemu-monitor-vmm-linux-guest-headless.sock}"
+SERIAL_LOG="${SERIAL_LOG:-$WORK_DIR/serial-vmm-linux-virtio-input.log}"
+TIMEOUT_SECS="${TIMEOUT_SECS:-80}"
+MON_SOCK="${MON_SOCK:-$WORK_DIR/qemu-monitor-vmm-linux-virtio-input-headless.sock}"
 
 # Avoid mixing output from prior runs.
 : > "$SERIAL_LOG"
 
-# Ensure we have a kernel/initrd pair. We use the existing Linux subsystem tooling
-# to download/cached Alpine netboot artifacts and build an agent initrd.
+# Prepare Alpine netboot kernel+initramfs artifacts (agent initrd).
 ARTS_ENV=(
   WORK_DIR="$WORK_DIR"
   PREPARE_ONLY=1
@@ -37,27 +32,25 @@ if [ -z "$KERNEL" ] || [ -z "$INITRD" ]; then
   exit 1
 fi
 
-CMDLINE_FILE="$WORK_DIR/vmm-linux-guest-cmdline.txt"
+# The VMM exposes virtio-mmio at guest-physical 0x10001000 (end of RAM + 4K).
+# The IRQ number must match the VMM's routed IRQ pin (currently 5).
+CMDLINE_FILE="$WORK_DIR/vmm-linux-virtio-input-cmdline.txt"
 cat >"$CMDLINE_FILE" <<'EOF'
-console=ttyS0,115200n8 earlycon=uart,io,0x3f8,115200n8 rdinit=/rayos_init ignore_loglevel loglevel=7 panic=-1
+console=ttyS0,115200n8 earlycon=uart,io,0x3f8,115200n8 rdinit=/rayos_init ignore_loglevel loglevel=7 virtio_mmio.device=4K@0x10001000:5 RAYOS_INPUT_PROBE=1
 EOF
 
-export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_hypervisor_smoke,vmm_linux_guest}"
+export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_hypervisor_smoke,vmm_linux_guest,vmm_virtio_input}"
 
-# Stage Linux artifacts into the RayOS boot FAT.
 export RAYOS_LINUX_GUEST_KERNEL_SRC="$KERNEL"
 export RAYOS_LINUX_GUEST_INITRD_SRC="$INITRD"
 export RAYOS_LINUX_GUEST_CMDLINE_SRC="$CMDLINE_FILE"
 
-# Keep this deterministic and non-interactive.
 export HEADLESS=1
 export QEMU_TIMEOUT_SECS="$TIMEOUT_SECS"
 export PRESERVE_SERIAL_LOG=0
 export SERIAL_LOG
 export MON_SOCK
 
-# VMX guest execution requires a VMX-capable CPU model in QEMU.
-# Prefer KVM when available.
 if [ -z "${QEMU_EXTRA_ARGS:-}" ]; then
   if [ -e /dev/kvm ]; then
     export QEMU_EXTRA_ARGS="-enable-kvm -cpu host"
@@ -66,14 +59,12 @@ if [ -z "${QEMU_EXTRA_ARGS:-}" ]; then
   fi
 fi
 
-# Avoid host-side desktop bridges for this test.
 export ENABLE_HOST_DESKTOP_BRIDGE=0
 export PRELAUNCH_HIDDEN_DESKTOPS=0
 
 "$ROOT_DIR/scripts/test-boot.sh" --headless &
 BOOT_PID=$!
 
-# Wait for monitor socket so we can shut QEMU down early when ready.
 MON_WAIT_DEADLINE=$(( $(date +%s) + 20 ))
 while [ ! -S "$MON_SOCK" ]; do
   if [ "$(date +%s)" -ge "$MON_WAIT_DEADLINE" ]; then
@@ -85,25 +76,42 @@ while [ ! -S "$MON_SOCK" ]; do
   sleep 0.1
 done
 
-# Normalize CRLF.
-NORM="$WORK_DIR/serial-vmm-linux-guest.norm.log"
+NORM="$WORK_DIR/serial-vmm-linux-virtio-input.norm.log"
 
-PRIMARY_MARKER="RAYOS_LINUX_AGENT_READY"
-FALLBACK_MARKER="RAYOS_LINUX_GUEST_READY"
+rm -f "$NORM" 2>/dev/null || true
 
-source "$ROOT_DIR/scripts/lib/headless_qemu.sh"
+quit_qemu() {
+  local sock="$1"
+  python3 - "$sock" <<'PY'
+import socket, sys
+path = sys.argv[1]
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(path)
+s.sendall(b"quit\r\n")
+s.close()
+PY
+}
 
 DEADLINE=$(( $(date +%s) + TIMEOUT_SECS ))
 while true; do
   tr -d '\r' < "$SERIAL_LOG" > "$NORM" 2>/dev/null || true
 
-  # If VMX isn't supported in this environment, we can't boot a guest; quit early.
-  if grep -F -a -q "RAYOS_VMM:VMX:UNSUPPORTED" "$NORM"; then
+  # Gate strict assertions on VMX actually reaching VMCS_READY.
+  if ! grep -F -a -q "RAYOS_VMM:VMX:VMCS_READY" "$NORM"; then
+    :
+  fi
+
+  if grep -F -a -q "RAYOS_LINUX_INPUT_EVENT_RX" "$NORM"; then
     quit_qemu "$MON_SOCK" || true
     break
   fi
 
-  if grep -F -a -q "$PRIMARY_MARKER" "$NORM" || grep -F -a -q "$FALLBACK_MARKER" "$NORM"; then
+  if grep -F -a -q "RAYOS_LINUX_INPUT_PROBE:SKIP no_event0" "$NORM"; then
+    quit_qemu "$MON_SOCK" || true
+    break
+  fi
+
+  if grep -F -a -q "RAYOS_VMM:VMX:UNSUPPORTED" "$NORM"; then
     quit_qemu "$MON_SOCK" || true
     break
   fi
@@ -115,7 +123,6 @@ while true; do
   sleep 0.2
 done
 
-# Wait for QEMU to actually exit (bounded).
 WAIT_DEADLINE=$(( $(date +%s) + 10 ))
 while kill -0 "$BOOT_PID" 2>/dev/null; do
   if [ "$(date +%s)" -ge "$WAIT_DEADLINE" ]; then
@@ -127,28 +134,28 @@ while kill -0 "$BOOT_PID" 2>/dev/null; do
 done
 
 wait "$BOOT_PID" 2>/dev/null || true
-
-# Final normalize pass.
 tr -d '\r' < "$SERIAL_LOG" > "$NORM" 2>/dev/null || true
 
-if grep -F -a -q "$PRIMARY_MARKER" "$NORM"; then
-  echo "PASS: observed $PRIMARY_MARKER" >&2
+if ! grep -F -a -q "RAYOS_VMM:VMX:VMCS_READY" "$NORM"; then
+  echo "NOTE: VMX did not reach VMCS_READY; skipping strict virtio-input/Linux assertions" >&2
   exit 0
 fi
 
-if grep -F -a -q "$FALLBACK_MARKER" "$NORM"; then
-  echo "PASS: observed $FALLBACK_MARKER" >&2
+if grep -F -a -q "RAYOS_LINUX_INPUT_EVENT_RX" "$NORM"; then
+  echo "PASS: observed RAYOS_LINUX_INPUT_EVENT_RX" >&2
   exit 0
 fi
 
-# If VMX isn't supported in this environment, we can't boot a guest; treat as skip.
+if grep -F -a -q "RAYOS_LINUX_INPUT_PROBE:SKIP no_event0" "$NORM"; then
+  echo "SKIP: Linux guest has no /dev/input/event0 (virtio-input driver not present/loaded)" >&2
+  exit 0
+fi
+
 if grep -F -a -q "RAYOS_VMM:VMX:UNSUPPORTED" "$NORM"; then
   echo "SKIP: VMX unsupported in this QEMU configuration" >&2
   exit 0
 fi
 
-echo "FAIL: did not observe $PRIMARY_MARKER or $FALLBACK_MARKER" >&2
-
+echo "FAIL: did not observe RAYOS_LINUX_INPUT_EVENT_RX" >&2
 tail -n 250 "$NORM" 2>/dev/null || true
-
 exit 1

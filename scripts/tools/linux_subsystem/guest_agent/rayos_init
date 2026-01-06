@@ -6,6 +6,9 @@
 # Ensure we have usable device nodes even before devtmpfs is mounted.
 /bin/busybox mkdir -p /dev 2>/dev/null || true
 
+# Some initramfs builds may not precreate /tmp.
+/bin/busybox mkdir -p /tmp 2>/dev/null || true
+
 # /dev/console: char 5:1
 [ -e /dev/console ] || /bin/busybox mknod -m 600 /dev/console c 5 1 2>/dev/null || true
 
@@ -34,8 +37,80 @@ if [ -e /dev/console ]; then
 	exec </dev/console >/dev/console 2>/dev/console
 fi
 
-mount -t proc proc /proc 2>/dev/null || true
-mount -t sysfs sys /sys 2>/dev/null || true
-mount -t devtmpfs dev /dev 2>/dev/null || true
+/bin/busybox mkdir -p /proc /sys 2>/dev/null || true
+
+/bin/busybox mount -t proc proc /proc 2>/dev/null || true
+/bin/busybox mount -t sysfs sys /sys 2>/dev/null || true
+/bin/busybox mount -t devtmpfs dev /dev 2>/dev/null || true
+
+# Allow feature-gating guest-agent probes via kernel cmdline.
+# The agent script reads environment variables, so we bridge cmdline -> env here.
+if [ -r /proc/cmdline ]; then
+	cmdline="$(/bin/busybox cat /proc/cmdline 2>/dev/null)"
+	if echo "$cmdline" | /bin/busybox grep -q 'RAYOS_INPUT_PROBE=1'; then
+		export RAYOS_INPUT_PROBE=1
+	fi
+fi
+
+maybe_run_persist_disk_marker_test() {
+	# Gated by either:
+	# - marker file at initramfs root: /rayos_enable_persist_test
+	# - (legacy) cmdline flag: RAYOS_PERSIST_TEST=1
+	#
+	# Using the marker file avoids adding unknown cmdline parameters (which the
+	# kernel passes to init argv and can be brittle under nested VMX).
+	if [ -e /rayos_enable_persist_test ]; then
+		:
+	else
+		[ -r /proc/cmdline ] || return 0
+		cmdline="$(/bin/busybox cat /proc/cmdline 2>/dev/null)"
+		echo "$cmdline" | /bin/busybox grep -q 'RAYOS_PERSIST_TEST=1' || return 0
+	fi
+
+	emit_marker "RAYOS_LINUX_PERSIST_TEST_BEGIN"
+
+	# Best-effort: load modules if they exist.
+	if [ -x /sbin/modprobe ]; then
+		/sbin/modprobe virtio_mmio >/dev/null 2>&1 || true
+		/sbin/modprobe virtio_blk >/dev/null 2>&1 || true
+	elif /bin/busybox --list 2>/dev/null | /bin/busybox grep -q '^modprobe$'; then
+		/bin/busybox modprobe virtio_mmio >/dev/null 2>&1 || true
+		/bin/busybox modprobe virtio_blk >/dev/null 2>&1 || true
+	fi
+
+	# Wait (bounded) for virtio-blk to appear. Under the RayOS in-kernel VMM it should
+	# show up as /dev/vda (virtio-mmio).
+	dev="/dev/vda"
+	# This can take a while under nested VMX/TCG; be generous to reduce flakiness.
+	tries=600
+	while [ "$tries" -gt 0 ] && [ ! -b "$dev" ]; do
+		/bin/busybox sleep 0.1
+		tries=$(( tries - 1 ))
+	done
+	if [ ! -b "$dev" ]; then
+		emit_marker "RAYOS_LINUX_DISK_MARKER_NO_DEV"
+		return 0
+	fi
+
+	# Marker location: raw sector write so we don't depend on a filesystem.
+	MARKER="RAYOS_LINUX_PERSIST_MARKER_V0"
+	OFF=3584 # 7*512
+	LEN="$(printf "%s" "$MARKER" | /bin/busybox wc -c 2>/dev/null | /bin/busybox tr -d ' ')"
+
+	cur="$(/bin/busybox dd if="$dev" bs=1 skip=$OFF count=$LEN 2>/dev/null)"
+	if [ "$cur" = "$MARKER" ]; then
+		emit_marker "RAYOS_LINUX_DISK_MARKER_PRESENT"
+		return 0
+	fi
+
+	# Write marker.
+	printf "%s" "$MARKER" | /bin/busybox dd of="$dev" bs=1 seek=$OFF conv=notrunc 2>/dev/null || true
+	/bin/busybox sync >/dev/null 2>&1 || true
+	emit_marker "RAYOS_LINUX_DISK_MARKER_WROTE"
+	emit_marker "RAYOS_LINUX_DISK_MARKER_NEEDS_REBOOT"
+}
+
+maybe_run_persist_disk_marker_test &
 
 exec /bin/sh /rayos_agent.sh
+

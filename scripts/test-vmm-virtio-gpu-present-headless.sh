@@ -14,6 +14,10 @@ mkdir -p "$WORK_DIR"
 
 SERIAL_LOG="${SERIAL_LOG:-$WORK_DIR/serial-vmm-virtio-gpu-present.log}"
 SERIAL_NORM="$WORK_DIR/serial-vmm-virtio-gpu-present.norm.log"
+MON_SOCK="${MON_SOCK:-$WORK_DIR/qemu-monitor-vmm-virtio-gpu-present-headless.sock}"
+
+# Avoid mixing output from prior runs.
+: > "$SERIAL_LOG"
 
 # Ensure required features.
 RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-}"
@@ -28,11 +32,13 @@ done
 export RAYOS_KERNEL_FEATURES
 
 export HEADLESS="${HEADLESS:-1}"
-export QEMU_TIMEOUT_SECS="${QEMU_TIMEOUT_SECS:-12}"
+TIMEOUT_SECS="${TIMEOUT_SECS:-20}"
+export QEMU_TIMEOUT_SECS="${QEMU_TIMEOUT_SECS:-$TIMEOUT_SECS}"
 
 # Fresh serial log.
 export PRESERVE_SERIAL_LOG=0
 export SERIAL_LOG
+export MON_SOCK
 
 QEMU_EXTRA_ARGS="${QEMU_EXTRA_ARGS:-}"
 if [ -e /dev/kvm ]; then
@@ -63,7 +69,31 @@ RUSTC="$(rustup which rustc)" cargo build \
   >/dev/null
 popd >/dev/null
 
-(BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless) || true
+quit_qemu() {
+  local sock="$1"
+  python3 - "$sock" <<'PY'
+import socket, sys
+path = sys.argv[1]
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(path)
+s.sendall(b"quit\r\n")
+s.close()
+PY
+}
+
+BUILD_KERNEL=0 "$ROOT_DIR/scripts/test-boot.sh" --headless &
+BOOT_PID=$!
+
+MON_WAIT_DEADLINE=$(( $(date +%s) + 20 ))
+while [ ! -S "$MON_SOCK" ]; do
+  if [ "$(date +%s)" -ge "$MON_WAIT_DEADLINE" ]; then
+    echo "FAIL: monitor socket not created: $MON_SOCK" >&2
+    kill "$BOOT_PID" 2>/dev/null || true
+    wait "$BOOT_PID" 2>/dev/null || true
+    exit 1
+  fi
+  sleep 0.1
+done
 
 tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
 
@@ -72,6 +102,51 @@ NEED_VMXON="RAYOS_VMM:VMX:VMXON_OK"
 NEED_VMCS="RAYOS_VMM:VMX:VMCS_READY"
 NEED2="RAYOS_LINUX_DESKTOP_PRESENTED"
 NEED3="RAYOS_LINUX_DESKTOP_FIRST_FRAME"
+
+if grep -F -a -q "RAYOS_VMM:VMX:UNSUPPORTED" "$SERIAL_NORM"; then
+  echo "SKIP: VMX unsupported in this QEMU configuration" >&2
+  quit_qemu "$MON_SOCK" || true
+  wait "$BOOT_PID" 2>/dev/null || true
+  exit 0
+fi
+
+DEADLINE=$(( $(date +%s) + TIMEOUT_SECS ))
+while true; do
+  tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
+
+  if grep -F -a -q "RAYOS_VMM:VMX:UNSUPPORTED" "$SERIAL_NORM"; then
+    break
+  fi
+
+  CAN_VMX=0
+  if grep -F -a -q "$NEED_VMXON" "$SERIAL_NORM" && grep -F -a -q "$NEED_VMCS" "$SERIAL_NORM"; then
+    CAN_VMX=1
+  fi
+
+  if [ "$CAN_VMX" = "1" ]; then
+    if grep -F -a -q "$NEED1" "$SERIAL_NORM" && grep -F -a -q "$NEED2" "$SERIAL_NORM" && grep -F -a -q "$NEED3" "$SERIAL_NORM"; then
+      quit_qemu "$MON_SOCK" || true
+      break
+    fi
+  else
+    # Without VMX, treat "init marker observed" as the gate and quit early.
+    if grep -F -a -q "$NEED1" "$SERIAL_NORM"; then
+      quit_qemu "$MON_SOCK" || true
+      break
+    fi
+  fi
+
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    quit_qemu "$MON_SOCK" || true
+    break
+  fi
+  sleep 0.2
+done
+
+wait "$BOOT_PID" 2>/dev/null || true
+
+# Final normalize pass.
+tr -d '\r' < "$SERIAL_LOG" > "$SERIAL_NORM" 2>/dev/null || true
 
 CAN_VMX=0
 if grep -F -a -q "$NEED_VMXON" "$SERIAL_NORM" && grep -F -a -q "$NEED_VMCS" "$SERIAL_NORM"; then

@@ -49,7 +49,11 @@ def _run_checked(argv: list[str], *, cwd: Path | None = None) -> None:
 
 
 def _ensure_agent_initrd(*, base_initrd: Path, work_dir: Path) -> Path:
-    out_initrd = work_dir / "linux-guest" / "agent" / "initramfs-with-agent"
+    # Keep separate initrd outputs for different agent modes so caching doesn't
+    # accidentally reuse a mismatched overlay.
+    persist_mode = _bool_env("RAYOS_AGENT_ENABLE_PERSIST_TEST", False)
+    out_name = "initramfs-with-agent-persist" if persist_mode else "initramfs-with-agent"
+    out_initrd = work_dir / "linux-guest" / "agent" / out_name
     out_initrd.parent.mkdir(parents=True, exist_ok=True)
 
     agent_src = Path(__file__).resolve().parent / "guest_agent"
@@ -76,6 +80,12 @@ def _ensure_agent_initrd(*, base_initrd: Path, work_dir: Path) -> Path:
     env["BASE_INITRD"] = str(base_initrd)
     env["OUT_INITRD"] = str(out_initrd)
     env["AGENT_SRC_DIR"] = str(agent_src)
+
+    # Alpine netboot uses a separate squashfs (modloop-virt) for kernel modules. Since we bypass
+    # Alpine init (rdinit=/rayos_init), we need to make critical modules available in the initramfs.
+    modloop_candidate = base_initrd.parent / "modloop-virt"
+    if modloop_candidate.is_file():
+        env["MODLOOP"] = str(modloop_candidate)
 
     subprocess.run(["python3", str(builder)], check=True, env=env)
 
