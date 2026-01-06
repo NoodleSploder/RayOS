@@ -42,24 +42,51 @@ if [ "${RAYOS_INPUT_PROBE:-0}" = "1" ]; then
     if [ -x /sbin/modprobe ]; then
       /sbin/modprobe virtio_mmio >/dev/null 2>&1 || true
       /sbin/modprobe virtio_input >/dev/null 2>&1 || true
+      /sbin/modprobe evdev >/dev/null 2>&1 || true
     elif /bin/busybox --list 2>/dev/null | /bin/busybox grep -q '^modprobe$'; then
       /bin/busybox modprobe virtio_mmio >/dev/null 2>&1 || true
       /bin/busybox modprobe virtio_input >/dev/null 2>&1 || true
+      /bin/busybox modprobe evdev >/dev/null 2>&1 || true
     fi
 
     # Wait (bounded) for devtmpfs to populate /dev/input.
     for i in 1 2 3 4 5 6 7 8 9 10 \
              11 12 13 14 15 16 17 18 19 20; do
-      if [ -e /dev/input/event0 ]; then
+      if /bin/busybox ls -1 /dev/input/event* >/dev/null 2>&1; then
         break
       fi
       /bin/busybox sleep 0.2 2>/dev/null || true
     done
 
-    if [ ! -e /dev/input/event0 ]; then
+    event_dev=""
+    tries=300
+    while [ "$tries" -gt 0 ] && [ -z "$event_dev" ]; do
+      for p in /sys/class/input/event*; do
+        [ -e "$p" ] || continue
+        name="$(/bin/busybox cat "$p/device/name" 2>/dev/null || true)"
+        if [ "$name" = "rayos-virtio-input" ]; then
+          ev="${p##*/}"
+          if [ -e "/dev/input/$ev" ]; then
+            event_dev="/dev/input/$ev"
+            break
+          fi
+        fi
+      done
+
+      if [ -z "$event_dev" ]; then
+        /bin/busybox sleep 0.2 2>/dev/null || true
+        tries=$(( tries - 1 ))
+      fi
+    done
+
+    if [ -z "$event_dev" ] || [ ! -e "$event_dev" ]; then
       emit_line "RAYOS_LINUX_INPUT_PROBE:SKIP no_event0"
       exit 0
     fi
+
+    # Open the event device first to avoid a race where the VMM injects before
+    # userspace is actually listening.
+    exec 3<"$event_dev" 2>/dev/null || true
 
     # Coordinate with the RayOS VMM: once user space has opened the device and
     # printed this marker, the VMM injects a deterministic input event.
@@ -67,7 +94,7 @@ if [ "${RAYOS_INPUT_PROBE:-0}" = "1" ]; then
 
     # Read one Linux input_event (timeval + type + code + value) == 24 bytes on x86_64.
     # Don't attempt to parse; just confirm a read unblocked.
-    if /bin/busybox dd if=/dev/input/event0 of=/dev/null bs=24 count=1 2>/dev/null; then
+    if /bin/busybox dd of=/dev/null bs=24 count=1 <&3 2>/dev/null; then
       emit_line "RAYOS_LINUX_INPUT_EVENT_RX"
     else
       emit_line "RAYOS_LINUX_INPUT_PROBE:ERR dd_failed"

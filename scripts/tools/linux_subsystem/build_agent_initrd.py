@@ -18,6 +18,30 @@ def _pick_kernel_version(modules_dir: Path) -> str | None:
     return candidates[0]
 
 
+def _pick_kernel_version_from_modloop(modloop: Path) -> str | None:
+    if not modloop.is_file():
+        return None
+    if shutil.which("unsquashfs") is None:
+        return None
+
+    # `unsquashfs -ls` output paths are prefixed with `squashfs-root/`.
+    # We expect a directory like: squashfs-root/modules/<kernver>
+    out = subprocess.check_output(
+        ["unsquashfs", "-ls", str(modloop), "modules"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+    prefix = "squashfs-root/modules/"
+    for raw in out.splitlines():
+        line = raw.strip()
+        if not line.startswith(prefix):
+            continue
+        rest = line[len(prefix) :]
+        if rest and "/" not in rest:
+            return rest
+    return None
+
+
 def _unsquashfs_cat(*, modloop: Path, inner_path: str, out_path: Path) -> None:
     if shutil.which("unsquashfs") is None:
         raise RuntimeError(
@@ -33,9 +57,13 @@ def _unsquashfs_cat(*, modloop: Path, inner_path: str, out_path: Path) -> None:
         )
 
 
-def _include_evdev_from_modloop(*, tmp_root: Path, modloop: Path) -> None:
-    # We place the module under /lib/modules/<ver>/... because that's what modprobe expects.
-    kernver = _pick_kernel_version(tmp_root / "lib" / "modules")
+def _include_input_modules_from_modloop(*, tmp_root: Path, modloop: Path) -> None:
+    # Best-effort: if unsquashfs isn't installed, keep building an initrd that can still boot.
+    if shutil.which("unsquashfs") is None:
+        return
+
+    # We place modules under /lib/modules/<ver>/... because that's what modprobe expects.
+    kernver = _pick_kernel_version_from_modloop(modloop)
     if kernver is None:
         return
 
@@ -43,19 +71,25 @@ def _include_evdev_from_modloop(*, tmp_root: Path, modloop: Path) -> None:
     # Note: unsquashfs -cat takes paths relative to the squashfs root (no 'squashfs-root/' prefix).
     base = f"modules/{kernver}"
 
-    # Copy the evdev module.
-    _unsquashfs_cat(
-        modloop=modloop,
-        inner_path=f"{base}/kernel/drivers/input/evdev.ko",
-        out_path=tmp_root / "lib" / "modules" / kernver / "kernel" / "drivers" / "input" / "evdev.ko",
-    )
-
-    # Copy module metadata so modprobe can resolve the module name.
+    # Copy module metadata so modprobe can resolve module names + deps.
     for name in ["modules.dep", "modules.dep.bin", "modules.alias", "modules.alias.bin"]:
         _unsquashfs_cat(
             modloop=modloop,
             inner_path=f"{base}/{name}",
             out_path=tmp_root / "lib" / "modules" / kernver / name,
+        )
+
+    # Minimal set for virtio-input e2e in initramfs:
+    # - virtio_input creates an input device
+    # - evdev exposes it as /dev/input/event0
+    for rel in [
+        "kernel/drivers/virtio/virtio_input.ko",
+        "kernel/drivers/input/evdev.ko",
+    ]:
+        _unsquashfs_cat(
+            modloop=modloop,
+            inner_path=f"{base}/{rel}",
+            out_path=tmp_root / "lib" / "modules" / kernver / rel,
         )
 
 
@@ -264,7 +298,7 @@ def main() -> int:
             cwd=str(tmp),
         )
 
-        _include_evdev_from_modloop(tmp_root=tmp, modloop=modloop_path)
+        _include_input_modules_from_modloop(tmp_root=tmp, modloop=modloop_path)
 
         merged_cpio_path = tmp / "merged.cpio"
         with merged_cpio_path.open("wb") as fp:

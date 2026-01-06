@@ -233,7 +233,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	- [✅] Virtio-input device model + event injection from RayOS pointer/keyboard to the presented guest surface.
 		- Implemented (v0): VMM stashes guest event buffers, pumps queued events into used-ring entries, and attempts IRQ injection; RayOS prompt commands route into virtio-input when a guest surface is Presented.
 		- Headless smoke: `./scripts/test-vmm-virtio-input-headless.sh` (VMX-gated; asserts guest-visible `RAYOS_GUEST:VIRTIO_INPUT:EVENT_RX` when VMCS is ready; falls back to VMM-side buffer stash / keepalive / event-written markers).
-		- Linux guest-visible validation: `./scripts/test-vmm-linux-virtio-input-headless.sh` and `./scripts/test-vmm-linux-virtio-input-e2e-headless.sh` (explicitly **SKIP** when the current guest kernel/initramfs does not expose `/dev/input/event0`).
+		- Linux guest-visible validation: `./scripts/test-vmm-linux-virtio-input-headless.sh` and `./scripts/test-vmm-linux-virtio-input-e2e-headless.sh` (asserts `RAYOS_LINUX_INPUT_EVENT_RX`; may still **SKIP** when VMX is unsupported).
 		- Follow-ups: broaden Linux driver compatibility (virtio-input config semantics + richer key mapping).
 	- [✅] Present/Hide semantics do not kill the VM by default (presentation is UI-only; lifecycle is policy-controlled).
 		- Implemented (host bridge v0): `hide linux desktop` unpresents only (closes any VNC viewer) and keeps the desktop VM running.
