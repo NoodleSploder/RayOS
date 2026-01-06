@@ -763,6 +763,7 @@ unsafe fn try_install_linux_guest() -> bool {
     let entry_rip = KERNEL_LOAD_GPA + 0x200;
     LINUX_GUEST_ENTRY_RIP = entry_rip;
     LINUX_GUEST_BOOT_PARAMS_GPA = BOOT_PARAMS_GPA;
+    VMX_LINUX_LAUNCH_BOOT_PARAMS_GPA = BOOT_PARAMS_GPA;
 
     seed_linux_guest_msrs();
 
@@ -1100,6 +1101,171 @@ const VMX_STACK_SIZE: usize = 16 * 1024;
 struct VmxStack([u8; VMX_STACK_SIZE]);
 static mut VMX_HOST_STACK: VmxStack = VmxStack([0; VMX_STACK_SIZE]);
 
+//=============================================================================
+// Persistent VMX runtime (embedded guest timeslicing)
+//=============================================================================
+
+// These are used to run a guest in small time-slices (yielding back to the RayOS
+// main loop) so the guest can run "embedded" instead of taking over the kernel.
+//
+// Design notes:
+// - VM-exits transfer control to HOST_RIP with HOST_RSP.
+// - To return back to the caller, we set HOST_RSP to a stack that contains a
+//   return address pointing at a trampoline.
+// - When the VM-exit handler decides to yield, the VM-exit stub `ret`s to that
+//   trampoline, which restores host callee-saved registers and returns to the
+//   original caller stack.
+
+static mut VMX_PERSIST_VMXON_PHYS: u64 = 0;
+static mut VMX_PERSIST_VMCS_PHYS: u64 = 0;
+static VMX_PERSIST_READY: AtomicU32 = AtomicU32::new(0);
+static VMX_PERSIST_UNSUPPORTED: AtomicU32 = AtomicU32::new(0);
+static VMX_PERSIST_LAUNCHED: AtomicU32 = AtomicU32::new(0);
+
+static VMM_LINUX_DESKTOP_WANTED: AtomicU32 = AtomicU32::new(0);
+
+// Timeslice control shared between the VM-exit path and the caller.
+static mut VMX_TIMESLICE_ACTIVE: u32 = 0;
+static mut VMX_TIMESLICE_CALLER_RSP: u64 = 0;
+static mut VMX_TIMESLICE_SAVED_RBX: u64 = 0;
+static mut VMX_TIMESLICE_SAVED_RBP: u64 = 0;
+static mut VMX_TIMESLICE_SAVED_R12: u64 = 0;
+static mut VMX_TIMESLICE_SAVED_R13: u64 = 0;
+static mut VMX_TIMESLICE_SAVED_R14: u64 = 0;
+static mut VMX_TIMESLICE_SAVED_R15: u64 = 0;
+static mut VMX_TIMESLICE_SAVED_RFLAGS: u64 = 0;
+static mut VMX_TIMESLICE_LAST_EXIT_BASIC: u32 = 0;
+
+// Guest GPR snapshot used to resume after yielding back to the RayOS main loop.
+// VMX does not automatically save/restore GPRs across VM-exit/VM-entry; the exit stub
+// restores the guest GPRs into the host registers right before `vmresume`. If we yield
+// to the caller instead, we must explicitly preserve the guest GPRs for the next slice.
+static mut VMX_TIMESLICE_SAVED_GUEST_REGS: GuestRegs = GuestRegs {
+    rax: 0,
+    rbx: 0,
+    rcx: 0,
+    rdx: 0,
+    rbp: 0,
+    rsi: 0,
+    rdi: 0,
+    r8: 0,
+    r9: 0,
+    r10: 0,
+    r11: 0,
+    r12: 0,
+    r13: 0,
+    r14: 0,
+    r15: 0,
+};
+
+#[unsafe(naked)]
+extern "C" fn vmx_timeslice_trampoline() {
+    // Restore ABI-required callee-saved registers and return to the caller
+    // of `vmx_enter_timeslice_naked`.
+    core::arch::naked_asm!(
+        "mov dword ptr [{active}], 0\n\
+         push qword ptr [{rflags}]\n\
+         popfq\n\
+         mov rbx, qword ptr [{rbx}]\n\
+         mov rbp, qword ptr [{rbp}]\n\
+         mov r12, qword ptr [{r12}]\n\
+         mov r13, qword ptr [{r13}]\n\
+         mov r14, qword ptr [{r14}]\n\
+         mov r15, qword ptr [{r15}]\n\
+         mov rsp, qword ptr [{caller_rsp}]\n\
+         mov eax, 1\n\
+         ret\n",
+        active = sym VMX_TIMESLICE_ACTIVE,
+        caller_rsp = sym VMX_TIMESLICE_CALLER_RSP,
+        rflags = sym VMX_TIMESLICE_SAVED_RFLAGS,
+        rbx = sym VMX_TIMESLICE_SAVED_RBX,
+        rbp = sym VMX_TIMESLICE_SAVED_RBP,
+        r12 = sym VMX_TIMESLICE_SAVED_R12,
+        r13 = sym VMX_TIMESLICE_SAVED_R13,
+        r14 = sym VMX_TIMESLICE_SAVED_R14,
+        r15 = sym VMX_TIMESLICE_SAVED_R15,
+    );
+}
+
+#[unsafe(naked)]
+extern "C" fn vmx_enter_timeslice_naked(entry_kind: u64) -> u8 {
+    // entry_kind: 0 => vmlaunch, 1 => vmresume
+    //
+    // On success, control transfers to the guest and does not return here.
+    // We return to the caller only when the VM-exit stub yields via
+    // `vmx_timeslice_trampoline`.
+    core::arch::naked_asm!(
+        "mov rax, rdi\n\
+         mov qword ptr [{saved_rbx}], rbx\n\
+         mov qword ptr [{saved_rbp}], rbp\n\
+         mov qword ptr [{saved_r12}], r12\n\
+         mov qword ptr [{saved_r13}], r13\n\
+         mov qword ptr [{saved_r14}], r14\n\
+         mov qword ptr [{saved_r15}], r15\n\
+         pushfq\n\
+         pop qword ptr [{saved_rflags}]\n\
+         mov qword ptr [{caller_rsp}], rsp\n\
+         mov dword ptr [{active}], 1\n\
+         test rax, rax\n\
+         jnz 1f\n\
+         xor rbx, rbx\n\
+         xor rbp, rbp\n\
+         xor rdi, rdi\n\
+         mov rsi, qword ptr [{linux_bp}]\n\
+         mov eax, 0x53726448\n\
+         xor rcx, rcx\n\
+         xor rdx, rdx\n\
+         xor r8, r8\n\
+         xor r9, r9\n\
+         xor r10, r10\n\
+         xor r11, r11\n\
+         xor r12, r12\n\
+         xor r13, r13\n\
+         xor r14, r14\n\
+         xor r15, r15\n\
+         vmlaunch\n\
+         jmp 2f\n\
+         1:\n\
+         mov rax, qword ptr [{guest_regs} + 0]\n\
+         mov rbx, qword ptr [{guest_regs} + 8]\n\
+         mov rcx, qword ptr [{guest_regs} + 16]\n\
+         mov rdx, qword ptr [{guest_regs} + 24]\n\
+         mov rbp, qword ptr [{guest_regs} + 32]\n\
+         mov rsi, qword ptr [{guest_regs} + 40]\n\
+         mov rdi, qword ptr [{guest_regs} + 48]\n\
+         mov r8,  qword ptr [{guest_regs} + 56]\n\
+         mov r9,  qword ptr [{guest_regs} + 64]\n\
+         mov r10, qword ptr [{guest_regs} + 72]\n\
+         mov r11, qword ptr [{guest_regs} + 80]\n\
+         mov r12, qword ptr [{guest_regs} + 88]\n\
+         mov r13, qword ptr [{guest_regs} + 96]\n\
+         mov r14, qword ptr [{guest_regs} + 104]\n\
+         mov r15, qword ptr [{guest_regs} + 112]\n\
+         vmresume\n\
+         2:\n\
+         mov dword ptr [{active}], 0\n\
+         mov rbx, qword ptr [{saved_rbx}]\n\
+         mov rbp, qword ptr [{saved_rbp}]\n\
+         mov r12, qword ptr [{saved_r12}]\n\
+         mov r13, qword ptr [{saved_r13}]\n\
+         mov r14, qword ptr [{saved_r14}]\n\
+         mov r15, qword ptr [{saved_r15}]\n\
+         xor eax, eax\n\
+         ret\n",
+        active = sym VMX_TIMESLICE_ACTIVE,
+        caller_rsp = sym VMX_TIMESLICE_CALLER_RSP,
+        saved_rbx = sym VMX_TIMESLICE_SAVED_RBX,
+        saved_rbp = sym VMX_TIMESLICE_SAVED_RBP,
+        saved_r12 = sym VMX_TIMESLICE_SAVED_R12,
+        saved_r13 = sym VMX_TIMESLICE_SAVED_R13,
+        saved_r14 = sym VMX_TIMESLICE_SAVED_R14,
+        saved_r15 = sym VMX_TIMESLICE_SAVED_R15,
+        saved_rflags = sym VMX_TIMESLICE_SAVED_RFLAGS,
+        linux_bp = sym VMX_LINUX_LAUNCH_BOOT_PARAMS_GPA,
+        guest_regs = sym VMX_TIMESLICE_SAVED_GUEST_REGS,
+    );
+}
+
 static VMEXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static EXTINTEXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PFEXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1349,6 +1515,10 @@ static mut LINUX_GUEST_ENTRY_RIP: u64 = 0;
 #[cfg(feature = "vmm_linux_guest")]
 static mut LINUX_GUEST_BOOT_PARAMS_GPA: u64 = 0;
 
+// Copy of the Linux boot_params GPA for use by embedded-timeslice VM-entry assembly.
+// Kept outside cfg-gating so the symbol is always available.
+static mut VMX_LINUX_LAUNCH_BOOT_PARAMS_GPA: u64 = 0;
+
 static mut IO_BITMAP_A_PHYS: u64 = 0;
 static mut IO_BITMAP_B_PHYS: u64 = 0;
 static mut IO_BITMAPS_READY: bool = false;
@@ -1502,6 +1672,18 @@ unsafe fn host_outb(port: u16, value: u8) {
         in("al") value,
         options(nomem, nostack, preserves_flags)
     );
+}
+
+#[inline(always)]
+unsafe fn host_inb(port: u16) -> u8 {
+    let value: u8;
+    asm!(
+        "in al, dx",
+        in("dx") port,
+        out("al") value,
+        options(nomem, nostack, preserves_flags)
+    );
+    value
 }
 
 #[inline(always)]
@@ -1749,6 +1931,7 @@ unsafe fn com1_uart_out(offset: u16, value: u8) {
 }
 
 #[repr(C)]
+#[derive(Copy, Clone)]
 struct GuestRegs {
     rax: u64,
     rbx: u64,
@@ -3894,7 +4077,7 @@ fn virtio_mmio_handler(
 }
 
 #[unsafe(naked)]
-extern "C" fn vmx_exit_stub() -> ! {
+extern "C" fn vmx_exit_stub() {
     // Save guest GPRs to the host stack, call into Rust for exit handling,
     // then restore GPRs and resume guest execution.
     core::arch::naked_asm!(
@@ -3956,10 +4139,9 @@ extern "C" fn vmx_exit_stub() -> ! {
          pop r13\n\
          pop r14\n\
          pop r15\n\
-         jmp {halt}\n",
+         ret\n",
         handler = sym vmx_exit_handler,
         resume_fail = sym vmx_vmresume_failed,
-        halt = sym vmx_host_halt,
     );
 }
 
@@ -4736,6 +4918,10 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
         // the first (too-early) injection, so drive retries from general VM-exits.
         try_retry_pending_if_due();
 
+        unsafe {
+            VMX_TIMESLICE_LAST_EXIT_BASIC = exit_basic;
+        }
+
         let action = match exit_basic {
             52 => {
                 // VMX-preemption timer expired: periodic forced exit for debugging.
@@ -4861,6 +5047,15 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
 
                 // Re-arm timer for the next period.
                 let _ = vmwrite(VMX_PREEMPTION_TIMER_VALUE, 0x0100_0000);
+
+                // When running the guest in an embedded time-slice, yield back to the caller
+                // after minimal maintenance and after re-arming the timer.
+                unsafe {
+                    if VMX_TIMESLICE_ACTIVE != 0 {
+                        VMX_TIMESLICE_SAVED_GUEST_REGS = *regs;
+                        return 1;
+                    }
+                }
                 0
             }
             1 => {
@@ -8286,13 +8481,11 @@ unsafe fn setup_vmcs_minimal_host_and_controls() {
 
     // Exception bitmap: a set bit requests a VM-exit on the corresponding exception vector.
     //
-    // For the Linux guest, we generally want the guest to handle its own exceptions.
-    // However, trapping *rare* fatal exceptions (#UD/#GP) is extremely useful for diagnosing
-    // early-boot hangs: we can log the faulting RIP/insn bytes, then reflect the exception
-    // back into the guest so it can still oops/panic normally.
+    // For the Linux guest, prefer letting Linux handle its own exceptions.
+    // Trapping early exceptions can easily destabilize boot if the guest doesn't yet have
+    // a valid IDT; keep the exception bitmap empty for now.
     let exception_bitmap = if linux_guest {
-        // #UD (6), #GP (13), #PF (14)
-        (1u32 << 6) | (1u32 << 13) | (1u32 << 14)
+        0u32
     } else {
         // #GP (13), #PF (14)
         (1u32 << 13) | (1u32 << 14)
@@ -9331,4 +9524,197 @@ pub fn try_init_vmx_skeleton() -> bool {
     crate::serial_write_str("RAYOS_VMM:VMX:VMXOFF\n");
 
     true
+}
+
+//=============================================================================
+// Embedded Linux desktop support (persistent VMX + time-slicing)
+//=============================================================================
+
+fn write_host_stack_return_to_trampoline() {
+    unsafe {
+        let base = &raw mut VMX_HOST_STACK.0 as *mut u8 as u64;
+        let top = base + (VMX_STACK_SIZE as u64);
+        let slot = (top - 8) as *mut u64;
+        core::ptr::write_volatile(slot, vmx_timeslice_trampoline as *const () as u64);
+        // Set HOST_RSP to point at the trampoline return address.
+        let _ = vmcs_write_or_log(HOST_RSP, top - 8);
+    }
+}
+
+fn ensure_vmx_persistent_ready() -> bool {
+    if VMX_PERSIST_READY.load(Ordering::Relaxed) != 0 {
+        return true;
+    }
+    if VMX_PERSIST_UNSUPPORTED.load(Ordering::Relaxed) != 0 {
+        return false;
+    }
+
+    crate::serial_write_str("RAYOS_VMM:VMX:PERSIST_INIT_BEGIN\n");
+
+    if !cpu_supports_vmx() {
+        crate::serial_write_str("RAYOS_VMM:VMX:UNSUPPORTED\n");
+        VMX_PERSIST_UNSUPPORTED.store(1, Ordering::Relaxed);
+        return false;
+    }
+
+    if !try_enable_vmx_feature_control() {
+        crate::serial_write_str("RAYOS_VMM:VMX:FEATURE_CONTROL_DENIED\n");
+        return false;
+    }
+
+    // Enable CR4.VMXE and apply fixed-bit constraints.
+    let cr4 = read_cr4();
+    write_cr4(cr4 | CR4_VMXE);
+    apply_vmx_fixed_bits();
+
+    if !prepare_guest_memory() {
+        crate::serial_write_str("RAYOS_VMM:VMX:GUEST_MEMORY_FAIL\n");
+        return false;
+    }
+
+    let revision = vmx_revision_id();
+
+    // Allocate VMXON + VMCS regions once.
+    let vmxon_phys = match crate::phys_alloc_page() {
+        Some(p) => p,
+        None => {
+            crate::serial_write_str("RAYOS_VMM:VMX:ALLOC_VMXON_FAIL\n");
+            return false;
+        }
+    };
+    let vmcs_phys = match crate::phys_alloc_page() {
+        Some(p) => p,
+        None => {
+            crate::serial_write_str("RAYOS_VMM:VMX:ALLOC_VMCS_FAIL\n");
+            return false;
+        }
+    };
+
+    unsafe {
+        let vmxon_ptr = crate::phys_to_virt(vmxon_phys) as *mut u32;
+        core::ptr::write_volatile(vmxon_ptr, revision);
+        let vmcs_ptr = crate::phys_to_virt(vmcs_phys) as *mut u32;
+        core::ptr::write_volatile(vmcs_ptr, revision);
+    }
+
+    if !unsafe { vmxon(vmxon_phys) } {
+        crate::serial_write_str("RAYOS_VMM:VMX:VMXON_FAIL\n");
+        return false;
+    }
+
+    if !unsafe { vmclear(vmcs_phys) } {
+        crate::serial_write_str("RAYOS_VMM:VMX:VMCLEAR_FAIL\n");
+        unsafe { vmxoff() };
+        return false;
+    }
+    if !unsafe { vmptrld(vmcs_phys) } {
+        crate::serial_write_str("RAYOS_VMM:VMX:VMPTRLD_FAIL\n");
+        unsafe { vmxoff() };
+        return false;
+    }
+
+    unsafe {
+        VMX_PERSIST_VMXON_PHYS = vmxon_phys;
+        VMX_PERSIST_VMCS_PHYS = vmcs_phys;
+    }
+
+    unsafe {
+        setup_vmcs_minimal_host_and_controls();
+        setup_vmcs_minimal_guest_state();
+    }
+
+    // NOTE: In embedded/persistent mode we intentionally keep the host PIC unmasked.
+    // The RayOS UI loop relies on IRQ0 timer ticks to drive subsequent guest time-slices
+    // after each VMX-preemption-timer yield.
+
+    VMX_PERSIST_READY.store(1, Ordering::Relaxed);
+    crate::serial_write_str("RAYOS_VMM:VMX:PERSIST_INIT_OK\n");
+    true
+}
+
+fn run_guest_timeslice() -> bool {
+    if !ensure_vmx_persistent_ready() {
+        return false;
+    }
+
+    // Ensure the VMX preemption timer is armed for responsive yielding.
+    // This value is intentionally small; we rely on frequent yields to keep
+    // the RayOS UI responsive while the guest runs.
+    // Keep slices short so the RayOS UI remains responsive.
+    let _ = unsafe { vmwrite(VMX_PREEMPTION_TIMER_VALUE, 0x0040_0000) };
+
+    // Arrange for the VM-exit stub to return into our trampoline when the
+    // exit handler requests a yield.
+    write_host_stack_return_to_trampoline();
+
+    // Mask the host PIC while we are inside the guest so IRQ0/etc do not cause
+    // frequent external-interrupt VM-exits that can prevent the VMX preemption timer
+    // from ever expiring.
+    let host_pic1_imr = unsafe { host_inb(0x0021) };
+    let host_pic2_imr = unsafe { host_inb(0x00A1) };
+    unsafe {
+        host_outb(0x0021, 0xFF);
+        host_outb(0x00A1, 0xFF);
+    }
+
+    // Enter the guest; on success this returns to the caller only when the
+    // VM-exit handler yields via the preemption timer.
+    let entry_kind = if VMX_PERSIST_LAUNCHED.load(Ordering::Relaxed) == 0 {
+        VMX_PERSIST_LAUNCHED.store(1, Ordering::Relaxed);
+        0u64
+    } else {
+        1u64
+    };
+
+    let ok = unsafe { vmx_enter_timeslice_naked(entry_kind) } != 0;
+
+    // Restore host PIC masks so RayOS continues to receive timer interrupts between slices.
+    unsafe {
+        host_outb(0x0021, host_pic1_imr);
+        host_outb(0x00A1, host_pic2_imr);
+    }
+    if !ok {
+        // VM entry failed; fall back to "not launched" so the next attempt
+        // re-runs a VMLAUNCH.
+        VMX_PERSIST_LAUNCHED.store(0, Ordering::Relaxed);
+        crate::serial_write_str("RAYOS_VMM:VMX:TIMESLICE_ENTRY_FAIL\n");
+        // Best-effort dump of last VM-instruction error.
+        unsafe {
+            let (ok_err, err) = vmread(VMCS_VM_INSTRUCTION_ERROR);
+            if ok_err {
+                crate::serial_write_str("RAYOS_VMM:VMX:VM_INSTR_ERR=0x");
+                crate::serial_write_hex_u64(err);
+                crate::serial_write_str("\n");
+            }
+        }
+    }
+    ok
+}
+
+/// Request that the embedded Linux desktop VMM starts (or continues running).
+pub fn linux_desktop_vmm_request_start() {
+    VMM_LINUX_DESKTOP_WANTED.store(1, Ordering::Relaxed);
+    crate::serial_write_str("RAYOS_VMM:LINUX_DESKTOP:REQUEST_START\n");
+}
+
+/// Run one small VMX time-slice of the embedded Linux guest.
+///
+/// Intended to be called from the RayOS main loop tick.
+pub fn linux_desktop_vmm_tick() {
+    if VMM_LINUX_DESKTOP_WANTED.load(Ordering::Relaxed) == 0 {
+        return;
+    }
+
+    // Only run when a Linux guest is actually staged; otherwise there's
+    // nothing meaningful to execute.
+    if !linux_guest_active() {
+        return;
+    }
+
+    // Limit how much guest CPU we spend per RayOS tick to keep UI responsiveness.
+    for _ in 0..1 {
+        if !run_guest_timeslice() {
+            break;
+        }
+    }
 }

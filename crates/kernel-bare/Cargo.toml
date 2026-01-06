@@ -81,6 +81,10 @@ vmm_virtio_blk_persist_selftest = []
 # P1 (WIP): boot a real Linux guest under the in-kernel VMM.
 vmm_linux_guest = []
 
+# Test/dev-only: auto-start the embedded Linux desktop guest at boot (hidden) and
+# run it via VMX time-slices from the main loop tick.
+vmm_linux_desktop_autostart = []
+
 # Debug-only: extremely verbose virtio-blk MMIO access tracing.
 vmm_trace_virtio_blk_mmio = []
 

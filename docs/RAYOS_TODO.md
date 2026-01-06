@@ -22,6 +22,23 @@ Status key:
 
 ---
 
+## Top 3 milestones (highest impact)
+
+These are the “big rocks” that most improve RayOS as a product. Prefer advancing these over incremental polish.
+
+De-scope rule of thumb: avoid UI polish/refactors unless they directly unblock one of the three milestones.
+
+1) RayOS-native Linux desktop (no host bridge)
+- Make `show linux desktop` fully in-OS: in-kernel VMM on hardware + virtio-gpu scanout → RayOS compositor window/surface → input routing + lifecycle.
+
+2) Installability + update/recovery (standalone OS)
+- Implement the minimal installer/boot-manager flow plus rollback/recovery so RayOS doesn’t depend on another machine (host QEMU tooling becomes dev/CI only).
+
+3) Reliability + observability loop
+- Add soak/stress runs and crash recovery artifacts (persistent logs, watchdog/reboot semantics, deterministic “last known good” behavior) to prevent regressions while the VMM/GUI evolves.
+
+---
+
 ## Design docs to write (tracked)
 
 These are the missing project-level documents needed to make RayOS installable and operable as a standalone OS (beyond the existing boot/subsystem docs). Each is currently a stub and should be filled in over time.
@@ -211,6 +228,9 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 		- Harness: `./scripts/test-vmm-linux-guest-headless.sh` treats either `RAYOS_LINUX_AGENT_READY` or `RAYOS_LINUX_GUEST_READY` as success.
 	- [✅] Add a headless test: boot RayOS → boot Linux headless under VMM → assert guest-ready marker → shutdown.
 		- Script: `./scripts/test-vmm-linux-guest-headless.sh` (quits QEMU early once the marker is observed).
+	- [✅] Embedded (RayOS-native) Linux desktop execution: Linux runs in the background via VMX time-slicing so the RayOS UI loop can continue.
+		- Headless smoke: `./scripts/test-vmm-linux-desktop-embedded-headless.sh` (asserts `RAYOS_LINUX_AGENT_READY`).
+		- Tuning note (2026-01-06): preemption timer `0x0040_0000` with `1` slice per RayOS tick passes; `0x0020_0000` with `1` slice per tick boots Linux but timed out before the READY marker. Revisit: try `0x0020_0000` with `2` slices/tick (or increase timeout) to improve UI responsiveness without regressing boot-to-ready.
 
 	**Notes / Implementation highlights:**
 	- IRQ delivery robustness: VM-entry injection implemented using `VMCS_ENTRY_INTERRUPTION_INFO` with LAPIC and MSI fallbacks (forced-fail smoke features exercise each path).

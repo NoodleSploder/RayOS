@@ -7389,6 +7389,16 @@ fn kernel_main() -> ! {
         }
     }
 
+    // Optional: auto-start the embedded Linux desktop guest (headless/tests).
+    // This is intentionally feature-gated so interactive boots keep the existing UX.
+    #[cfg(all(feature = "vmm_hypervisor", feature = "vmm_linux_desktop_autostart"))]
+    {
+        // 2 = available (running hidden)
+        LINUX_DESKTOP_STATE.store(2, Ordering::Relaxed);
+        crate::hypervisor::linux_desktop_vmm_request_start();
+        render_linux_state(panel_bg, 2);
+    }
+
     fn trim_ascii_spaces(mut s: &[u8]) -> &[u8] {
         while !s.is_empty() {
             let b = s[0];
@@ -8406,6 +8416,9 @@ fn kernel_main() -> ! {
                                     // 3 = running (presented)
                                     LINUX_DESKTOP_STATE.store(3, Ordering::Relaxed);
                                     chat.push_line(b"SYS: ", b"showing Linux desktop (presentation only)");
+                                    // For the embedded VMM path, request that the in-kernel
+                                    // Linux guest starts (or continues) running.
+                                    crate::hypervisor::linux_desktop_vmm_request_start();
                                 }
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
@@ -9004,6 +9017,16 @@ fn kernel_main() -> ! {
             last_tick = tick;
 
             let ps = guest_surface::presentation_state();
+
+            // Drive the embedded Linux guest in small VMX time-slices so it can run
+            // concurrently with the RayOS UI loop.
+            #[cfg(feature = "vmm_hypervisor")]
+            {
+                let cur = LINUX_DESKTOP_STATE.load(Ordering::Relaxed);
+                if cur == 2 || cur == 3 {
+                    crate::hypervisor::linux_desktop_vmm_tick();
+                }
+            }
 
             #[cfg(feature = "dev_scanout")]
             {
