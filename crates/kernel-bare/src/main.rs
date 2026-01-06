@@ -8598,9 +8598,12 @@ fn kernel_main() -> ! {
                                     if !presented {
                                         false
                                     } else {
-                                        // Minimal key mapping (common evdev codes). Keep this small and explicit.
+                                        // Key mapping (common evdev codes). Keep this explicit and deterministic.
+                                        // Note: advertised capabilities must stay in sync with virtio-input EV_KEY bitmap.
                                         fn keyspec_to_evdev_code(keyspec: &[u8]) -> Option<u16> {
                                             let s = keyspec;
+
+                                            // Common named keys.
                                             if eq_ignore_ascii_case(s, b"enter") {
                                                 return Some(28);
                                             }
@@ -8621,6 +8624,102 @@ fn kernel_main() -> ! {
                                                 return Some(57);
                                             }
 
+                                            // Modifiers.
+                                            if eq_ignore_ascii_case(s, b"ctrl")
+                                                || eq_ignore_ascii_case(s, b"control")
+                                                || eq_ignore_ascii_case(s, b"lctrl")
+                                                || eq_ignore_ascii_case(s, b"leftctrl")
+                                            {
+                                                return Some(29);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"shift")
+                                                || eq_ignore_ascii_case(s, b"lshift")
+                                                || eq_ignore_ascii_case(s, b"leftshift")
+                                            {
+                                                return Some(42);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"alt")
+                                                || eq_ignore_ascii_case(s, b"lalt")
+                                                || eq_ignore_ascii_case(s, b"leftalt")
+                                            {
+                                                return Some(56);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"meta")
+                                                || eq_ignore_ascii_case(s, b"super")
+                                                || eq_ignore_ascii_case(s, b"win")
+                                                || eq_ignore_ascii_case(s, b"windows")
+                                                || eq_ignore_ascii_case(s, b"lmeta")
+                                                || eq_ignore_ascii_case(s, b"leftmeta")
+                                            {
+                                                return Some(125);
+                                            }
+
+                                            // Navigation.
+                                            if eq_ignore_ascii_case(s, b"up") {
+                                                return Some(103);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"down") {
+                                                return Some(108);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"left") {
+                                                return Some(105);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"right") {
+                                                return Some(106);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"home") {
+                                                return Some(102);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"end") {
+                                                return Some(107);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"pageup")
+                                                || eq_ignore_ascii_case(s, b"pgup")
+                                            {
+                                                return Some(104);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"pagedown")
+                                                || eq_ignore_ascii_case(s, b"pgdn")
+                                            {
+                                                return Some(109);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"insert")
+                                                || eq_ignore_ascii_case(s, b"ins")
+                                            {
+                                                return Some(110);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"delete")
+                                                || eq_ignore_ascii_case(s, b"del")
+                                            {
+                                                return Some(111);
+                                            }
+
+                                            // Locks.
+                                            if eq_ignore_ascii_case(s, b"capslock")
+                                                || eq_ignore_ascii_case(s, b"caps")
+                                            {
+                                                return Some(58);
+                                            }
+
+                                            // Function keys.
+                                            if s.len() == 2 && (s[0] == b'f' || s[0] == b'F') {
+                                                let n = s[1];
+                                                if n >= b'1' && n <= b'9' {
+                                                    // KEY_F1 (59) .. KEY_F9 (67)
+                                                    return Some((n - b'1') as u16 + 59);
+                                                }
+                                            }
+                                            if eq_ignore_ascii_case(s, b"f10") {
+                                                return Some(68);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"f11") {
+                                                return Some(87);
+                                            }
+                                            if eq_ignore_ascii_case(s, b"f12") {
+                                                return Some(88);
+                                            }
+
+                                            // Single-character keys.
                                             if s.len() == 1 {
                                                 let c = s[0];
                                                 // Digits: KEY_1..KEY_0
@@ -8629,6 +8728,22 @@ fn kernel_main() -> ! {
                                                 }
                                                 if c == b'0' {
                                                     return Some(11);
+                                                }
+
+                                                // US keyboard punctuation (unshifted).
+                                                match c {
+                                                    b'-' => return Some(12),
+                                                    b'=' => return Some(13),
+                                                    b'[' => return Some(26),
+                                                    b']' => return Some(27),
+                                                    b'\\' => return Some(43),
+                                                    b';' => return Some(39),
+                                                    b'\'' => return Some(40),
+                                                    b'`' => return Some(41),
+                                                    b',' => return Some(51),
+                                                    b'.' => return Some(52),
+                                                    b'/' => return Some(53),
+                                                    _ => {}
                                                 }
 
                                                 // Letters (explicit evdev codes)

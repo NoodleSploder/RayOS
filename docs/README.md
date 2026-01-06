@@ -1,5 +1,10 @@
 # RayOS Project Index
 
+This file is a **documentation index**.
+
+- For the current build/boot/test entrypoints, start with **[../README.MD](../README.MD)**.
+- For the authoritative roadmap/status (Linux subsystem + in-OS VMM), see **[RAYOS_TODO.md](RAYOS_TODO.md)**.
+
 ## 📚 Documentation (Read In Order)
 
 ### Start Here
@@ -35,229 +40,38 @@
 - **[BUILD_GUIDE.md](BUILD_GUIDE.md)** - Original build documentation
 - **[BOOT_TROUBLESHOOTING.md](BOOT_TROUBLESHOOTING.md)** - Boot debugging guide
 
-## 🏗️ Project Structure
+## 🧭 Where to Look (by topic)
 
-### Core Components
+- **Boot/build entrypoints:** [../README.MD](../README.MD)
+- **Linux subsystem (Option D):** [LINUX_SUBSYSTEM_DESIGN.md](LINUX_SUBSYSTEM_DESIGN.md), [LINUX_SUBSYSTEM_CONTRACT.md](LINUX_SUBSYSTEM_CONTRACT.md)
+- **Hypervisor / in-OS VMM roadmap:** [RAYOS_TODO.md](RAYOS_TODO.md)
+- **Installability plan:** [INSTALLABLE_RAYOS_PLAN.md](INSTALLABLE_RAYOS_PLAN.md)
+- **Boot debugging:** [BOOT_TROUBLESHOOTING.md](BOOT_TROUBLESHOOTING.md)
 
-```
-bootloader/
-├── Cargo.toml (updated for aarch64)
-├── .cargo/config.toml (aarch64-unknown-uefi config)
-└── uefi_boot/
-    └── src/main.rs (✅ UEFI entry + kernel loader)
+## ✅ Key Headless Verification Scripts (x86_64)
 
-kernel/
-├── Cargo.toml
-├── src/
-│   ├── main.rs (✅ Kernel entry + demo)
-│   ├── lib.rs (✅ RayKernelBuilder)
-│   ├── system1/ (✅ GPU Reflex Engine)
-│   ├── system2/ (✅ LLM Cognitive Engine)
-│   ├── hal/ (✅ Hardware abstraction)
-│   └── types.rs (✅ Core types)
-
-conductor/
-└── src/main.rs (✅ Task orchestration)
-
-cortex/
-└── src/lib.rs (✅ Vision/reasoning AI)
-
-intent/
-└── src/lib.rs (✅ Multimodal intent parser)
-
-volume/
-└── src/main.rs (✅ Vector storage + FS)
-```
-
-### Build System
-
-```
-scripts/build-iso-aarch64.ps1 (✅ MAIN - Use this)
-scripts/build-iso-final.ps1 (x86_64 version)
-scripts/build-iso.ps1 (x86_64 version)
-scripts/build-iso.sh (Linux version)
-```
-
-### Output
-
-```
-build/
-└── rayos-aarch64.iso (✅ 7.88 MB - READY TO TEST)
-    ├── EFI/BOOT/BOOTAA64.EFI (aarch64 bootloader)
-    └── EFI/RAYOS/kernel.bin (kernel binary)
-```
-
-## 🎯 Current Status: Phase 1 Complete ✅
-
-### What Works
-
-- ✅ aarch64 UEFI bootloader compiles and boots
-- ✅ Bootloader prints initialization banner
-- ✅ Kernel entry point properly defined
-- ✅ Build system fully automated
-- ✅ ISO 9660 hybrid bootable format
-- ✅ All four systems architecturally designed
-
-### What's Ready for Phase 2
-
-- ⏳ GPU initialization (System 1)
-- ⏳ LLM inference (System 2)
-- ⏳ Task orchestration (Conductor)
-- ⏳ Storage/embeddings (Volume)
-
-## 🚀 How to Proceed
-
-### Option 1: Test Current ISO (Recommended First Step)
-
-```powershell
-# Boot in aarch64 UEFI VM
-# Mount: build/rayos-aarch64.iso
-# Expected: Bootloader banner appears, kernel enters loop
-```
-
-### Option 2: Rebuild Everything
-
-```powershell
-cd c:\Users\caden\Documents\Programming Scripts\Personal\Rust\ray-os
-powershell -ExecutionPolicy Bypass -File .\scripts\build-iso-aarch64.ps1
-```
-
-### Option 3: Choose Phase 2 Implementation
-
-1. Read [PHASE2_PLAN.md](PHASE2_PLAN.md)
-2. Phase 2 is currently proceeding with **Option A (Quick PoC / embedded bring-up in bootloader)**
-3. Follow implementation steps (GPU probe/logging + optional `model.bin` handoff are in place)
-
-## 📊 Key Metrics
-
-| Aspect      | Value                            |
-| ----------- | -------------------------------- |
-| Target Arch | aarch64 (ARM64)                  |
-| Bootloader  | UEFI aarch64                     |
-| ISO Size    | 7.88 MB                          |
-| Build Time  | ~2 minutes                       |
-| Systems     | 4 (GPU, LLM, Conductor, Storage) |
-| Phase       | 1 of N                           |
-
-## 🔗 System Architecture
-
-```
-UEFI VM (aarch64)
-    ↓
-BOOTLOADER (BOOTAA64.EFI)
-    ├─ Initialize console
-    ├─ Load kernel
-    └─ Transition to kernel
-         ↓
-    KERNEL (rayos-aarch64-kernel)
-         ├─ System 1: GPU Reflex
-         ├─ System 2: LLM Cognitive
-         ├─ Conductor: Orchestration
-         └─ Volume: Storage
-              ↓
-         Autonomous Loop (Phase 2+)
-```
-
-## 📁 File Reference
-
-### Configuration Files
-
-| File                              | Purpose                       | Status     |
-| --------------------------------- | ----------------------------- | ---------- |
-| `bootloader/.cargo/config.toml`   | Compiler settings for aarch64 | ✅ Updated |
-| `bootloader/uefi_boot/Cargo.toml` | Bootloader dependencies       | ✅ Updated |
-| `kernel/Cargo.toml`               | Kernel dependencies           | ✅ Works   |
-| `build-iso-aarch64.ps1`           | ISO build automation          | ✅ Works   |
-
-### Source Code
-
-| File                               | Purpose                    | Status         |
-| ---------------------------------- | -------------------------- | -------------- |
-| `bootloader/uefi_boot/src/main.rs` | UEFI entry + kernel loader | ✅ Complete    |
-| `kernel/src/main.rs`               | Kernel entry + demo        | ✅ Complete    |
-| `kernel/src/lib.rs`                | Kernel library             | ✅ Complete    |
-| `kernel/src/system1/mod.rs`        | GPU engine                 | ✅ Implemented |
-| `kernel/src/system2/mod.rs`        | LLM engine                 | ✅ Implemented |
-| `conductor/src/main.rs`            | Task orchestrator          | ✅ Implemented |
-| `crates/volume/src/main.rs`        | Storage engine             | ✅ Implemented |
-
-### Documentation
-
-| File                 | Purpose                | Audience      |
-| -------------------- | ---------------------- | ------------- |
-| `QUICKSTART.md`      | Quick reference        | Everyone      |
-| `PHASE1_COMPLETE.md` | Architecture detail    | Developers    |
-| `PHASE2_PLAN.md`     | Implementation roadmap | Project leads |
-| `SESSION_SUMMARY.md` | Current session        | Team          |
-| `BUILD_GUIDE.md`     | Original guide         | Reference     |
-
-## ⚡ Quick Commands
-
-```powershell
-# Build
-powershell -ExecutionPolicy Bypass -File build-iso-aarch64.ps1
-
-# Build with clean
-powershell -ExecutionPolicy Bypass -File build-iso-aarch64.ps1 -Clean
-
-# Bootloader only
-cd bootloader\uefi_boot
-cargo +nightly build -Zbuild-std=core --release --target aarch64-unknown-uefi
-
-# Kernel only
-cd kernel
-cargo build --release
-
-# Check ISO
-Get-Item build\rayos-aarch64.iso
-```
-
-## ✅ Headless Verification (x86_64 kernel-bare)
-
-On Linux, there are unattended scripts that boot under OVMF and validate behavior from the serial log:
+These scripts boot under OVMF and validate behavior via deterministic serial markers.
 
 ```bash
-# Boot markers only
+# Fast “did it boot?” marker check
 ./scripts/test-boot-headless.sh
 
-# “LLM inside RayOS” smoke test (in-guest local responder; no host bridge)
-./scripts/test-boot-local-ai-headless.sh
+# Full boot verification sweep
+./scripts/verify-boot.sh
 
-# Host AI bridge smoke test (requires building/running conductor ai_bridge)
-./scripts/test-boot-ai-headless.sh
+# Hypervisor/VMM bring-up smoke (VMX bring-up + selftests)
+./scripts/test-vmm-hypervisor-boot.sh
 
-# Cortex protocol smoke test (injects via shell passthrough)
-./scripts/test-boot-cortex-headless.sh
+# Boot Linux headless under the in-OS VMM (guest-ready marker)
+./scripts/test-vmm-linux-guest-headless.sh
 
-# End-to-end Cortex daemon -> guest -> kernel test
-./scripts/test-boot-cortex-daemon-headless.sh
+# Virtio-input validation inside Linux guest
+./scripts/test-vmm-linux-virtio-input-headless.sh
+./scripts/test-vmm-linux-virtio-input-e2e-headless.sh
+
+# Virtio-console guest-driven smoke (when VMX reaches VMCS_READY)
+./scripts/test-vmm-virtio-console-headless.sh
 ```
-
-## 🎓 Key Concepts
-
-### Bicameral Architecture
-
-- **System 1**: Fast, reactive, GPU-based (subconscious)
-- **System 2**: Slow, deliberative, LLM-based (conscious)
-- Both run simultaneously, feedback-coupled
-
-### Logic Rays
-
-Custom GPU compute abstraction representing thoughts/tasks that flow through the system. Persistent shader kernel processes them.
-
-### Ouroboros Loop
-
-Self-aware feedback where system monitors its own entropy and can trigger "dreams" to solve stuck states.
-
-### Dream Mode
-
-Autonomous problem-solving when system entropy is high. Uses System 2 (LLM) to generate novel solutions.
-
-## 🔍 Troubleshooting Guide
-
-### Problem: "Bootloader won't compile"
-
-→ Check [QUICKSTART.md](QUICKSTART.md) Troubleshooting section
 
 ### Problem: "ISO won't boot"
 

@@ -2162,34 +2162,81 @@ fn virtio_input_cfg_bitmap_size_and_byte(ev_type: u8, idx: u64) -> (u8, u8) {
             (1, b)
         }
         EV_KEY => {
-            // Advertise a small but useful set of keycodes that RayOS can generate today.
-            // Includes: ESC, 0-9, tab, backspace, enter, space, A-Z (subset), plus BTN_LEFT/BTN_RIGHT.
+            // Advertise the keycodes RayOS can generate (plus mouse buttons).
             // Keep size large enough for BTN_* (0x110+): bit index 0x110 => byte 34 bit 0.
-            let size: u8 = 35;
-            let b = match idx {
-                // Key range (low codes):
-                // - ESC (1) + KEY_1..KEY_6 (2..7)
-                0 => 0xFE,
-                // - KEY_7..KEY_0 (8..11) + BACKSPACE (14) + TAB (15)
-                1 => 0xCF,
-                // - QWERTY row: Q..I (16..23)
-                2 => 0xFF,
-                // - O,P (24..25) + ENTER (28) + A,S (30..31)
-                3 => 0xD3,
-                // - D..L (32..38)
-                4 => 0x7F,
-                // - Z,X,C,V (44..47)
-                5 => 0xF0,
-                // - B,N,M (48..50)
-                6 => 0x07,
-                // - SPACE (57)
-                7 => 0x02,
-                // Button range:
-                // - BTN_LEFT (0x110), BTN_RIGHT (0x111)
-                34 => 0x03,
-                _ => 0x00,
-            };
-            (size, b)
+            const SIZE: u8 = 35;
+
+            const KEYCODES: &[u16] = &[
+                // Core keys.
+                1,  // KEY_ESC
+                14, // KEY_BACKSPACE
+                15, // KEY_TAB
+                28, // KEY_ENTER
+                57, // KEY_SPACE
+
+                // Digits.
+                2, 3, 4, 5, 6, 7, 8, 9, 10, 11, // KEY_1..KEY_0
+
+                // Punctuation (US keyboard, unshifted).
+                12, // KEY_MINUS
+                13, // KEY_EQUAL
+                26, // KEY_LEFTBRACE
+                27, // KEY_RIGHTBRACE
+                39, // KEY_SEMICOLON
+                40, // KEY_APOSTROPHE
+                41, // KEY_GRAVE
+                43, // KEY_BACKSLASH
+                51, // KEY_COMMA
+                52, // KEY_DOT
+                53, // KEY_SLASH
+
+                // Letters.
+                16, 17, 18, 19, 20, 21, 22, 23, 24, 25, // Q..P
+                30, 31, 32, 33, 34, 35, 36, 37, 38,     // A..L
+                44, 45, 46, 47, 48, 49, 50,             // Z..M
+
+                // Modifiers.
+                29,  // KEY_LEFTCTRL
+                42,  // KEY_LEFTSHIFT
+                56,  // KEY_LEFTALT
+                58,  // KEY_CAPSLOCK
+                125, // KEY_LEFTMETA
+
+                // Function keys.
+                59, 60, 61, 62, 63, 64, 65, 66, 67, 68, // F1..F10
+                87, 88, // F11..F12
+
+                // Navigation.
+                102, // KEY_HOME
+                103, // KEY_UP
+                104, // KEY_PAGEUP
+                105, // KEY_LEFT
+                106, // KEY_RIGHT
+                107, // KEY_END
+                108, // KEY_DOWN
+                109, // KEY_PAGEDOWN
+                110, // KEY_INSERT
+                111, // KEY_DELETE
+
+                // Mouse buttons.
+                0x110, // BTN_LEFT
+                0x111, // BTN_RIGHT
+            ];
+
+            let idx_u8 = idx as u8;
+            if idx_u8 >= SIZE {
+                return (SIZE, 0);
+            }
+
+            let mut byte = 0u8;
+            for &code in KEYCODES.iter() {
+                let byte_index = (code / 8) as u8;
+                if byte_index == idx_u8 {
+                    let bit = 1u8 << (code % 8);
+                    byte |= bit;
+                }
+            }
+            (SIZE, byte)
         }
         _ => (0, 0),
     }
