@@ -404,6 +404,7 @@ pub mod ports {
 // CPUID instruction interface and CPU capability detection
 
 /// Raw CPUID output structure (EAX, EBX, ECX, EDX registers)
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct CpuidOutput {
     pub eax: u32,
@@ -639,23 +640,41 @@ impl CpuFeatures {
 }
 
 /// Execute CPUID instruction
-/// Note: rbx is a reserved register in LLVM. We work around this by
-/// using a helper that the compiler can inline properly.
-/// For now, we return a stub implementation that can be enhanced later
-/// when we have a working CPUID mechanism.
+/// We use global_asm to avoid LLVM's RBX register constraint issues
 #[inline]
 pub fn cpuid(leaf: u32) -> CpuidOutput {
-    // Stub implementation - in a real implementation, we would:
-    // 1. Use inline assembly with proper clobber handling
-    // 2. Or use the x86 crate which has this figured out
-    // For now, return zeros to indicate not available
-    CpuidOutput { 
-        eax: 0, 
-        ebx: 0, 
-        ecx: 0, 
-        edx: 0 
+    let mut result = CpuidOutput { eax: 0, ebx: 0, ecx: 0, edx: 0 };
+    
+    // Call the assembly helper
+    unsafe {
+        cpuid_asm(leaf, &mut result);
     }
+    
+    result
 }
+
+/// Assembly helper for CPUID instruction
+/// This avoids LLVM's RBX register constraints by implementing in pure assembly
+extern "C" {
+    fn cpuid_asm(leaf: u32, output: *mut CpuidOutput);
+}
+
+// Inline assembly implementation of CPUID
+global_asm!(r#"
+.global cpuid_asm
+cpuid_asm:
+    // Arguments: rdi = leaf, rsi = output pointer
+    push rbx
+    mov eax, edi
+    xor ecx, ecx
+    cpuid
+    mov [rsi], eax
+    mov [rsi + 4], ebx
+    mov [rsi + 8], ecx
+    mov [rsi + 12], edx
+    pop rbx
+    ret
+"#);
 
 fn serial_init() {
     unsafe {
