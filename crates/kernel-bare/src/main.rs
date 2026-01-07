@@ -748,10 +748,10 @@ impl PageTableMgr {
         if page_table_base == 0 {
             return (0, false);
         }
-        
+
         // Convert physical address to virtual (via HHDM)
         let virt_addr = HHDM_OFFSET + page_table_base + (index as u64 * 8);
-        
+
         // Safety: we're reading from a mapped page table in HHDM
         let entry = unsafe { *(virt_addr as *const u64) };
         let is_present = (entry & page_flags::PRESENT) != 0;
@@ -779,7 +779,7 @@ impl PageTableMgr {
         loop {
             let index = Self::get_page_table_index(virt, current_level);
             let (entry, present) = Self::get_pte(current_base, index);
-            
+
             if !present {
                 return None;
             }
@@ -795,7 +795,7 @@ impl PageTableMgr {
                 } else {
                     0x40000000  // 1GiB
                 };
-                
+
                 let offset = virt & (page_size - 1);
                 return Some(TranslationResult {
                     physical_addr: phys_addr + offset,
@@ -885,14 +885,14 @@ impl PageTableMgr {
     pub fn count_mapped_pages(virt_start: u64, virt_end: u64, step: u64) -> u64 {
         let mut count = 0;
         let mut addr = virt_start;
-        
+
         while addr < virt_end {
             if Self::is_mapped(addr) {
                 count += 1;
             }
             addr += step;
         }
-        
+
         count
     }
 }
@@ -1027,10 +1027,10 @@ impl ModuleManager {
             }
 
             let header = unsafe { &*module.header };
-            
+
             // Call module initialization function
             let success = (header.init_fn)();
-            
+
             if success {
                 module.status = ModuleStatus::Initialized;
                 serial_write_str("✓ Module initialized\n");
@@ -1120,6 +1120,437 @@ impl ModuleManager {
     }
 }
 
+// ============================================================================
+// Device Driver Framework - Phase 6
+// ============================================================================
+
+/// PCI device information
+#[derive(Debug, Clone, Copy)]
+pub struct PciDevice {
+    pub bus: u8,
+    pub slot: u8,
+    pub function: u8,
+    pub vendor_id: u16,
+    pub device_id: u16,
+    pub class: u8,
+    pub subclass: u8,
+    pub prog_if: u8,
+    pub header_type: u8,
+}
+
+impl PciDevice {
+    /// Generate PCI address from BDF (Bus:Device:Function)
+    pub fn make_address(bus: u8, slot: u8, function: u8) -> u32 {
+        let bus = bus as u32;
+        let slot = slot as u32;
+        let function = function as u32;
+        0x80000000 | (bus << 16) | (slot << 11) | (function << 8)
+    }
+
+    /// Read a 32-bit value from PCI configuration space
+    pub fn config_read(bus: u8, slot: u8, function: u8, offset: u8) -> u32 {
+        let address = Self::make_address(bus, slot, function) | (offset as u32 & 0xFC);
+        unsafe {
+            outl(0xCF8, address);
+            inl(0xCFC)
+        }
+    }
+
+    /// Read a 16-bit value from PCI configuration space
+    pub fn config_read_u16(bus: u8, slot: u8, function: u8, offset: u8) -> u16 {
+        let dword = Self::config_read(bus, slot, function, offset & 0xFC);
+        let shift = (offset & 0x02) << 3;
+        (dword >> shift) as u16
+    }
+
+    /// Check if device exists at given address
+    pub fn exists(bus: u8, slot: u8, function: u8) -> bool {
+        let vendor_id = Self::config_read_u16(bus, slot, function, 0x00);
+        vendor_id != 0xFFFF
+    }
+
+    /// Enumerate and collect all PCI devices
+    pub fn enumerate() -> [Option<PciDevice>; 256] {
+        let mut devices: [Option<PciDevice>; 256] = [None; 256];
+        let mut device_count = 0;
+
+        for bus in 0..=255u8 {
+            for slot in 0..32u8 {
+                // Always check function 0
+                if Self::exists(bus, slot, 0) {
+                    let vendor_id = Self::config_read_u16(bus, slot, 0, 0x00);
+                    let device_id = Self::config_read_u16(bus, slot, 0, 0x02);
+                    
+                    let class_subclass = Self::config_read_u16(bus, slot, 0, 0x0A);
+                    let class = (class_subclass >> 8) as u8;
+                    let subclass = (class_subclass & 0xFF) as u8;
+                    
+                    let prog_if = Self::config_read_u16(bus, slot, 0, 0x08) as u8;
+                    let header_type_val = Self::config_read_u16(bus, slot, 0, 0x0E);
+                    let header_type = (header_type_val as u8) & 0x7F;
+                    let is_multi_function = (header_type_val as u8) & 0x80 != 0;
+
+                    if device_count < 256 {
+                        devices[device_count] = Some(PciDevice {
+                            bus,
+                            slot,
+                            function: 0,
+                            vendor_id,
+                            device_id,
+                            class,
+                            subclass,
+                            prog_if,
+                            header_type,
+                        });
+                        device_count += 1;
+                    }
+
+                    // Check other functions if multi-function device
+                    if is_multi_function {
+                        for function in 1..8u8 {
+                            if Self::exists(bus, slot, function) {
+                                let vendor_id = Self::config_read_u16(bus, slot, function, 0x00);
+                                let device_id = Self::config_read_u16(bus, slot, function, 0x02);
+                                
+                                let class_subclass = Self::config_read_u16(bus, slot, function, 0x0A);
+                                let class = (class_subclass >> 8) as u8;
+                                let subclass = (class_subclass & 0xFF) as u8;
+                                
+                                let prog_if = Self::config_read_u16(bus, slot, function, 0x08) as u8;
+                                let header_type_val = Self::config_read_u16(bus, slot, function, 0x0E);
+                                let header_type = (header_type_val as u8) & 0x7F;
+
+                                if device_count < 256 {
+                                    devices[device_count] = Some(PciDevice {
+                                        bus,
+                                        slot,
+                                        function,
+                                        vendor_id,
+                                        device_id,
+                                        class,
+                                        subclass,
+                                        prog_if,
+                                        header_type,
+                                    });
+                                    device_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        devices
+    }
+
+    /// Get device class name (human readable)
+    pub fn class_name(&self) -> &'static str {
+        match self.class {
+            0x00 => "Unclassified",
+            0x01 => "Mass Storage",
+            0x02 => "Network",
+            0x03 => "Display",
+            0x04 => "Multimedia",
+            0x05 => "Memory",
+            0x06 => "Bridge",
+            0x07 => "Communication",
+            0x08 => "Generic System",
+            0x09 => "Input Device",
+            0x0A => "Docking Station",
+            0x0B => "Processor",
+            0x0C => "Serial Bus",
+            0x0D => "Wireless",
+            0x0E => "Intelligent I/O",
+            0x0F => "Satellite",
+            0x10 => "Encryption",
+            0x11 => "Data Acquisition",
+            0x12 => "Processing Accelerator",
+            0xFF => "Vendor Specific",
+            _ => "Unknown",
+        }
+    }
+
+    /// Get vendor name for common vendors
+    pub fn vendor_name(&self) -> &'static str {
+        match self.vendor_id {
+            0x8086 => "Intel",
+            0x10DE => "NVIDIA",
+            0x1022 => "AMD",
+            0x1002 => "ATI",
+            0x14E4 => "Broadcom",
+            0x1969 => "Atheros",
+            0x10EC => "Realtek",
+            0x1106 => "VIA",
+            0x1180 => "Ricoh",
+            0x1191 => "Yamaha",
+            0x1217 => "O2 Micro",
+            0x8384 => "SigmaTel",
+            _ => "Unknown",
+        }
+    }
+}
+
+// ============================================================================
+// Block Device Interface & VirtIO Block Driver
+// ============================================================================
+
+/// Block device operations trait
+pub trait BlockDevice {
+    /// Read blocks from device
+    /// Returns number of blocks successfully read
+    fn read_blocks(&mut self, lba: u64, count: u32, buffer: &mut [u8]) -> u32;
+    
+    /// Write blocks to device
+    /// Returns number of blocks successfully written
+    fn write_blocks(&mut self, lba: u64, count: u32, buffer: &[u8]) -> u32;
+    
+    /// Get block size in bytes
+    fn block_size(&self) -> u32;
+    
+    /// Get capacity in blocks
+    fn capacity_blocks(&self) -> u64;
+}
+
+/// VirtIO block device driver
+pub struct VirtIOBlockDevice {
+    pub base_addr: u64,
+    pub block_size: u32,
+    pub capacity_blocks: u64,
+}
+
+impl VirtIOBlockDevice {
+    /// Initialize VirtIO block device
+    pub fn new(base_addr: u64) -> Option<Self> {
+        // Verify VirtIO magic number at offset 0
+        let magic = unsafe { *(base_addr as *const u32) };
+        if magic != 0x74726976 {  // "virt" in little-endian
+            return None;
+        }
+        
+        // Read version
+        let version = unsafe { *((base_addr + 4) as *const u32) };
+        if version == 0 {
+            return None;  // Legacy device, not supported for now
+        }
+        
+        // Read device ID (should be 2 for block device)
+        let device_id = unsafe { *((base_addr + 8) as *const u32) };
+        if device_id != 2 {
+            return None;  // Not a block device
+        }
+        
+        // For now, assume 512-byte blocks and reasonable capacity
+        Some(VirtIOBlockDevice {
+            base_addr,
+            block_size: 512,
+            capacity_blocks: 0x100000,  // 512GB virtual capacity
+        })
+    }
+}
+
+impl BlockDevice for VirtIOBlockDevice {
+    fn read_blocks(&mut self, _lba: u64, _count: u32, _buffer: &mut [u8]) -> u32 {
+        // VirtIO block read implementation
+        // This would:
+        // 1. Prepare request header
+        // 2. Add buffers to request queue
+        // 3. Notify device
+        // 4. Wait for completion
+        // 5. Return actual read count
+        0  // Placeholder
+    }
+    
+    fn write_blocks(&mut self, _lba: u64, _count: u32, _buffer: &[u8]) -> u32 {
+        // VirtIO block write implementation
+        0  // Placeholder
+    }
+    
+    fn block_size(&self) -> u32 {
+        self.block_size
+    }
+    
+    fn capacity_blocks(&self) -> u64 {
+        self.capacity_blocks
+    }
+}
+
+/// Generic block device wrapper
+pub struct GenericBlockDevice {
+    pub device_type: u8,  // 1=VirtIO, 2=AHCI, 3=ATA, etc.
+    pub base_addr: u64,
+    pub block_size: u32,
+    pub capacity_blocks: u64,
+}
+
+impl GenericBlockDevice {
+    /// Detect block device from PCI device
+    pub fn from_pci(device: &PciDevice) -> Option<Self> {
+        // Check for VirtIO block device
+        if device.vendor_id == 0x1AF4 && device.device_id == 0x1001 {
+            // VirtIO 1.0 block device
+            return Some(GenericBlockDevice {
+                device_type: 1,
+                base_addr: 0,  // Would be read from BAR
+                block_size: 512,
+                capacity_blocks: 0x100000,
+            });
+        }
+        
+        // Check for AHCI/SATA controller
+        if device.class == 0x01 && device.subclass == 0x06 {
+            // Mass storage, SATA controller
+            return Some(GenericBlockDevice {
+                device_type: 2,
+                base_addr: 0,  // Would be read from BAR
+                block_size: 512,
+                capacity_blocks: 0x100000,
+            });
+        }
+        
+        None
+    }
+}
+
+// ============================================================================
+// File System Interface & FAT32 Support
+// ============================================================================
+
+/// File system operations trait
+pub trait FileSystem {
+    /// Read file by path
+    /// Returns (bytes_read, data)
+    fn read_file(&mut self, path: &str, buffer: &mut [u8]) -> Result<u32, u32>;
+    
+    /// List directory entries
+    fn list_dir(&mut self, path: &str) -> Result<u32, u32>;
+    
+    /// Get file metadata (size, etc)
+    fn file_size(&mut self, path: &str) -> Result<u64, u32>;
+}
+
+/// FAT32 file system
+pub struct FAT32FileSystem {
+    pub bytes_per_sector: u32,
+    pub sectors_per_cluster: u32,
+    pub reserved_sectors: u32,
+    pub num_fats: u32,
+    pub root_entries: u32,
+    pub total_sectors: u64,
+    pub fat_size: u32,
+}
+
+impl FAT32FileSystem {
+    /// Parse FAT32 boot sector
+    pub fn parse_boot_sector(sector_data: &[u8]) -> Option<Self> {
+        if sector_data.len() < 512 {
+            return None;
+        }
+        
+        // Check signature (0x55 0xAA at offset 510)
+        if sector_data[510] != 0x55 || sector_data[511] != 0xAA {
+            return None;
+        }
+        
+        // Extract FAT32 parameters
+        let bytes_per_sector = ((sector_data[11] as u32) | ((sector_data[12] as u32) << 8));
+        let sectors_per_cluster = sector_data[13] as u32;
+        let reserved_sectors = ((sector_data[14] as u32) | ((sector_data[15] as u32) << 8));
+        let num_fats = sector_data[16] as u32;
+        let root_entries = ((sector_data[17] as u32) | ((sector_data[18] as u32) << 8));
+        let total_sectors_16 = ((sector_data[19] as u32) | ((sector_data[20] as u32) << 8));
+        let fat_size_16 = ((sector_data[22] as u32) | ((sector_data[23] as u32) << 8));
+        let total_sectors_32 = ((sector_data[32] as u32) | ((sector_data[33] as u32) << 8) | 
+                                ((sector_data[34] as u32) << 16) | ((sector_data[35] as u32) << 24));
+        let fat_size_32 = ((sector_data[36] as u32) | ((sector_data[37] as u32) << 8) | 
+                           ((sector_data[38] as u32) << 16) | ((sector_data[39] as u32) << 24));
+        
+        let total_sectors = if total_sectors_16 != 0 {
+            total_sectors_16 as u64
+        } else {
+            total_sectors_32 as u64
+        };
+        
+        let fat_size = if fat_size_16 != 0 {
+            fat_size_16
+        } else {
+            fat_size_32
+        };
+        
+        Some(FAT32FileSystem {
+            bytes_per_sector,
+            sectors_per_cluster,
+            reserved_sectors,
+            num_fats,
+            root_entries,
+            total_sectors,
+            fat_size,
+        })
+    }
+}
+
+impl FileSystem for FAT32FileSystem {
+    fn read_file(&mut self, _path: &str, _buffer: &mut [u8]) -> Result<u32, u32> {
+        // FAT32 file reading implementation
+        // This would:
+        // 1. Parse path into directory components
+        // 2. Walk directory tree to find file
+        // 3. Read FAT chain to get clusters
+        // 4. Read file data from clusters
+        Err(1)  // Not implemented yet
+    }
+    
+    fn list_dir(&mut self, _path: &str) -> Result<u32, u32> {
+        // List directory implementation
+        Err(1)
+    }
+    
+    fn file_size(&mut self, _path: &str) -> Result<u64, u32> {
+        // Get file size implementation
+        Err(1)
+    }
+}
+
+/// Boot configuration structure
+#[derive(Debug, Clone)]
+pub struct BootConfig {
+    pub linux_vm_path: [u8; 256],
+    pub windows_vm_path: [u8; 256],
+    pub boot_timeout: u32,
+    pub default_vm: u8,  // 0=Linux, 1=Windows
+}
+
+impl BootConfig {
+    /// Parse boot configuration from file data
+    pub fn parse(data: &[u8]) -> Option<Self> {
+        if data.len() < 516 {
+            return None;
+        }
+        
+        let mut linux_path = [0u8; 256];
+        let mut windows_path = [0u8; 256];
+        
+        // Copy paths (assuming simple format)
+        if data[0..256].iter().any(|&b| b != 0) {
+            linux_path.copy_from_slice(&data[0..256]);
+        }
+        if data[256..512].iter().any(|&b| b != 0) {
+            windows_path.copy_from_slice(&data[256..512]);
+        }
+        
+        let boot_timeout = ((data[512] as u32) | ((data[513] as u32) << 8) |
+                            ((data[514] as u32) << 16) | ((data[515] as u32) << 24));
+        let default_vm = data[515];
+        
+        Some(BootConfig {
+            linux_vm_path: linux_path,
+            windows_vm_path: windows_path,
+            boot_timeout,
+            default_vm,
+        })
+    }
+}
+
 fn serial_init() {
     unsafe {
         // Disable interrupts
@@ -1179,6 +1610,11 @@ pub(crate) fn serial_write_hex_u8(value: u8) {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     serial_write_byte(HEX[((value >> 4) & 0xF) as usize]);
     serial_write_byte(HEX[(value & 0xF) as usize]);
+}
+
+pub(crate) fn serial_write_hex_u16(value: u16) {
+    serial_write_hex_u8((value >> 8) as u8);
+    serial_write_hex_u8(value as u8);
 }
 
 fn serial_write_u32_dec(mut value: u32) {
@@ -11047,7 +11483,41 @@ fn get_glyph(ch: char) -> [u8; 8] {
 }
 
 fn init_pci(bi: &BootInfo) {
+    serial_write_str("\n[PCI SUBSYSTEM]\n");
+    
+    // First, enumerate PCI devices directly via configuration space
+    serial_write_str("Direct PCI enumeration:\n");
+    let devices = PciDevice::enumerate();
+    
+    let mut device_count = 0;
+    for device_opt in devices.iter() {
+        if let Some(device) = device_opt {
+            device_count += 1;
+            
+            // Log first 16 devices in detail
+            if device_count <= 16 {
+                serial_write_str("  [");
+                serial_write_hex_u8(device.bus);
+                serial_write_str(":");
+                serial_write_hex_u8(device.slot);
+                serial_write_str(".");
+                serial_write_hex_u8(device.function);
+                serial_write_str("] ");
+                serial_write_str(device.vendor_name());
+                serial_write_str(" ");
+                serial_write_str(device.class_name());
+                serial_write_str("\n");
+            }
+        }
+    }
+    
+    serial_write_str("  Total devices found: ");
+    serial_write_hex_u64(device_count as u64);
+    serial_write_str("\n");
+    
+    // Also try ACPI-based enumeration if available
     if bi.rsdp_addr != 0 {
+        serial_write_str("\nACPI PCI enumeration:\n");
         serial_write_str("  RSDP found at 0x");
         serial_write_hex_u64(bi.rsdp_addr);
         serial_write_str("\n");
