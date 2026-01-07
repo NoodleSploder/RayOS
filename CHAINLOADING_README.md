@@ -10,12 +10,12 @@ The selection is based on a `installer_mode` flag in `/EFI/RAYOS/registry.json`.
 
 ## Key Features
 
-✓ **Automatic Mode Detection** - Reads registry.json to determine boot mode  
-✓ **Flat Binary Support** - Loads installer without ELF parsing  
-✓ **Fallback Safety** - Gracefully falls back to kernel if installer unavailable  
-✓ **No Memory Overhead** - Stack-allocated buffers, no heap fragmentation  
-✓ **Complete Documentation** - Architecture, deployment, and troubleshooting guides  
-✓ **Comprehensive Testing** - All unit and integration tests passing  
+✓ **Automatic Mode Detection** - Reads registry.json to determine boot mode
+✓ **Flat Binary Support** - Loads installer without ELF parsing
+✓ **Fallback Safety** - Gracefully falls back to kernel if installer unavailable
+✓ **No Memory Overhead** - Stack-allocated buffers, no heap fragmentation
+✓ **Complete Documentation** - Architecture, deployment, and troubleshooting guides
+✓ **Comprehensive Testing** - All unit and integration tests passing
 
 ## Test Results
 
@@ -187,6 +187,6 @@ For issues or questions:
 
 ---
 
-**Completed**: January 7, 2026  
-**Test Status**: ✓ All Tests Passing  
+**Completed**: January 7, 2026
+**Test Status**: ✓ All Tests Passing
 **Ready for**: Hardware Testing / Deployment

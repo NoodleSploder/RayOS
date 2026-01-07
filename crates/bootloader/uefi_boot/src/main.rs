@@ -626,7 +626,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
                 .write_str("RayOS uefi_boot: loading kernel...\n");
         }
         draw_text(60, 240, "Loading kernel binary...", 0xff_ff_00);
-        
+
         match read_kernel_binary(bt, image_handle) {
             Ok((entry, data, size)) => {
                 draw_text(60, 260, "Kernel loaded", 0x00_ff_00);

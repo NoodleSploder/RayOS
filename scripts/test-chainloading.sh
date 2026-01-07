@@ -16,7 +16,7 @@ echo
 echo "[Test 1] Checking boot media for required binaries..."
 if [ -f "$BUILD_DIR/rayos-installer.iso" ]; then
     echo "✓ ISO found at $BUILD_DIR/rayos-installer.iso"
-    
+
     # Use xorriso to list ISO contents
     if command -v xorriso &>/dev/null; then
         echo "  Checking ISO contents with xorriso..."
@@ -150,7 +150,7 @@ if [ -f "$UEFI_BOOT" ]; then
     SIZE=$(stat -f%z "$UEFI_BOOT" 2>/dev/null || stat -c%s "$UEFI_BOOT" 2>/dev/null)
     SIZE_KB=$((SIZE / 1024))
     echo "✓ uefi_boot.efi: ${SIZE_KB}KB"
-    
+
     if [ $SIZE_KB -gt 100 ]; then
         echo "✓ Bootloader size is reasonable for chainloading support"
     else

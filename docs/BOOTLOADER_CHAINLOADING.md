@@ -328,6 +328,6 @@ For issues, see:
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: 2026-01-07  
+**Document Version**: 1.0
+**Last Updated**: 2026-01-07
 **Status**: Complete - Chainloading implementation verified and tested
