@@ -47,22 +47,36 @@ fn init_boot_info(boot_info_phys: u64) {
 #[inline(always)]
 fn init_idt() {
     // Install a minimal IDT that supports timer + keyboard interrupts and key exceptions.
+    serial_write_str("  [IDT] Installing interrupt and exception handlers...\n");
     cli();
     unsafe {
-        idt_set_gate(TIMER_VECTOR, isr_timer as *const () as u64);
-        idt_set_gate(KEYBOARD_VECTOR, isr_keyboard as *const () as u64);
-
+        // Exception handlers
         idt_set_gate(UD_VECTOR, isr_invalid_opcode as *const () as u64);
+        serial_write_str("    ✓ Invalid Opcode (#UD, vector 6) handler registered\n");
+        
         idt_set_gate(PF_VECTOR, isr_page_fault as *const () as u64);
+        serial_write_str("    ✓ Page Fault (#PF, vector 14) handler registered\n");
+        
         idt_set_gate(GP_VECTOR, isr_general_protection as *const () as u64);
+        serial_write_str("    ✓ General Protection (#GP, vector 13) handler registered\n");
+        
         idt_set_gate_ist(
             DF_VECTOR,
             isr_double_fault as *const () as u64,
             DF_IST_INDEX,
         );
+        serial_write_str("    ✓ Double Fault (#DF, vector 8) handler registered (IST stack)\n");
+        
+        // Interrupt handlers
+        idt_set_gate(TIMER_VECTOR, isr_timer as *const () as u64);
+        serial_write_str("    ✓ Timer Interrupt (IRQ0, vector 32) handler registered\n");
+        
+        idt_set_gate(KEYBOARD_VECTOR, isr_keyboard as *const () as u64);
+        serial_write_str("    ✓ Keyboard Interrupt (IRQ1, vector 33) handler registered\n");
 
         lidt();
     }
+    serial_write_str("  [IDT] IDT loaded into IDTR\n");
 }
 
 #[inline(always)]
@@ -4400,41 +4414,89 @@ fn ioapic_set_redir(gsi: u32, vector: u8, dest_apic_id: u8, flags: u16) {
 
 #[no_mangle]
 extern "C" fn page_fault_handler(error_code: u64, rip: u64, cr2: u64) -> ! {
-    serial_write_str("EXC PF err=0x");
+    // Page Fault exception (#PF, vector 14)
+    // Error code bits: P=0x1 (present), W=0x2 (write), U=0x4 (user-mode), 
+    //                  R=0x8 (reserved), I=0x10 (instruction fetch)
+    serial_write_str("\n=== PAGE FAULT EXCEPTION ===\n");
+    serial_write_str("Error Code: 0x");
     serial_write_hex_u64(error_code);
-    serial_write_str(" rip=0x");
+    serial_write_str(" (");
+    if error_code & 0x1 != 0 { serial_write_str("P "); }  // Protection violation
+    if error_code & 0x2 != 0 { serial_write_str("W "); }  // Write
+    if error_code & 0x4 != 0 { serial_write_str("U "); }  // User-mode
+    if error_code & 0x8 != 0 { serial_write_str("R "); }  // Reserved bit
+    if error_code & 0x10 != 0 { serial_write_str("I "); } // Instr. fetch
+    serial_write_str(")\n");
+    
+    serial_write_str("Instruction Pointer (RIP): 0x");
     serial_write_hex_u64(rip);
-    serial_write_str(" cr2=0x");
+    serial_write_str("\n");
+    
+    serial_write_str("Faulting Address (CR2):   0x");
     serial_write_hex_u64(cr2);
     serial_write_str("\n");
+    
+    serial_write_str("Status: Halting system\n");
+    serial_write_str("===========================\n\n");
     halt_forever();
 }
 
 #[no_mangle]
 extern "C" fn general_protection_handler(error_code: u64, rip: u64) -> ! {
-    serial_write_str("EXC GP err=0x");
+    // General Protection Fault exception (#GP, vector 13)
+    // Error code: selector index in upper 16 bits, TI/EXT bits in lower 3 bits
+    let selector = (error_code >> 3) & 0x1FFF;
+    let ti_bit = error_code & 0x4;
+    let ext_bit = error_code & 0x1;
+    
+    serial_write_str("\n=== GENERAL PROTECTION FAULT ===\n");
+    serial_write_str("Error Code: 0x");
     serial_write_hex_u64(error_code);
-    serial_write_str(" rip=0x");
+    serial_write_str(" (Selector: 0x");
+    serial_write_hex_u64(selector);
+    if ti_bit != 0 { serial_write_str(", LDT"); } else { serial_write_str(", GDT"); }
+    if ext_bit != 0 { serial_write_str(", External"); }
+    serial_write_str(")\n");
+    
+    serial_write_str("Instruction Pointer (RIP): 0x");
     serial_write_hex_u64(rip);
     serial_write_str("\n");
+    
+    serial_write_str("Status: Halting system\n");
+    serial_write_str("==================================\n\n");
     halt_forever();
 }
 
 #[no_mangle]
 extern "C" fn double_fault_handler(error_code: u64, rip: u64) -> ! {
-    serial_write_str("EXC DF err=0x");
+    // Double Fault exception (#DF, vector 8)
+    // This is a critical exception - indicates exception handler itself faulted
+    serial_write_str("\n!!! DOUBLE FAULT EXCEPTION (CRITICAL) !!!\n");
+    serial_write_str("Error Code: 0x");
     serial_write_hex_u64(error_code);
-    serial_write_str(" rip=0x");
+    serial_write_str(" (always 0)\n");
+    
+    serial_write_str("Instruction Pointer (RIP): 0x");
     serial_write_hex_u64(rip);
     serial_write_str("\n");
+    
+    serial_write_str("Status: System is in unrecoverable state, halting immediately\n");
+    serial_write_str("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n");
     halt_forever();
 }
 
 #[no_mangle]
 extern "C" fn invalid_opcode_handler(rip: u64) -> ! {
-    serial_write_str("EXC UD rip=0x");
+    // Invalid Opcode exception (#UD, vector 6)
+    // Triggered when CPU encounters undefined/reserved opcode
+    serial_write_str("\n=== INVALID OPCODE EXCEPTION ===\n");
+    serial_write_str("Instruction Pointer (RIP): 0x");
     serial_write_hex_u64(rip);
     serial_write_str("\n");
+    
+    serial_write_str("Reason: CPU encountered undefined or reserved instruction\n");
+    serial_write_str("Status: Halting system\n");
+    serial_write_str("=================================\n\n");
     halt_forever();
 }
 
@@ -7160,7 +7222,51 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
     sti();
 
     init_memory();
+    
+    // Optional: Test exception handlers (disabled by default)
+    // Uncomment to test specific exception:
+    // test_page_fault();       // #PF - Page Fault
+    // test_general_protection(); // #GP - General Protection Fault
+    // test_invalid_opcode();    // #UD - Invalid Opcode
+    
     kernel_main()
+}
+
+// Test function for Page Fault exception
+#[allow(dead_code)]
+fn test_page_fault() {
+    serial_write_str("\n[TEST] Triggering Page Fault exception...\n");
+    unsafe {
+        // Attempt to dereference null pointer
+        let ptr: *const u64 = core::ptr::null();
+        let _value = *ptr;  // This will trigger #PF
+    }
+    // Never reached
+    halt_forever();
+}
+
+// Test function for General Protection Fault exception
+#[allow(dead_code)]
+fn test_general_protection() {
+    serial_write_str("\n[TEST] Triggering General Protection Fault exception...\n");
+    unsafe {
+        // Load invalid segment descriptor
+        asm!("mov ax, 0x0; mov es, ax;");  // Selector 0x0 is invalid
+    }
+    // Never reached
+    halt_forever();
+}
+
+// Test function for Invalid Opcode exception
+#[allow(dead_code)]
+fn test_invalid_opcode() {
+    serial_write_str("\n[TEST] Triggering Invalid Opcode exception...\n");
+    unsafe {
+        // Execute undefined opcode
+        asm!(".byte 0x0f, 0x0b;");  // UD2 - undefined instruction
+    }
+    // Never reached
+    halt_forever();
 }
 
 fn kernel_main() -> ! {
@@ -9609,14 +9715,14 @@ fn init_memory() {
     // This avoids depending on paging/HHDM/physical allocator state.
     let heap_ptr = unsafe { HEAP.0.as_ptr() as usize };
     HEAP_ALLOCATOR.lock().init(heap_ptr, HEAP_SIZE);
-    
+
     // Verify allocator is working
     serial_write_str("[MEM] Heap allocator initialized at 0x");
     serial_write_hex_u64(heap_ptr as u64);
     serial_write_str(" (size: ");
     serial_write_hex_u64(HEAP_SIZE as u64);
     serial_write_str(" bytes)\n");
-    
+
     // Test allocation
     if let Some(test_ptr) = kalloc(64, 8) {
         serial_write_str("[MEM] Test allocation successful: 0x");
@@ -9625,7 +9731,7 @@ fn init_memory() {
     } else {
         serial_write_str("[MEM] WARNING: Test allocation failed\n");
     }
-    
+
     let (used, total, pages) = memory_stats();
     serial_write_str("[MEM] Stats: ");
     serial_write_hex_u64(used as u64);
