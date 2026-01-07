@@ -18,8 +18,19 @@ echo "RayOS Installer Provisioning Pipeline"
 echo "========================================="
 echo
 
+# Stage 0: Build bootloader
+echo "[0/6] Building bootloader..."
+if (cd "$REPO_ROOT/crates/bootloader" && rustup run nightly-2024-11-01 cargo build --release --target x86_64-unknown-uefi 2>&1 | grep -q "Finished"); then
+  BOOTLOADER_SIZE=$(du -sh "$REPO_ROOT/crates/bootloader/target/x86_64-unknown-uefi/release/uefi_boot.efi" | cut -f1)
+  echo "✓ Bootloader built ($BOOTLOADER_SIZE)"
+else
+  echo "✗ Failed to build bootloader"
+  exit 1
+fi
+echo
+
 # Stage 1: Build system image
-echo "[1/5] Building system image..."
+echo "[1/6] Building system image..."
 if "$SCRIPT_DIR/build-system-image.sh" > /dev/null 2>&1; then
   SYSTEM_IMAGE_SIZE=$(du -sh "$BUILD_DIR/rayos-system-image.tar.gz" | cut -f1)
   echo "✓ System image built ($SYSTEM_IMAGE_SIZE)"
@@ -30,7 +41,7 @@ fi
 echo
 
 # Stage 2: Build installer binary
-echo "[2/5] Building installer binary..."
+echo "[2/6] Building installer binary..."
 if (cd "$REPO_ROOT/crates/installer" && cargo build --release 2>&1 | grep -q "Finished"); then
   INSTALLER_SIZE=$(du -sh "$REPO_ROOT/crates/installer/target/release/rayos-installer" | cut -f1)
   echo "✓ Installer binary built ($INSTALLER_SIZE)"
@@ -41,7 +52,7 @@ fi
 echo
 
 # Stage 3: Build installer media
-echo "[3/5] Building installer media (ISO/USB)..."
+echo "[3/6] Building installer media (ISO/USB)..."
 if "$SCRIPT_DIR/build-installer-media.sh" > /dev/null 2>&1; then
   ISO_SIZE=$(du -sh "$BUILD_DIR/rayos-installer.iso" | cut -f1)
   USB_SIZE=$(du -sh "$BUILD_DIR/rayos-installer-usb.img" | cut -f1)
@@ -55,7 +66,7 @@ fi
 echo
 
 # Stage 4: Run all validation tests
-echo "[4/5] Running validation tests..."
+echo "[4/6] Running validation tests..."
 TESTS_PASSED=0
 TESTS_TOTAL=0
 
@@ -97,7 +108,7 @@ fi
 echo
 
 # Stage 5: Create deployment package
-echo "[5/5] Creating deployment package..."
+echo "[5/6] Creating deployment package..."
 PACKAGE_DIR="$BUILD_DIR/rayos-installer-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$PACKAGE_DIR"
 
@@ -106,6 +117,7 @@ cp "$BUILD_DIR/rayos-installer.iso" "$PACKAGE_DIR/"
 cp "$BUILD_DIR/rayos-installer-usb.img" "$PACKAGE_DIR/"
 cp "$BUILD_DIR/rayos-system-image.tar.gz" "$PACKAGE_DIR/"
 cp "$REPO_ROOT/crates/installer/target/release/rayos-installer" "$PACKAGE_DIR/rayos-installer.bin"
+cp "$REPO_ROOT/crates/bootloader/target/x86_64-unknown-uefi/release/uefi_boot.efi" "$PACKAGE_DIR/bootloader.efi"
 
 # Create README
 cat > "$PACKAGE_DIR/README.md" << 'PACKAGE_README'

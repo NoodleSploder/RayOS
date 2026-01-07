@@ -488,7 +488,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
                 false
             }
         }
-        Err(e) => {
+        Err(_e) => {
             unsafe {
                 let _ = (*st_ptr)
                     .stdout()

@@ -35,8 +35,12 @@ if [ -f "$BUILD_DIR/boot-fat/EFI/BOOT/BOOTX64.EFI" ]; then
   mkdir -p "$SYSTEM_IMAGE_DIR/EFI/BOOT"
   cp "$BUILD_DIR/boot-fat/EFI/BOOT/BOOTX64.EFI" "$SYSTEM_IMAGE_DIR/EFI/BOOT/BOOTX64.EFI"
   echo "  ✓ Bootloader copied"
+elif [ -f "$REPO_ROOT/crates/bootloader/target/x86_64-unknown-uefi/release/uefi_boot.efi" ]; then
+  mkdir -p "$SYSTEM_IMAGE_DIR/EFI/BOOT"
+  cp "$REPO_ROOT/crates/bootloader/target/x86_64-unknown-uefi/release/uefi_boot.efi" "$SYSTEM_IMAGE_DIR/EFI/BOOT/BOOTX64.EFI"
+  echo "  ✓ Compiled bootloader copied"
 else
-  echo "  ⚠ Bootloader not found"
+  echo "  ⚠ Bootloader not found in build/ or compiled binaries"
 fi
 
 echo "[4] Creating system metadata..."
