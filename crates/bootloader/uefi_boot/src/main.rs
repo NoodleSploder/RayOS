@@ -18,6 +18,9 @@ use uefi::table::cfg::{ACPI2_GUID, ACPI_GUID};
 
 use uefi::table::runtime::Time;
 
+// Installer invocation support
+mod installer;
+
 #[repr(C)]
 struct BootMemoryDescriptor {
     ty: u32,
@@ -468,6 +471,42 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
             VOLUME_BLOB_PTR = volume_ptr;
             VOLUME_BLOB_SIZE = volume_size;
         }
+    }
+
+    // Check if installer mode is requested
+    let installer_mode = match check_installer_mode(bt, image_handle) {
+        Ok(mode) => {
+            if mode {
+                unsafe {
+                    let _ = (*st_ptr)
+                        .stdout()
+                        .write_str("RayOS uefi_boot: installer mode detected\n");
+                }
+                draw_text(60, 220, "Installer mode detected", 0xff_ff_00);
+                true
+            } else {
+                false
+            }
+        }
+        Err(e) => {
+            unsafe {
+                let _ = (*st_ptr)
+                    .stdout()
+                    .write_str("RayOS uefi_boot: could not check installer mode; assuming kernel boot\n");
+            }
+            false
+        }
+    };
+
+    if installer_mode {
+        unsafe {
+            let _ = (*st_ptr)
+                .stdout()
+                .write_str("RayOS uefi_boot: installer support ready (chainloading not yet implemented)\n");
+        }
+        draw_text(60, 240, "Installer: not yet chainloaded", 0xaa_ff_aa);
+        draw_text(60, 260, "Proceeding with kernel boot", 0xff_ff_ff);
+        bt.stall(2_000_000);
     }
 
     unsafe {
@@ -3182,6 +3221,45 @@ fn get_glyph(ch: char) -> [u8; 8] {
         '/' => [0x00, 0x06, 0x0C, 0x18, 0x30, 0x60, 0x00, 0x00],
         _ => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00], // Default empty glyph
     }
+}
+
+/// Check if installer mode is requested and handle appropriately.
+/// Reads the registry.json from the ESP and checks for "installer_mode" flag.
+/// Returns true if installer should be invoked instead of kernel.
+fn check_installer_mode(
+    bt: &BootServices,
+    image_handle: Handle,
+) -> Result<bool, &'static str> {
+    // Get the file system protocol via LoadedImage
+    let loaded_image = bt
+        .handle_protocol::<LoadedImage>(image_handle)
+        .map_err(|_| "Failed to get LoadedImage")?;
+    let loaded_image = unsafe { &*loaded_image.unwrap().get() };
+
+    let device_handle = loaded_image.device();
+
+    let device_path = bt
+        .handle_protocol::<DevicePath>(device_handle)
+        .map_err(|_| "Failed to get DevicePath")?;
+    let device_path = unsafe { &mut *device_path.unwrap().get() };
+
+    let fs_handle = bt
+        .locate_device_path::<SimpleFileSystem>(device_path)
+        .map_err(|_| "Failed to locate file system")?;
+
+    let fs_ptr = bt
+        .handle_protocol::<SimpleFileSystem>(fs_handle.unwrap())
+        .map_err(|_| "Failed to open file system protocol")?;
+    let fs = unsafe { &mut *fs_ptr.unwrap().get() };
+
+    // Open root directory
+    let root = fs
+        .open_volume()
+        .map_err(|_| "Failed to open root volume")?;
+    let mut root = root.unwrap();
+
+    // Check if installer is requested via the installer module
+    Ok(installer::should_invoke_installer(&mut root))
 }
 
 #[panic_handler]

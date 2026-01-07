@@ -44,7 +44,7 @@ if grep -q "$STARTED_MARKER" "$INSTALLER_LOG" \
   && grep -q "$COMPLETE_MARKER" "$INSTALLER_LOG"; then
   echo "PASS: Installer markers present and valid" >&2
   echo "Log: $INSTALLER_LOG" >&2
-  
+
   # Optional: verify JSON is valid
   if jq -e '.disks | length > 0' "$INSTALLER_JSON" > /dev/null 2>&1; then
     echo "PASS: JSON payload contains disk records" >&2

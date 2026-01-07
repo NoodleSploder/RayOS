@@ -301,9 +301,28 @@ This test does not touch any host disks and is safe to run on a dev machine.
 | Installer binary | ✓ Complete | [crates/installer/](../../crates/installer/) | Bundled into boot media ESP; emits markers for test verification |
 | Boot media smoke test | ✓ Complete | [scripts/test-installer-boot-headless.sh](../../scripts/test-installer-boot-headless.sh) | Verifies media boots under QEMU with attached target disk |
 | Installer dry-run test | ✓ Complete | [scripts/test-installer-dry-run.sh](../../scripts/test-installer-dry-run.sh) | Runs installer binary directly and validates marker sequence and JSON output |
+| Bootloader registry check | ✓ Complete | [crates/bootloader/uefi_boot/src/installer.rs](../../crates/bootloader/uefi_boot/src/installer.rs) | Detects `installer_mode` flag in registry.json; logs detection |
+| Bootloader integration docs | ✓ Complete | [docs/BOOTLOADER_INSTALLER_INTEGRATION.md](./BOOTLOADER_INSTALLER_INTEGRATION.md) | Architecture, design decisions, next steps |
 | Kernel/bootloader integration | ⏳ Pending | — | Bootloader needs to know when to invoke installer (via flag or special registry entry) |
 | Partition manager flow | ⏳ Pending | — | Interactive partition selection/creation; currently placeholder in installer planner |
 | Install-to-disk validation test | ⏳ Pending | — | Test that verifies installer can write to the target disk safely (dry-run only initially) |
+
+---
+
+## 13) Bootloader Installer Integration (Jan 07, 2026)
+
+The bootloader now has infrastructure to detect and invoke the installer when requested. See [BOOTLOADER_INSTALLER_INTEGRATION.md](./BOOTLOADER_INSTALLER_INTEGRATION.md) for full details.
+
+Key changes:
+- `crates/bootloader/uefi_boot/src/installer.rs`: Registry-based installer mode detection
+- `crates/bootloader/uefi_boot/src/main.rs`: Integrated check before kernel load
+- Installer can be activated by setting `"installer_mode": true` in /EFI/RAYOS/registry.json
+
+Current status:
+- ✓ Registry flag detection implemented
+- ✓ Installer binary loading logic designed
+- ⏳ Actual ELF chainloading not yet implemented (placeholder)
+- ⏳ Kernel-subprocess model being evaluated as cleaner alternative
 
 ---
 

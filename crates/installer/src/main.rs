@@ -69,12 +69,12 @@ struct Partition {
 
 fn main() -> anyhow::Result<()> {
     eprintln!("RAYOS_INSTALLER:STARTED");
-    
+
     let cli = Cli::parse();
     let report = collect_install_plan(cli.enumerate_local_disks, cli.debug)?;
-    
+
     eprintln!("RAYOS_INSTALLER:PLAN_GENERATED:disk_count={}", report.disks.len());
-    
+
     match cli.output_format {
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&report)?;
@@ -82,7 +82,7 @@ fn main() -> anyhow::Result<()> {
             eprintln!("RAYOS_INSTALLER:JSON_EMITTED");
         }
     }
-    
+
     eprintln!("RAYOS_INSTALLER:COMPLETE");
     Ok(())
 }
