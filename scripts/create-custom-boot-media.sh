@@ -136,7 +136,7 @@ if [ -f "$BUILD_DIR/rayos-installer.iso" ]; then
     # Extract ISO to temp location
     EXTRACT_DIR="$WORK_DIR/iso-extract"
     mkdir -p "$EXTRACT_DIR"
-    
+
     # Use xorriso to extract if available, otherwise inform user
     if command -v xorriso &>/dev/null; then
         xorriso -indev "$BUILD_DIR/rayos-installer.iso" -extract / "$EXTRACT_DIR" 2>/dev/null || true
