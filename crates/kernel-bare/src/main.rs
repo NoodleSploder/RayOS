@@ -6996,46 +6996,72 @@ static ALLOCATED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 #[no_mangle]
 pub extern "C" fn _start(boot_info_phys: u64) -> ! {
-    // We must enable SSE before any other code that might use floats, otherwise
-    // we'll hit a UD fault.
+    // Phase 1: Enable CPU features
     cpu_enable_x87_sse();
 
-    // Set up serial for early-boot debug prints.
+    // Phase 2: Set up serial for early-boot debug prints
     serial_init();
-    serial_write_str("RayOS kernel-bare: _start\n");
+    serial_write_str("\n");
+    serial_write_str("╔════════════════════════════════════════════════════════════╗\n");
+    serial_write_str("║           RayOS Kernel Starting (Phase 4)                  ║\n");
+    serial_write_str("╚════════════════════════════════════════════════════════════╝\n");
+    serial_write_str("\n[INIT] CPU x87/SSE enabled\n");
 
-    // Copy boot info to a safe place and set up basic env.
+    // Phase 3: Copy boot info to a safe place and set up basic env
+    serial_write_str("[INIT] Parsing boot info at 0x");
+    serial_write_hex_u64(boot_info_phys);
+    serial_write_str("...\n");
     init_boot_info(boot_info_phys);
+    serial_write_str("[INIT] Boot info parsed\n");
 
-    // Initialize the simple physical page allocator from the UEFI memory map.
-    // (Used by feature-gated VMM bring-up and other low-level subsystems.)
+    // Phase 4: Initialize the simple physical page allocator from the UEFI memory map
     if boot_info_phys != 0 {
         let bi = unsafe { &*(boot_info_phys as *const BootInfo) };
         if bi.magic == BOOTINFO_MAGIC {
+            serial_write_str("[INIT] Initializing physical page allocator...\n");
             phys_alloc_init_from_bootinfo(bi);
+            serial_write_str("[INIT] Physical allocator ready\n");
         }
     }
 
-    // Set up our own GDT+TSS for fault handling (IST).
+    // Phase 5: Set up our own GDT+TSS for fault handling (IST)
+    serial_write_str("[INIT] Setting up GDT...\n");
     init_gdt();
+    serial_write_str("[INIT] GDT ready\n");
 
-    // Set up IDT for faults and interrupts.
+    // Phase 6: Set up IDT for faults and interrupts
+    serial_write_str("[INIT] Setting up IDT...\n");
     init_idt();
+    serial_write_str("[INIT] IDT ready\n");
 
-    // Initialize memory management.
+    // Phase 7: Initialize memory management
+    serial_write_str("[INIT] Initializing memory management...\n");
     init_memory();
+    serial_write_str("[INIT] Memory allocator ready\n");
 
-    // Draw a test pattern to the framebuffer to prove we have graphics.
+    // Phase 8: Draw a test pattern to the framebuffer to prove we have graphics
+    serial_write_str("[INIT] Attempting framebuffer test pattern...\n");
     let bi = bootinfo_ref().unwrap();
     fb_try_draw_test_pattern(bi);
+    serial_write_str("[INIT] Framebuffer initialized\n");
 
-    // Initialize PCI subsystem.
+    // Phase 9: Initialize PCI subsystem
+    serial_write_str("[INIT] Enumerating PCI devices...\n");
     init_pci(bi);
+    serial_write_str("[INIT] PCI enumeration complete\n");
 
-    // Initialize PIC/APIC and enable interrupts.
+    // Phase 10: Initialize PIC/APIC and enable interrupts
+    serial_write_str("[INIT] Setting up interrupts...\n");
     init_interrupts();
+    serial_write_str("[INIT] Interrupts enabled\n");
 
-    // Main kernel loop.
+    // Phase 11: Main kernel loop
+    serial_write_str("\n");
+    serial_write_str("╔════════════════════════════════════════════════════════════╗\n");
+    serial_write_str("║           Kernel Initialization Complete                   ║\n");
+    serial_write_str("║               Starting kernel_main()                       ║\n");
+    serial_write_str("╚════════════════════════════════════════════════════════════╝\n");
+    serial_write_str("\n");
     kernel_main();
 }
 
