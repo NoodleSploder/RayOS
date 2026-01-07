@@ -1,6 +1,6 @@
 #!/bin/bash
 # Test RayOS bootloader and installer UEFI boot flow
-# 
+#
 # This script:
 # 1. Boots the RayOS installer ISO in QEMU with UEFI firmware
 # 2. Validates bootloader loads and initializes properly

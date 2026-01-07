@@ -52,7 +52,7 @@ if command -v xorriso &> /dev/null; then
     echo "  ❌ Bootloader not in ISO"
     exit 1
   fi
-  
+
   # List ISO contents
   echo "  ISO Contents:"
   xorriso -indev "$ISO_IMAGE" -find / 2>&1 | grep "'/EFI" | sed 's/^/    /'
@@ -82,22 +82,22 @@ fi
 
 if [ -f "$OVMF_CODE" ] && command -v qemu-system-x86_64 &> /dev/null; then
   echo "  Starting QEMU with UEFI firmware..."
-  
+
   # Create temporary test directory
   TEST_DIR=$(mktemp -d)
   trap "rm -rf $TEST_DIR" EXIT
-  
+
   # Copy OVMF to test dir (needs to be writable)
   cp "$OVMF_CODE" "$TEST_DIR/OVMF_CODE.fd"
   cp "$OVMF_VARS" "$TEST_DIR/OVMF_VARS.fd"
-  
+
   # Create a test disk
   TEST_DISK="$TEST_DIR/test-disk.img"
   dd if=/dev/zero of="$TEST_DISK" bs=1M count=256 status=none 2>&1
-  
+
   # Create serial log
   SERIAL_LOG="$TEST_DIR/serial.log"
-  
+
   # Boot with 20-second timeout
   timeout 22 qemu-system-x86_64 \
     -name "RayOS-Boot-Test" \
@@ -110,10 +110,10 @@ if [ -f "$OVMF_CODE" ] && command -v qemu-system-x86_64 &> /dev/null; then
     -nographic \
     -serial file:"$SERIAL_LOG" \
     2>&1 | head -100 || true
-  
+
   if [ -s "$SERIAL_LOG" ]; then
     echo "  ✅ QEMU boot executed (serial log: $(du -h "$SERIAL_LOG" | cut -f1))"
-    
+
     # Check for bootloader output
     if grep -q "RayOS" "$SERIAL_LOG" 2>/dev/null; then
       echo "  ✅ RayOS boot messages detected"

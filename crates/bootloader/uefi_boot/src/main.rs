@@ -498,97 +498,215 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         }
     };
 
-    if installer_mode {
+    // Load either installer or kernel based on mode flag
+    let (kernel_entry, kernel_data, kernel_size, boot_mode_str) = if installer_mode {
         unsafe {
             let _ = (*st_ptr)
                 .stdout()
-                .write_str("RayOS uefi_boot: installer support ready (chainloading not yet implemented)\n");
+                .write_str("RayOS uefi_boot: loading installer binary...\n");
         }
-        draw_text(60, 240, "Installer: not yet chainloaded", 0xaa_ff_aa);
-        draw_text(60, 260, "Proceeding with kernel boot", 0xff_ff_ff);
-        bt.stall(2_000_000);
-    }
+        draw_text(60, 240, "Loading installer binary...", 0xff_ff_00);
 
-    unsafe {
-        let _ = (*st_ptr)
-            .stdout()
-            .write_str("RayOS uefi_boot: loading kernel...\n");
-    }
-    let (kernel_entry, kernel_data, kernel_size) = match read_kernel_binary(bt, image_handle) {
-        Ok(v) => v,
-        Err(e) => {
-            unsafe {
-                let _ = (*st_ptr)
-                    .stdout()
-                    .write_str("RayOS uefi_boot: kernel load failed; staying in UEFI\n");
-                let _ = (*st_ptr).stdout().write_str("RayOS uefi_boot: reason: ");
-                let _ = (*st_ptr).stdout().write_str(e);
-                let _ = (*st_ptr).stdout().write_str("\n");
+        // Load installer as a flat binary (pre-allocated at a fixed address)
+        match read_installer_binary(bt, image_handle) {
+            Ok((installer_data, installer_size)) => {
+                unsafe {
+                    let _ = (*st_ptr)
+                        .stdout()
+                        .write_str("RayOS uefi_boot: installer loaded successfully\n");
+                }
+                draw_text(60, 260, "Installer loaded", 0x00_ff_00);
+
+                // For the installer, we jump to the beginning of the binary
+                // The installer is expected to start at the allocated address
+                let installer_entry: KernelEntryPoint = unsafe { core::mem::transmute(installer_data as u64) };
+                (installer_entry, installer_data, installer_size, "INSTALLER")
             }
-            draw_text(60, 310, "Kernel load failed", 0xff_88_00);
-            draw_text(60, 330, e, 0xff_00_00);
-
-            // Phase 2 Option A: on aarch64, allow boot even without a loadable kernel.bin.
-            // Enter an embedded post-exit loop so we can validate framebuffer output after ExitBootServices.
-            #[cfg(target_arch = "aarch64")]
-            {
-                aarch64_uart_write_str("RayOS uefi_boot: entering embedded mode (pre-exit)\n");
-                draw_text(60, 370, "aarch64: entering embedded mode", 0xaa_ff_aa);
-                bt.stall(1_000_000);
-
-                let (volume_ptr, volume_size) = unsafe { (VOLUME_BLOB_PTR, VOLUME_BLOB_SIZE) };
-                let st_clone = unsafe { system_table.unsafe_clone() };
-                let boot_info_ptr = match prepare_boot_info_and_exit_boot_services(
-                    st_clone,
-                    bt,
-                    image_handle,
-                    fb_base,
-                    fb_width,
-                    fb_height,
-                    fb_stride,
-                    model_ptr,
-                    model_size,
-                    volume_ptr,
-                    volume_size,
-                    embeddings_ptr,
-                    embeddings_size,
-                    index_ptr,
-                    index_size,
-                    linux_kernel_ptr,
-                    linux_kernel_size,
-                    linux_initrd_ptr,
-                    linux_initrd_size,
-                    linux_cmdline_ptr,
-                    linux_cmdline_size,
-                ) {
-                    Ok(ptr) => ptr,
-                    Err(status) => {
-                        aarch64_uart_write_str("RayOS uefi_boot: ExitBootServices FAILED\n");
-                        // Still in UEFI context if ExitBootServices failed.
-                        draw_text(60, 390, "ERROR: ExitBootServices failed", 0xff_00_00);
-                        bt.stall(5_000_000);
-                        return status;
-                    }
-                };
-
-                aarch64_uart_write_str("RayOS uefi_boot: ExitBootServices OK; entering post-exit loop\n");
-                draw_text(60, 430, "Post-exit: embedded RayOS loop", 0x88_ff_88);
-                let (autorun_ptr, autorun_size) = unsafe { (AUTORUN_PROMPT_PTR, AUTORUN_PROMPT_SIZE) };
-                let (volume_ptr, volume_size) = unsafe { (VOLUME_BLOB_PTR, VOLUME_BLOB_SIZE) };
-                rayos_post_exit_embedded_loop(
-                    boot_info_ptr as u64,
-                    autorun_ptr,
-                    autorun_size,
-                    volume_ptr,
-                    volume_size,
-                );
-            }
-
-            // Default behavior (x86_64 tests): remain in UEFI UI loop.
-            #[cfg(not(target_arch = "aarch64"))]
-            {
+            Err(e) => {
+                unsafe {
+                    let _ = (*st_ptr)
+                        .stdout()
+                        .write_str("RayOS uefi_boot: installer load failed; falling back to kernel\n");
+                    let _ = (*st_ptr).stdout().write_str("RayOS uefi_boot: reason: ");
+                    let _ = (*st_ptr).stdout().write_str(e);
+                    let _ = (*st_ptr).stdout().write_str("\n");
+                }
+                draw_text(60, 240, "Installer load failed", 0xff_88_00);
+                draw_text(60, 260, "Falling back to kernel...", 0xff_ff_88);
                 bt.stall(2_000_000);
-                rayos_main_loop(bt)
+
+                // Fall back to kernel boot
+                unsafe {
+                    let _ = (*st_ptr)
+                        .stdout()
+                        .write_str("RayOS uefi_boot: loading kernel...\n");
+                }
+                draw_text(60, 280, "Loading kernel binary...", 0xff_ff_00);
+
+                match read_kernel_binary(bt, image_handle) {
+                    Ok((entry, data, size)) => {
+                        draw_text(60, 300, "Kernel loaded", 0x00_ff_00);
+                        (entry, data, size, "KERNEL")
+                    }
+                    Err(e2) => {
+                        unsafe {
+                            let _ = (*st_ptr)
+                                .stdout()
+                                .write_str("RayOS uefi_boot: kernel load failed after installer fallback\n");
+                            let _ = (*st_ptr).stdout().write_str("RayOS uefi_boot: reason: ");
+                            let _ = (*st_ptr).stdout().write_str(e2);
+                            let _ = (*st_ptr).stdout().write_str("\n");
+                        }
+                        draw_text(60, 300, "Kernel load failed", 0xff_88_00);
+                        draw_text(60, 320, e2, 0xff_00_00);
+
+                        // Phase 2 Option A: on aarch64, allow boot even without a loadable binary.
+                        #[cfg(target_arch = "aarch64")]
+                        {
+                            aarch64_uart_write_str("RayOS uefi_boot: entering embedded mode (no kernel/installer)\n");
+                            draw_text(60, 370, "aarch64: entering embedded mode", 0xaa_ff_aa);
+                            bt.stall(1_000_000);
+
+                            let (volume_ptr, volume_size) = unsafe { (VOLUME_BLOB_PTR, VOLUME_BLOB_SIZE) };
+                            let st_clone = unsafe { system_table.unsafe_clone() };
+                            let boot_info_ptr = match prepare_boot_info_and_exit_boot_services(
+                                st_clone,
+                                bt,
+                                image_handle,
+                                fb_base,
+                                fb_width,
+                                fb_height,
+                                fb_stride,
+                                model_ptr,
+                                model_size,
+                                volume_ptr,
+                                volume_size,
+                                embeddings_ptr,
+                                embeddings_size,
+                                index_ptr,
+                                index_size,
+                                linux_kernel_ptr,
+                                linux_kernel_size,
+                                linux_initrd_ptr,
+                                linux_initrd_size,
+                                linux_cmdline_ptr,
+                                linux_cmdline_size,
+                            ) {
+                                Ok(ptr) => ptr,
+                                Err(status) => {
+                                    draw_text(60, 350, "ERROR: ExitBootServices failed", 0xff_00_00);
+                                    bt.stall(5_000_000);
+                                    return status;
+                                }
+                            };
+                            rayos_post_exit_embedded_loop(
+                                boot_info_ptr as u64,
+                                unsafe { AUTORUN_PROMPT_PTR },
+                                unsafe { AUTORUN_PROMPT_SIZE },
+                                unsafe { VOLUME_BLOB_PTR },
+                                unsafe { VOLUME_BLOB_SIZE },
+                            );
+                        }
+
+                        #[cfg(not(target_arch = "aarch64"))]
+                        {
+                            draw_text(60, 320, "x86_64: cannot continue without kernel", 0xff_00_00);
+                            bt.stall(5_000_000);
+                            return Status::DEVICE_ERROR;
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        // Standard kernel boot path
+        unsafe {
+            let _ = (*st_ptr)
+                .stdout()
+                .write_str("RayOS uefi_boot: loading kernel...\n");
+        }
+        draw_text(60, 240, "Loading kernel binary...", 0xff_ff_00);
+        
+        match read_kernel_binary(bt, image_handle) {
+            Ok((entry, data, size)) => {
+                draw_text(60, 260, "Kernel loaded", 0x00_ff_00);
+                (entry, data, size, "KERNEL")
+            }
+            Err(e) => {
+                unsafe {
+                    let _ = (*st_ptr)
+                        .stdout()
+                        .write_str("RayOS uefi_boot: kernel load failed; staying in UEFI\n");
+                    let _ = (*st_ptr).stdout().write_str("RayOS uefi_boot: reason: ");
+                    let _ = (*st_ptr).stdout().write_str(e);
+                    let _ = (*st_ptr).stdout().write_str("\n");
+                }
+                draw_text(60, 310, "Kernel load failed", 0xff_88_00);
+                draw_text(60, 330, e, 0xff_00_00);
+
+                // Phase 2 Option A: on aarch64, allow boot even without a loadable kernel.bin.
+                // Enter an embedded post-exit loop so we can validate framebuffer output after ExitBootServices.
+                #[cfg(target_arch = "aarch64")]
+                {
+                    aarch64_uart_write_str("RayOS uefi_boot: entering embedded mode (pre-exit)\n");
+                    draw_text(60, 370, "aarch64: entering embedded mode", 0xaa_ff_aa);
+                    bt.stall(1_000_000);
+
+                    let (volume_ptr, volume_size) = unsafe { (VOLUME_BLOB_PTR, VOLUME_BLOB_SIZE) };
+                    let st_clone = unsafe { system_table.unsafe_clone() };
+                    let boot_info_ptr = match prepare_boot_info_and_exit_boot_services(
+                        st_clone,
+                        bt,
+                        image_handle,
+                        fb_base,
+                        fb_width,
+                        fb_height,
+                        fb_stride,
+                        model_ptr,
+                        model_size,
+                        volume_ptr,
+                        volume_size,
+                        embeddings_ptr,
+                        embeddings_size,
+                        index_ptr,
+                        index_size,
+                        linux_kernel_ptr,
+                        linux_kernel_size,
+                        linux_initrd_ptr,
+                        linux_initrd_size,
+                        linux_cmdline_ptr,
+                        linux_cmdline_size,
+                    ) {
+                        Ok(ptr) => ptr,
+                        Err(status) => {
+                            aarch64_uart_write_str("RayOS uefi_boot: ExitBootServices FAILED\n");
+                            // Still in UEFI context if ExitBootServices failed.
+                            draw_text(60, 390, "ERROR: ExitBootServices failed", 0xff_00_00);
+                            bt.stall(5_000_000);
+                            return status;
+                        }
+                    };
+
+                    aarch64_uart_write_str("RayOS uefi_boot: ExitBootServices OK; entering post-exit loop\n");
+                    draw_text(60, 430, "Post-exit: embedded RayOS loop", 0x88_ff_88);
+                    let (autorun_ptr, autorun_size) = unsafe { (AUTORUN_PROMPT_PTR, AUTORUN_PROMPT_SIZE) };
+                    let (volume_ptr, volume_size) = unsafe { (VOLUME_BLOB_PTR, VOLUME_BLOB_SIZE) };
+                    rayos_post_exit_embedded_loop(
+                        boot_info_ptr as u64,
+                        autorun_ptr,
+                        autorun_size,
+                        volume_ptr,
+                        volume_size,
+                    );
+                }
+
+                // Default behavior (x86_64 tests): remain in UEFI UI loop.
+                #[cfg(not(target_arch = "aarch64"))]
+                {
+                    bt.stall(2_000_000);
+                    rayos_main_loop(bt);
+                    // rayos_main_loop is a loop that never returns
+                }
             }
         }
     };
@@ -596,42 +714,49 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     unsafe {
         let _ = (*st_ptr)
             .stdout()
-            .write_str("RayOS uefi_boot: kernel read OK; exiting boot services\n");
+            .write_str("RayOS uefi_boot: binary read OK; exiting boot services\n");
     }
 
     // On aarch64 under AAVMF, firmware page tables commonly mark generic RAM as non-executable.
-    // If we copy an ELF segment into plain RAM and jump to it post-exit, we can take an
-    // instruction abort immediately. Reserve the ELF PT_LOAD destination pages *pre-exit*
-    // as LOADER_CODE so firmware maps them executable.
+    // Only reserve executable pages for ELF kernels, not flat installer binaries.
     #[cfg(target_arch = "aarch64")]
     let mut aarch64_kernel_segments_reserved = true;
     #[cfg(target_arch = "aarch64")]
     {
-        match reserve_elf_segments_pre_exit(bt, kernel_data, kernel_size) {
-            Ok(()) => {
-                unsafe {
-                    let _ = (*st_ptr)
-                        .stdout()
-                        .write_str("RayOS uefi_boot: aarch64: reserved kernel PT_LOAD pages (LOADER_CODE)\n");
+        if boot_mode_str == "KERNEL" {
+            match reserve_elf_segments_pre_exit(bt, kernel_data, kernel_size) {
+                Ok(()) => {
+                    unsafe {
+                        let _ = (*st_ptr)
+                            .stdout()
+                            .write_str("RayOS uefi_boot: aarch64: reserved kernel PT_LOAD pages (LOADER_CODE)\n");
+                    }
+                }
+                Err(e) => {
+                    aarch64_kernel_segments_reserved = false;
+                    unsafe {
+                        let _ = (*st_ptr)
+                            .stdout()
+                            .write_str("RayOS uefi_boot: aarch64: reserve PT_LOAD pages failed; falling back to embedded mode\n");
+                        let _ = (*st_ptr).stdout().write_str("RayOS uefi_boot: reason: ");
+                        let _ = (*st_ptr).stdout().write_str(e);
+                        let _ = (*st_ptr).stdout().write_str("\n");
+                    }
+                    draw_text(60, 350, "aarch64: PT_LOAD reserve failed", 0xff_88_00);
+                    draw_text(60, 370, e, 0xff_00_00);
                 }
             }
-            Err(e) => {
-                aarch64_kernel_segments_reserved = false;
-                unsafe {
-                    let _ = (*st_ptr)
-                        .stdout()
-                        .write_str("RayOS uefi_boot: aarch64: reserve PT_LOAD pages failed; falling back to embedded mode\n");
-                    let _ = (*st_ptr).stdout().write_str("RayOS uefi_boot: reason: ");
-                    let _ = (*st_ptr).stdout().write_str(e);
-                    let _ = (*st_ptr).stdout().write_str("\n");
-                }
-                draw_text(60, 350, "aarch64: PT_LOAD reserve failed", 0xff_88_00);
-                draw_text(60, 370, e, 0xff_00_00);
+        } else {
+            // Installer is a flat binary, no ELF segments to reserve
+            unsafe {
+                let _ = (*st_ptr)
+                    .stdout()
+                    .write_str("RayOS uefi_boot: aarch64: installer is flat binary (no PT_LOAD to reserve)\n");
             }
         }
     }
 
-    draw_text(60, 310, "Kernel read OK", 0x88_ff_88);
+    draw_text(60, 310, "Binary read OK", 0x88_ff_88);
     draw_text(60, 330, "FB OK; preparing to jump...", 0xaa_ff_aa);
     bt.stall(1_000_000);
 
@@ -671,7 +796,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     // If we couldn't reserve executable pages for the kernel segments, do not jump.
     // Instead, continue with the aarch64 embedded post-exit loop (Option A harness).
     #[cfg(target_arch = "aarch64")]
-    if !aarch64_kernel_segments_reserved {
+    if !aarch64_kernel_segments_reserved && boot_mode_str == "KERNEL" {
         aarch64_uart_write_str("RayOS uefi_boot: post-exit: kernel exec reservation failed; entering embedded loop\n");
         draw_text(60, 390, "Post-exit: embedded RayOS loop", 0x88_ff_88);
         let (autorun_ptr, autorun_size) = unsafe { (AUTORUN_PROMPT_PTR, AUTORUN_PROMPT_SIZE) };
@@ -688,19 +813,25 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     // After ExitBootServices, do not touch UEFI BootServices or console.
     // Load PT_LOAD segments now: OVMF often reports those pages as BOOT_SERVICES_DATA
     // pre-exit, so AllocatePages(Address) can fail even though the pages are reclaimable.
+    // (Only needed for ELF kernels, not flat installer binaries)
     unsafe {
-        draw_text(60, 370, "Post-exit: loading ELF segments...", 0xaa_aa_ff);
-        if let Err(e) = load_elf_segments_post_exit(kernel_data, kernel_size) {
-            draw_text(60, 390, "ERROR: ELF segment load failed", 0xff_00_00);
-            draw_text(60, 410, e, 0xff_88_00);
-            loop {
-                core::hint::spin_loop();
+        if boot_mode_str == "KERNEL" {
+            draw_text(60, 370, "Post-exit: loading ELF segments...", 0xaa_aa_ff);
+            if let Err(e) = load_elf_segments_post_exit(kernel_data, kernel_size) {
+                draw_text(60, 390, "ERROR: ELF segment load failed", 0xff_00_00);
+                draw_text(60, 410, e, 0xff_88_00);
+                loop {
+                    core::hint::spin_loop();
+                }
             }
+        } else {
+            // Installer is already in memory at kernel_data, no segment loading needed
+            draw_text(60, 370, "Post-exit: installer ready (no ELF segments)", 0xaa_aa_ff);
         }
     }
 
     // Final pre-jump marker (framebuffer write is still valid post-exit).
-    draw_text(60, 430, "Post-exit: jumping to kernel entry...", 0x88_ff_88);
+    draw_text(60, 430, "Post-exit: jumping to entry point...", 0x88_ff_88);
 
     kernel_entry(boot_info_ptr as u64);
 }
@@ -933,6 +1064,95 @@ fn read_optional_blob(
     }
 
     Ok(Some((buf.as_ptr(), file_size)))
+}
+
+/// Read the installer binary into a temporary buffer (pre-ExitBootServices).
+/// Returns a pointer to the binary and its size in bytes.
+/// The installer is expected to be a flat binary (not ELF).
+fn read_installer_binary(
+    bt: &BootServices,
+    image_handle: Handle,
+) -> Result<(*const u8, usize), &'static str> {
+    // Get the file system protocol via LoadedImage
+    let loaded_image = bt
+        .handle_protocol::<LoadedImage>(image_handle)
+        .map_err(|_| "Failed to get LoadedImage")?;
+    let loaded_image = unsafe { &*loaded_image.unwrap().get() };
+
+    let device_handle = loaded_image.device();
+
+    let device_path = bt
+        .handle_protocol::<DevicePath>(device_handle)
+        .map_err(|_| "Failed to get DevicePath")?;
+    let device_path = unsafe { &mut *device_path.unwrap().get() };
+
+    let fs_handle = bt
+        .locate_device_path::<SimpleFileSystem>(device_path)
+        .map_err(|_| "Failed to locate file system")?;
+
+    let fs_ptr = bt
+        .handle_protocol::<SimpleFileSystem>(fs_handle.unwrap())
+        .map_err(|_| "Failed to open file system protocol")?;
+    let fs = unsafe { &mut *fs_ptr.unwrap().get() };
+
+    // Open root directory
+    let root = fs
+        .open_volume()
+        .map_err(|_| "Failed to open root volume")?;
+    let mut root = root.unwrap();
+
+    // Open installer file at \EFI\RAYOS\installer.bin
+    let installer_handle = root
+        .open("EFI\\RAYOS\\installer.bin", FileMode::Read, FileAttribute::empty())
+        .map_err(|_| "Failed to open installer.bin")?
+        .unwrap();
+
+    let installer_file = installer_handle
+        .into_type()
+        .map_err(|_| "Failed to determine installer file type")?
+        .unwrap();
+
+    let mut installer_file: RegularFile = match installer_file {
+        FileType::Regular(f) => f,
+        _ => return Err("installer.bin is not a regular file"),
+    };
+
+    // Determine file size
+    let _ = installer_file
+        .set_position(RegularFile::END_OF_FILE)
+        .map_err(|_| "Failed to seek installer")?;
+    let file_size = installer_file
+        .get_position()
+        .map_err(|_| "Failed to read installer size")?
+        .unwrap() as usize;
+    let _ = installer_file.set_position(0);
+
+    if file_size == 0 || file_size > 64 * 1024 * 1024 {
+        return Err("Invalid installer size");
+    }
+
+    // Allocate a buffer for the installer binary at a low address
+    // (installers typically expect to be loaded at a fixed address)
+    let pages = (file_size + 4095) / 4096;
+    let installer_addr = bt
+        .allocate_pages(
+            uefi::table::boot::AllocateType::MaxAddress(0x0000_4000_0000),
+            uefi::table::boot::MemoryType::LOADER_DATA,
+            pages,
+        )
+        .map_err(|_| "Failed to allocate installer memory")?
+        .unwrap();
+
+    let installer_buffer = unsafe { core::slice::from_raw_parts_mut(installer_addr as *mut u8, file_size) };
+    let bytes_read = installer_file
+        .read(installer_buffer)
+        .map_err(|_| "Failed to read installer")?
+        .unwrap();
+    if bytes_read != file_size {
+        return Err("Incomplete installer read");
+    }
+
+    Ok((installer_buffer.as_ptr(), file_size))
 }
 
 /// Read the kernel file into a temporary buffer (pre-ExitBootServices).

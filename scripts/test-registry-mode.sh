@@ -1,6 +1,6 @@
 #!/bin/bash
 # Test registry.json parsing in bootloader
-# 
+#
 # This script verifies the bootloader can detect "installer_mode": true
 # in the registry.json file
 
@@ -57,13 +57,13 @@ ISO_IMAGE="$REPO_ROOT/build/rayos-installer.iso"
 if command -v xorriso &> /dev/null; then
   if xorriso -indev "$ISO_IMAGE" -find "/EFI/RAYOS/registry.json" 2>&1 | grep -q "registry.json"; then
     echo "  ✅ registry.json found in ISO"
-    
+
     # Extract and check contents
     TEMP_DIR=$(mktemp -d)
     trap "rm -rf $TEMP_DIR" EXIT
-    
+
     xorriso -indev "$ISO_IMAGE" -extract "/EFI/RAYOS/registry.json" "$TEMP_DIR/registry.json" 2>&1 | tail -1 || true
-    
+
     if [ -f "$TEMP_DIR/registry.json" ]; then
       echo "  Registry contents:"
       cat "$TEMP_DIR/registry.json" | sed 's/^/    /'
