@@ -1,5 +1,6 @@
 # RayOS repo-root ignores
 /build/
+/*.txt
 
 # Script-local build/cache artifacts
 /scripts/build/
