@@ -304,10 +304,14 @@ This test does not touch any host disks and is safe to run on a dev machine.
 | Bootloader registry check | ✓ Complete | [crates/bootloader/uefi_boot/src/installer.rs](../../crates/bootloader/uefi_boot/src/installer.rs) | Detects `installer_mode` flag in registry.json; logs detection |
 | Bootloader integration docs | ✓ Complete | [docs/BOOTLOADER_INSTALLER_INTEGRATION.md](./BOOTLOADER_INSTALLER_INTEGRATION.md) | Architecture, design decisions, next steps |
 | Interactive partition selection | ✓ Complete | [crates/installer/src/main.rs](../../crates/installer/src/main.rs) (run_interactive_menu) | Disk enumeration, selection menu, installation plan display, confirmation flow |
-| Interactive mode test suite | ✓ Complete | [scripts/test-installer-interactive.sh](../../scripts/test-installer-interactive.sh) | Tests cancel, decline, affirm flows; marker validation |
-| Kernel/bootloader integration | ⏳ Pending | — | Bootloader needs to invoke installer (via flag or special registry entry) |
-| Partition creation flow | ⏳ Pending | — | sgdisk/parted integration to actually create partitions on selected disk |
-| System image copying | ⏳ Pending | — | Copy RayOS system image to target partition after creation |
+| Interactive mode unit tests | ✓ Complete | [scripts/test-installer-interactive.sh](../../scripts/test-installer-interactive.sh) | Tests cancel, decline, affirm flows with dry-run validation; 8 marker sequence |
+| Partition creation flow | ✓ Complete | [crates/installer/src/main.rs](../../crates/installer/src/main.rs) (create_partitions) | GPT table creation with sgdisk; ESP, System, and VM Pool partitions |
+| Filesystem formatting | ✓ Complete | [crates/installer/src/main.rs](../../crates/installer/src/main.rs) (format_partitions) | FAT32 for ESP, ext4 for System and VM Storage Pool |
+| System image copying | ✓ Complete | [crates/installer/src/main.rs](../../crates/installer/src/main.rs) (copy_system_image) | Mount partitions, copy system files, unmount with sync |
+| Dry-run mode | ✓ Complete | [crates/installer/src/main.rs](../../crates/installer/src/main.rs) | Sample disks safe-by-default; no writes to actual hardware |
+| E2E test framework | ✓ Complete | [scripts/test-installer-e2e.sh](../../scripts/test-installer-e2e.sh) | QEMU-based end-to-end test with virtual target disk |
+| Kernel/bootloader chainloading | ⏳ Pending | — | Bootloader needs to invoke installer binary (via registry flag) |
+| Reboot into installed RayOS | ⏳ Pending | — | Validate system boots from newly installed partition |
 | Install-to-disk validation test | ⏳ Pending | — | Test that verifies installer can write to the target disk safely (dry-run only initially) |
 
 ---
@@ -339,26 +343,29 @@ The installer now has an interactive mode allowing users to select the target in
 - **Safety warnings**: User-facing warning about data loss before disk selection
 - **Disk selection prompt**: Interactive menu to choose target disk (1-N) or cancel (0)
 - **Installation plan display**: Shows proposed partition layout:
-  - EFI System Partition (ESP): 512 MiB
-  - RayOS System: 40 GiB
-  - VM Storage Pool: remaining space
+  - EFI System Partition (ESP): 512 MiB (FAT32)
+  - RayOS System: 40 GiB (ext4)
+  - VM Storage Pool: remaining space (ext4)
 - **Confirmation flow**: Final yes/no confirmation before proceeding
+- **Dry-run mode**: Sample disks execute in dry-run (no actual writes)
+- **Partition creation**: GPT table and partition creation via sgdisk
+- **Filesystem formatting**: FAT32 (ESP) and ext4 (System and VM pool)
+- **System image copying**: Mount partitions and copy RayOS system files
 - **Marker tracking**: Comprehensive markers for CI/automated testing
 
 ### Usage
 
 ```bash
+# Test with sample disk (dry-run, no disk writes)
 ./crates/installer/target/release/rayos-installer --interactive
-```
 
-The installer defaults to **sample mode** (shows sample0 disk, no local enumeration). To enumerate real disks on dev machine:
-
-```bash
+# Enumerate real disks (for VM/test environments)
 ./crates/installer/target/release/rayos-installer --interactive --enumerate-local-disks
 ```
 
-### Test Suite
+### Test Suites
 
+**Unit test for interactive flow:**
 ```bash
 scripts/test-installer-interactive.sh
 ```
@@ -366,18 +373,60 @@ scripts/test-installer-interactive.sh
 Tests all flows:
 - Cancel operation (input: 0)
 - Decline confirmation (input: 1, no)
-- Affirm installation plan (input: 1, yes)
-- Marker sequence validation
+- Affirm installation plan (input: 1, yes) with dry-run for sample disk
+- Marker sequence validation (7 markers in correct order)
 - Disk enumeration display
 - Partition configuration display
+
+**End-to-end test with QEMU:**
+```bash
+scripts/test-installer-e2e.sh
+```
+
+Boots installer media in QEMU with virtual target disk and validates:
+- Installer starts in interactive mode
+- Partition structure is created
+- Filesystems are formatted
+- System image is copied
+
+### Implementation Details
+
+**New functions in crates/installer/src/main.rs:**
+- `perform_installation(disk)`: Coordinates partition creation and system copy
+- `create_partitions(dev_path)`: Creates GPT table and 3 partitions using sgdisk
+- `format_partitions(dev_path)`: Formats ESP as FAT32, System and Pool as ext4
+- `copy_system_image(dev_path)`: Mounts partitions and copies RayOS files
+
+**Dry-run behavior for sample disks:** Uses `sample://` scheme detection to avoid actual disk operations during testing.
+
+**Safety guarantees:**
+- Sample mode by default (no local disk enumeration)
+- Explicit `--enumerate-local-disks` flag required for real disks
+- GPT zap before creating new partition table (clears existing data safely)
+- Mount/unmount with error recovery
+- Sync before unmounting to ensure writes
+
+### Marker sequence (complete flow):
+1. `RAYOS_INSTALLER:STARTED` - Installer begins
+2. `RAYOS_INSTALLER:SAMPLE_MODE` - Using sample disk
+3. `RAYOS_INSTALLER:PLAN_GENERATED:disk_count=1` - Disk plan complete
+4. `RAYOS_INSTALLER:INTERACTIVE_MODE` - Interactive mode activated
+5. `RAYOS_INSTALLER:DRY_RUN` - Dry-run for sample disk
+6. `RAYOS_INSTALLER:INSTALLATION_PLAN_VALIDATED:disk=sample0` - Plan validated
+7. `RAYOS_INSTALLER:INSTALLATION_SUCCESSFUL` - Installation succeeded
+8. `RAYOS_INSTALLER:INTERACTIVE_COMPLETE` - Interactive session complete
 
 Current status:
 - ✓ Interactive mode CLI implemented
 - ✓ Disk selection and display logic complete
 - ✓ Installation plan validation complete
-- ✓ Full test suite passing
-- ⏳ Actual partition creation (sgdisk, partprobe) not yet implemented
-- ⏳ System image copying to target partition not yet implemented
+- ✓ Partition creation with sgdisk implemented
+- ✓ Filesystem formatting implemented
+- ✓ System image copying implemented
+- ✓ Dry-run mode for sample disks working
+- ✓ Unit test suite fully passing
+- ✓ E2E test framework created
+- ⏳ Bootloader chainloading to actually invoke installer
 
 ---
 
