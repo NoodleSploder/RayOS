@@ -303,8 +303,11 @@ This test does not touch any host disks and is safe to run on a dev machine.
 | Installer dry-run test | ✓ Complete | [scripts/test-installer-dry-run.sh](../../scripts/test-installer-dry-run.sh) | Runs installer binary directly and validates marker sequence and JSON output |
 | Bootloader registry check | ✓ Complete | [crates/bootloader/uefi_boot/src/installer.rs](../../crates/bootloader/uefi_boot/src/installer.rs) | Detects `installer_mode` flag in registry.json; logs detection |
 | Bootloader integration docs | ✓ Complete | [docs/BOOTLOADER_INSTALLER_INTEGRATION.md](./BOOTLOADER_INSTALLER_INTEGRATION.md) | Architecture, design decisions, next steps |
-| Kernel/bootloader integration | ⏳ Pending | — | Bootloader needs to know when to invoke installer (via flag or special registry entry) |
-| Partition manager flow | ⏳ Pending | — | Interactive partition selection/creation; currently placeholder in installer planner |
+| Interactive partition selection | ✓ Complete | [crates/installer/src/main.rs](../../crates/installer/src/main.rs) (run_interactive_menu) | Disk enumeration, selection menu, installation plan display, confirmation flow |
+| Interactive mode test suite | ✓ Complete | [scripts/test-installer-interactive.sh](../../scripts/test-installer-interactive.sh) | Tests cancel, decline, affirm flows; marker validation |
+| Kernel/bootloader integration | ⏳ Pending | — | Bootloader needs to invoke installer (via flag or special registry entry) |
+| Partition creation flow | ⏳ Pending | — | sgdisk/parted integration to actually create partitions on selected disk |
+| System image copying | ⏳ Pending | — | Copy RayOS system image to target partition after creation |
 | Install-to-disk validation test | ⏳ Pending | — | Test that verifies installer can write to the target disk safely (dry-run only initially) |
 
 ---
@@ -323,6 +326,58 @@ Current status:
 - ✓ Installer binary loading logic designed
 - ⏳ Actual ELF chainloading not yet implemented (placeholder)
 - ⏳ Kernel-subprocess model being evaluated as cleaner alternative
+
+---
+
+## 14) Interactive Partition Selection (Jan 07, 2026)
+
+The installer now has an interactive mode allowing users to select the target installation disk via CLI menu. This is the first human-facing UI component of the installer.
+
+### Features
+
+- **Disk enumeration display**: Shows available disks with size and removable flag
+- **Safety warnings**: User-facing warning about data loss before disk selection
+- **Disk selection prompt**: Interactive menu to choose target disk (1-N) or cancel (0)
+- **Installation plan display**: Shows proposed partition layout:
+  - EFI System Partition (ESP): 512 MiB
+  - RayOS System: 40 GiB
+  - VM Storage Pool: remaining space
+- **Confirmation flow**: Final yes/no confirmation before proceeding
+- **Marker tracking**: Comprehensive markers for CI/automated testing
+
+### Usage
+
+```bash
+./crates/installer/target/release/rayos-installer --interactive
+```
+
+The installer defaults to **sample mode** (shows sample0 disk, no local enumeration). To enumerate real disks on dev machine:
+
+```bash
+./crates/installer/target/release/rayos-installer --interactive --enumerate-local-disks
+```
+
+### Test Suite
+
+```bash
+scripts/test-installer-interactive.sh
+```
+
+Tests all flows:
+- Cancel operation (input: 0)
+- Decline confirmation (input: 1, no)
+- Affirm installation plan (input: 1, yes)
+- Marker sequence validation
+- Disk enumeration display
+- Partition configuration display
+
+Current status:
+- ✓ Interactive mode CLI implemented
+- ✓ Disk selection and display logic complete
+- ✓ Installation plan validation complete
+- ✓ Full test suite passing
+- ⏳ Actual partition creation (sgdisk, partprobe) not yet implemented
+- ⏳ System image copying to target partition not yet implemented
 
 ---
 
