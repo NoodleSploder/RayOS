@@ -5,8 +5,8 @@
 cat > /tmp/rayos-installer-README.md << 'EOF'
 # RayOS Installer - Complete Installation System
 
-**Status:** ✅ Production-Ready  
-**Version:** 1.0  
+**Status:** ✅ Production-Ready
+**Version:** 1.0
 **Date:** January 7, 2026
 
 ---
@@ -380,7 +380,7 @@ All validation tests included and passing:
 
 ## License & Attribution
 
-RayOS Installer © 2026  
+RayOS Installer © 2026
 Built with open-source tools (sgdisk, mkfs, clap, serde)
 
 ---
