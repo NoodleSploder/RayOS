@@ -15,7 +15,7 @@ cd "$KERNEL_DIR"
 cargo +nightly build --release --target x86_64-rayos-kernel.json \
   -Zbuild-std=core,compiler_builtins -Z build-std-features=compiler-builtins-mem > /dev/null 2>&1
 
-# Step 2: Extract raw binary  
+# Step 2: Extract raw binary
 echo "  [2/5] Extracting binary..."
 objcopy -O binary "$KERNEL_DIR/target/x86_64-rayos-kernel/release/kernel-bare" "$BUILD_DIR/kernel.bin"
 

@@ -79,10 +79,10 @@ timeout 45 $QEMU_CMD \
 sleep 2
 
 echo ""
-echo "=== Serial Output ===" 
+echo "=== Serial Output ==="
 if [ -f serial-p4-test.log ]; then
     cat serial-p4-test.log | head -100
-    
+
     # Check for kernel startup
     if grep -q "RayOS kernel" serial-p4-test.log; then
         echo ""
