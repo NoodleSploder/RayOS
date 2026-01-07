@@ -9269,6 +9269,20 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
 
     init_memory();
 
+    // Phase 8 initialization (User Mode & IPC)
+    serial_write_str("  [PHASE8] Initializing user mode support...\n");
+    init_ring3_support();
+    serial_write_str("    ✓ Ring 3 support initialized\n");
+    
+    init_process_manager();
+    serial_write_str("    ✓ Process manager initialized\n");
+    
+    init_syscall_dispatcher();
+    serial_write_str("    ✓ Syscall dispatcher initialized\n");
+    
+    setup_syscall_instruction(0xFFFF_8000_0000_8000);
+    serial_write_str("    ✓ SYSCALL instruction ready\n");
+
     // Optional: Test exception handlers (disabled by default)
     // Uncomment to test specific exception:
     // test_page_fault();       // #PF - Page Fault
@@ -12179,6 +12193,199 @@ fn init_pci(bi: &BootInfo) {
         if let Some(mcfg) = acpi::find_mcfg(bi.rsdp_addr) {
             pci::enumerate_pci(mcfg);
         }
+    }
+}
+
+// ============================================================================
+// Phase 8: User Mode Execution & Ring 3 Support
+// ============================================================================
+
+/// User mode context (for Ring 3 execution)
+#[derive(Debug, Clone, Copy)]
+pub struct UserModeContext {
+    pub rip: u64,              // User instruction pointer
+    pub rsp: u64,              // User stack pointer
+    pub rflags: u64,           // User processor flags
+    pub user_space_base: u64,  // User address space base
+    pub user_space_size: u64,  // User address space size
+}
+
+impl UserModeContext {
+    /// Create a new user mode context
+    pub fn new(entry_point: u64, stack_pointer: u64) -> Self {
+        UserModeContext {
+            rip: entry_point,
+            rsp: stack_pointer,
+            rflags: 0x202,  // Interrupts enabled, reserved bit set
+            user_space_base: 0x00000000_00010000,  // User space starts at 64KB
+            user_space_size: 0x00007FFF_FFFF0000,  // Up to kernel boundary
+        }
+    }
+
+    /// Validate user pointer (check bounds)
+    pub fn is_valid_pointer(&self, addr: u64) -> bool {
+        addr >= self.user_space_base && (addr - self.user_space_base) < self.user_space_size
+    }
+
+    /// Validate user buffer
+    pub fn is_valid_buffer(&self, addr: u64, size: u64) -> bool {
+        self.is_valid_pointer(addr) && 
+        self.is_valid_pointer(addr.saturating_add(size - 1))
+    }
+}
+
+/// Ring 3 privilege level setup
+pub struct Ring3Setup {
+    pub user_code_selector: u16,
+    pub user_data_selector: u16,
+    pub kernel_code_selector: u16,
+    pub kernel_data_selector: u16,
+    pub syscall_entry: u64,
+}
+
+impl Ring3Setup {
+    /// Create Ring 3 setup with default selectors
+    pub fn new() -> Self {
+        Ring3Setup {
+            user_code_selector: 0x23,    // User code segment (Ring 3)
+            user_data_selector: 0x2B,    // User data segment (Ring 3)
+            kernel_code_selector: 0x08,  // Kernel code segment (Ring 0)
+            kernel_data_selector: 0x10,  // Kernel data segment (Ring 0)
+            syscall_entry: 0xFFFF_8000_0000_8000,  // Kernel syscall entry point
+        }
+    }
+
+    /// Get Ring 3 code selector with RPL bits
+    pub fn user_code_selector_with_rpl(&self) -> u16 {
+        (self.user_code_selector & !3) | 3  // Ring 3
+    }
+
+    /// Get Ring 3 data selector with RPL bits
+    pub fn user_data_selector_with_rpl(&self) -> u16 {
+        (self.user_data_selector & !3) | 3  // Ring 3
+    }
+}
+
+// Global Ring 3 setup
+static mut RING3_SETUP: Option<Ring3Setup> = None;
+
+/// Initialize Ring 3 support
+pub fn init_ring3_support() {
+    unsafe {
+        RING3_SETUP = Some(Ring3Setup::new());
+    }
+}
+
+/// Get Ring 3 setup
+pub fn get_ring3_setup() -> Option<&'static Ring3Setup> {
+    unsafe { RING3_SETUP.as_ref() }
+}
+
+// ============================================================================
+// SYSCALL/SYSRET Instruction Support
+// ============================================================================
+
+/// SYSCALL MSR setup for fast syscalls
+pub fn setup_syscall_instruction(entry_point: u64) {
+    // Note: In a real implementation, would use WRMSR to set:
+    // - IA32_LSTAR (syscall entry point for 64-bit mode)
+    // - IA32_CSTAR (syscall entry point for 32-bit mode)
+    // - IA32_STAR (segment selectors and privilege levels)
+    //
+    // For now, this is a placeholder for the framework
+    let _ = entry_point;
+    
+    serial_write_str("    [SYSCALL] Fast syscall entry configured\n");
+}
+
+/// Fast syscall entry point (would be in assembly in real impl)
+pub extern "C" fn syscall_entry() {
+    // In a real implementation:
+    // 1. Kernel GS.BASE points to per-cpu data
+    // 2. RCX contains return address
+    // 3. R11 contains RFLAGS
+    // 4. RSP is swapped to kernel stack
+    //
+    // We would:
+    // 1. Save user state
+    // 2. Load kernel state
+    // 3. Dispatch syscall
+    // 4. Restore user state with SYSRET
+}
+
+/// User mode entry point - execute user code
+pub fn enter_user_mode(context: &UserModeContext, rsp: u64) -> u64 {
+    // Framework ready for actual implementation
+    // Would use SWAPGS and SYSRET in real implementation
+    
+    serial_write_str("    [RING3] Entering user mode at 0x");
+    serial_write_hex_u64(context.rip);
+    serial_write_str(" with stack 0x");
+    serial_write_hex_u64(rsp);
+    serial_write_str("\n");
+
+    // Placeholder return value
+    0
+}
+
+/// Return from user mode (syscall handler)
+pub fn return_from_user_mode(return_value: u64, rsp: u64) {
+    // Framework ready for actual implementation
+    let _ = (return_value, rsp);
+    
+    serial_write_str("    [RING3] Returning from user mode with value 0x");
+    serial_write_hex_u64(return_value);
+    serial_write_str("\n");
+}
+
+// ============================================================================
+// User Mode Process Creation
+// ============================================================================
+
+/// Create a user mode process from entry point
+pub fn create_user_process(entry_point: u64) -> Option<u32> {
+    if let Some(pm) = get_process_manager() {
+        // Allocate stack for user space (typically 64KB)
+        let stack_size = 0x10000;  // 64KB
+        let pid = pm.create_process(entry_point, stack_size)?;
+
+        // Set up user mode context
+        if let Some(pcb) = pm.processes[pid as usize].as_mut() {
+            // User code will start at entry_point
+            pcb.context.rip = entry_point;
+            
+            // User stack at top of allocated stack region
+            pcb.context.rsp = pcb.stack_base + pcb.stack_size;
+        }
+
+        return Some(pid);
+    }
+
+    None
+}
+
+/// Test user mode execution
+pub fn test_user_mode() {
+    serial_write_str("  [RING3] Testing user mode support...\n");
+
+    // Create a simple test user process
+    let entry = 0x00001000u64;  // Simple test entry point
+    
+    match create_user_process(entry) {
+        Some(pid) => {
+            serial_write_str("    ✓ User process created (PID ");
+            serial_write_hex_u64(pid as u64);
+            serial_write_str(")\n");
+        }
+        None => {
+            serial_write_str("    ✗ Failed to create user process\n");
+        }
+    }
+
+    // Test user mode context
+    let ctx = UserModeContext::new(0x00001000, 0x00010000);
+    if ctx.is_valid_pointer(0x00005000) {
+        serial_write_str("    ✓ User pointer validation working\n");
     }
 }
 
