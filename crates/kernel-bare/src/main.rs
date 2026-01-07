@@ -9270,7 +9270,11 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
     init_memory();
 
     // Phase 8 initialization (User Mode & IPC)
-    serial_write_str("  [PHASE8] Initializing user mode support...\n");
+    serial_write_str("  [PHASE8] Initializing virtual memory & user mode support...\n");
+    
+    init_page_allocator();
+    serial_write_str("    ✓ Page allocator initialized\n");
+    
     init_ring3_support();
     serial_write_str("    ✓ Ring 3 support initialized\n");
     
@@ -12197,6 +12201,226 @@ fn init_pci(bi: &BootInfo) {
 }
 
 // ============================================================================
+// Phase 8: Virtual Memory & Per-Process Address Spaces
+// ============================================================================
+
+/// Page Table Entry (PTE) structure
+#[derive(Debug, Clone, Copy)]
+pub struct PageTableEntry {
+    pub entry: u64,
+}
+
+impl PageTableEntry {
+    /// Create a PTE from physical address and flags
+    pub fn from_address(phys_addr: u64, present: bool, writable: bool, user: bool) -> Self {
+        let mut entry = phys_addr & 0x000F_FFFF_FFFF_F000;  // 12-bit offset, 40-bit address
+        if present { entry |= 0x001; }  // Present bit
+        if writable { entry |= 0x002; } // Writable bit
+        if user { entry |= 0x004; }     // User bit
+        entry |= 0x020;                 // Accessed bit (always set)
+        PageTableEntry { entry }
+    }
+
+    /// Check if PTE is present
+    pub fn is_present(&self) -> bool {
+        (self.entry & 0x001) != 0
+    }
+
+    /// Get physical address from PTE
+    pub fn get_address(&self) -> u64 {
+        self.entry & 0x000F_FFFF_FFFF_F000
+    }
+
+    /// Check if writable
+    pub fn is_writable(&self) -> bool {
+        (self.entry & 0x002) != 0
+    }
+
+    /// Check if user accessible
+    pub fn is_user(&self) -> bool {
+        (self.entry & 0x004) != 0
+    }
+}
+
+/// Page Table (512 entries × 8 bytes = 4096 bytes)
+#[repr(align(4096))]
+pub struct PageTable {
+    pub entries: [PageTableEntry; 512],
+}
+
+impl PageTable {
+    /// Create a new empty page table
+    pub fn new() -> Self {
+        PageTable {
+            entries: [PageTableEntry { entry: 0 }; 512],
+        }
+    }
+
+    /// Map a virtual address to physical address
+    pub fn map(&mut self, virt_index: usize, phys_addr: u64, writable: bool, user: bool) {
+        if virt_index < 512 {
+            self.entries[virt_index] = PageTableEntry::from_address(phys_addr, true, writable, user);
+        }
+    }
+
+    /// Unmap a virtual address
+    pub fn unmap(&mut self, virt_index: usize) {
+        if virt_index < 512 {
+            self.entries[virt_index].entry = 0;
+        }
+    }
+
+    /// Get entry at index
+    pub fn get(&self, virt_index: usize) -> Option<&PageTableEntry> {
+        if virt_index < 512 {
+            Some(&self.entries[virt_index])
+        } else {
+            None
+        }
+    }
+}
+
+impl Default for PageTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Physical page allocator (simple bitmap allocator)
+pub struct PageAllocator {
+    pub total_pages: u32,
+    pub used_pages: u32,
+    pub bitmap: [u8; 4096],  // Can track up to 32,768 pages (128MB)
+}
+
+impl PageAllocator {
+    /// Create a new page allocator
+    pub fn new() -> Self {
+        PageAllocator {
+            total_pages: 32768,  // 128MB total
+            used_pages: 0,
+            bitmap: [0u8; 4096],
+        }
+    }
+
+    /// Allocate a physical page
+    pub fn allocate_page(&mut self) -> Option<u64> {
+        // Find first free page in bitmap
+        for byte_idx in 0..4096 {
+            let byte = self.bitmap[byte_idx];
+            if byte != 0xFF {
+                // Found a byte with a free bit
+                for bit in 0..8 {
+                    if (byte & (1 << bit)) == 0 {
+                        // Found free bit
+                        self.bitmap[byte_idx] |= 1 << bit;
+                        let page_idx = byte_idx * 8 + bit;
+                        self.used_pages += 1;
+                        let phys_addr = (page_idx as u64) << 12;  // Page index to address
+                        return Some(phys_addr);
+                    }
+                }
+            }
+        }
+        None  // No free pages
+    }
+
+    /// Free a physical page
+    pub fn free_page(&mut self, phys_addr: u64) {
+        let page_idx = (phys_addr >> 12) as usize;
+        if page_idx < 32768 {
+            let byte_idx = page_idx / 8;
+            let bit = page_idx % 8;
+            if byte_idx < 4096 {
+                self.bitmap[byte_idx] &= !(1 << bit);
+                self.used_pages = self.used_pages.saturating_sub(1);
+            }
+        }
+    }
+
+    /// Get number of free pages
+    pub fn free_pages(&self) -> u32 {
+        self.total_pages - self.used_pages
+    }
+}
+
+impl Default for PageAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Per-process address space
+pub struct AddressSpace {
+    pub pml4: Option<&'static mut PageTable>,  // Root page table
+    pub pid: u32,
+    pub user_space_start: u64,
+    pub user_space_end: u64,
+    pub kernel_space_start: u64,
+    pub kernel_space_end: u64,
+}
+
+impl AddressSpace {
+    /// Create a new address space for a process
+    pub fn new(pid: u32, pml4: Option<&'static mut PageTable>) -> Self {
+        AddressSpace {
+            pml4,
+            pid,
+            user_space_start: 0x00000000_00010000,   // 64KB
+            user_space_end: 0x00007FFF_FFFF0000,     // Up to kernel boundary
+            kernel_space_start: 0xFFFF_8000_0000_0000,
+            kernel_space_end: 0xFFFF_FFFF_FFFF_FFFF,
+        }
+    }
+
+    /// Check if address is in user space
+    pub fn is_user_address(&self, addr: u64) -> bool {
+        addr >= self.user_space_start && addr < self.user_space_end
+    }
+
+    /// Check if address is in kernel space
+    pub fn is_kernel_address(&self, addr: u64) -> bool {
+        addr >= self.kernel_space_start && addr <= self.kernel_space_end
+    }
+
+    /// Check if address is valid
+    pub fn is_valid_address(&self, addr: u64) -> bool {
+        self.is_user_address(addr) || self.is_kernel_address(addr)
+    }
+}
+
+// Global page allocator
+static mut PAGE_ALLOCATOR: Option<PageAllocator> = None;
+
+/// Initialize the page allocator
+pub fn init_page_allocator() {
+    unsafe {
+        PAGE_ALLOCATOR = Some(PageAllocator::new());
+    }
+}
+
+/// Get the page allocator
+pub fn get_page_allocator() -> Option<&'static mut PageAllocator> {
+    unsafe { PAGE_ALLOCATOR.as_mut() }
+}
+
+/// Allocate a physical page for kernel use
+pub fn kalloc_page() -> Option<u64> {
+    if let Some(allocator) = get_page_allocator() {
+        allocator.allocate_page()
+    } else {
+        None
+    }
+}
+
+/// Free a physical page
+pub fn kfree_page(phys_addr: u64) {
+    if let Some(allocator) = get_page_allocator() {
+        allocator.free_page(phys_addr);
+    }
+}
+
+// ============================================================================
 // Phase 8: User Mode Execution & Ring 3 Support
 // ============================================================================
 
@@ -12364,6 +12588,240 @@ pub fn create_user_process(entry_point: u64) -> Option<u32> {
     None
 }
 
+// ============================================================================
+// Phase 8: Inter-Process Communication (IPC) Mechanisms
+// ============================================================================
+
+/// Pipe data structure (4KB circular buffer)
+pub struct Pipe {
+    pub buffer: [u8; 4096],
+    pub read_pos: usize,
+    pub write_pos: usize,
+    pub count: usize,
+    pub max_capacity: usize,
+}
+
+impl Pipe {
+    /// Create a new pipe
+    pub fn new() -> Self {
+        Pipe {
+            buffer: [0u8; 4096],
+            read_pos: 0,
+            write_pos: 0,
+            count: 0,
+            max_capacity: 4096,
+        }
+    }
+
+    /// Write data to pipe
+    pub fn write(&mut self, data: &[u8]) -> usize {
+        let mut written = 0;
+        for &byte in data {
+            if self.count < self.max_capacity {
+                self.buffer[self.write_pos] = byte;
+                self.write_pos = (self.write_pos + 1) % self.max_capacity;
+                self.count += 1;
+                written += 1;
+            } else {
+                break;  // Buffer full
+            }
+        }
+        written
+    }
+
+    /// Read data from pipe
+    pub fn read(&mut self, buffer: &mut [u8]) -> usize {
+        let mut read = 0;
+        for i in 0..buffer.len() {
+            if self.count > 0 {
+                buffer[i] = self.buffer[self.read_pos];
+                self.read_pos = (self.read_pos + 1) % self.max_capacity;
+                self.count -= 1;
+                read += 1;
+            } else {
+                break;  // Buffer empty
+            }
+        }
+        read
+    }
+
+    /// Check if pipe is empty
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// Check if pipe is full
+    pub fn is_full(&self) -> bool {
+        self.count >= self.max_capacity
+    }
+}
+
+impl Default for Pipe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Message Queue for inter-process communication
+pub struct MessageQueue {
+    pub messages: [Option<[u8; 256]>; 32],  // Up to 32 messages of 256 bytes each
+    pub message_count: u32,
+    pub queue_id: u32,
+}
+
+impl MessageQueue {
+    /// Create a new message queue
+    pub fn new(queue_id: u32) -> Self {
+        MessageQueue {
+            messages: [None; 32],
+            message_count: 0,
+            queue_id,
+        }
+    }
+
+    /// Send a message to the queue
+    pub fn send(&mut self, message: &[u8]) -> bool {
+        if self.message_count >= 32 {
+            return false;  // Queue full
+        }
+
+        let mut msg_buf = [0u8; 256];
+        let copy_len = message.len().min(256);
+        msg_buf[..copy_len].copy_from_slice(&message[..copy_len]);
+
+        // Find first empty slot
+        for slot in &mut self.messages {
+            if slot.is_none() {
+                *slot = Some(msg_buf);
+                self.message_count += 1;
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Receive a message from the queue
+    pub fn receive(&mut self) -> Option<[u8; 256]> {
+        if self.message_count == 0 {
+            return None;
+        }
+
+        // Find first message
+        for slot in &mut self.messages {
+            if let Some(msg) = slot.take() {
+                self.message_count -= 1;
+                return Some(msg);
+            }
+        }
+
+        None
+    }
+
+    /// Check if queue is empty
+    pub fn is_empty(&self) -> bool {
+        self.message_count == 0
+    }
+}
+
+impl Default for MessageQueue {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+/// Signal types
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Signal {
+    // POSIX standard signals
+    SigTerm = 15,  // Termination signal
+    SigKill = 9,   // Kill signal (cannot be caught)
+    SigStop = 19,  // Stop signal
+    SigCont = 18,  // Continue signal
+    SigChld = 17,  // Child process terminated
+    SigUsr1 = 10,  // User-defined 1
+    SigUsr2 = 12,  // User-defined 2
+    SigAlrm = 14,  // Alarm
+}
+
+impl Signal {
+    /// Get signal number
+    pub fn number(&self) -> u8 {
+        *self as u8
+    }
+}
+
+/// Signal handler type
+pub type SignalHandler = fn(Signal);
+
+/// Signal management for process
+pub struct SignalHandler_Table {
+    pub handlers: [Option<SignalHandler>; 32],
+    pub pending: u32,  // Bitmask of pending signals
+}
+
+impl SignalHandler_Table {
+    /// Create a new signal handler table
+    pub fn new() -> Self {
+        SignalHandler_Table {
+            handlers: [None; 32],
+            pending: 0,
+        }
+    }
+
+    /// Register a signal handler
+    pub fn register(&mut self, signal: Signal, handler: SignalHandler) {
+        let sig_num = signal.number() as usize;
+        if sig_num < 32 {
+            self.handlers[sig_num] = Some(handler);
+        }
+    }
+
+    /// Send a signal to process
+    pub fn send(&mut self, signal: Signal) {
+        let sig_num = signal.number() as usize;
+        if sig_num < 32 {
+            self.pending |= 1 << sig_num;
+        }
+    }
+
+    /// Check if signal is pending
+    pub fn is_pending(&self, signal: Signal) -> bool {
+        let sig_num = signal.number() as usize;
+        (sig_num < 32) && ((self.pending & (1 << sig_num)) != 0)
+    }
+
+    /// Deliver pending signals
+    pub fn deliver_pending(&mut self) {
+        for sig_num in 0..32 {
+            if (self.pending & (1 << sig_num)) != 0 {
+                if let Some(handler) = self.handlers[sig_num] {
+                    // Convert signal number back to enum
+                    match sig_num {
+                        15 => handler(Signal::SigTerm),
+                        9 => handler(Signal::SigKill),
+                        19 => handler(Signal::SigStop),
+                        18 => handler(Signal::SigCont),
+                        17 => handler(Signal::SigChld),
+                        10 => handler(Signal::SigUsr1),
+                        12 => handler(Signal::SigUsr2),
+                        14 => handler(Signal::SigAlrm),
+                        _ => {}
+                    }
+                    self.pending &= !(1 << sig_num);
+                }
+            }
+        }
+    }
+}
+
+impl Default for SignalHandler_Table {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Test user mode execution
 pub fn test_user_mode() {
     serial_write_str("  [RING3] Testing user mode support...\n");
@@ -12386,6 +12844,175 @@ pub fn test_user_mode() {
     let ctx = UserModeContext::new(0x00001000, 0x00010000);
     if ctx.is_valid_pointer(0x00005000) {
         serial_write_str("    ✓ User pointer validation working\n");
+    }
+}
+
+// ============================================================================
+// Phase 8: Enhanced Scheduler with Priority Support
+// ============================================================================
+
+/// Priority-based ready queue
+pub struct PriorityReadyQueue {
+    pub queues: [[u32; 256]; 256],  // 256 priority levels, each with 256 PIDs
+    pub queue_counts: [usize; 256],  // Count of processes in each priority queue
+    pub highest_priority: u8,         // Highest non-empty priority
+}
+
+impl PriorityReadyQueue {
+    /// Create a new priority ready queue
+    pub fn new() -> Self {
+        PriorityReadyQueue {
+            queues: [[0u32; 256]; 256],
+            queue_counts: [0; 256],
+            highest_priority: 0,
+        }
+    }
+
+    /// Add process to ready queue at given priority
+    pub fn enqueue(&mut self, pid: u32, priority: u8) {
+        let p = priority as usize;
+        if p < 256 && self.queue_counts[p] < 256 {
+            self.queues[p][self.queue_counts[p]] = pid;
+            self.queue_counts[p] += 1;
+            if p > self.highest_priority as usize {
+                self.highest_priority = priority;
+            }
+        }
+    }
+
+    /// Get next process from ready queue (highest priority first)
+    pub fn dequeue(&mut self) -> Option<u32> {
+        // Iterate from highest to lowest priority
+        for priority in (0..=255).rev() {
+            if self.queue_counts[priority] > 0 {
+                let pid = self.queues[priority][0];
+                // Shift remaining entries
+                for i in 0..(self.queue_counts[priority] - 1) {
+                    self.queues[priority][i] = self.queues[priority][i + 1];
+                }
+                self.queue_counts[priority] -= 1;
+                return Some(pid);
+            }
+        }
+        None
+    }
+
+    /// Check if queue is empty
+    pub fn is_empty(&self) -> bool {
+        self.queue_counts.iter().all(|&count| count == 0)
+    }
+
+    /// Get number of ready processes
+    pub fn ready_count(&self) -> usize {
+        self.queue_counts.iter().sum()
+    }
+}
+
+impl Default for PriorityReadyQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Process group for job control
+pub struct ProcessGroup {
+    pub pgid: u32,                  // Process group ID
+    pub processes: [Option<u32>; 256],  // PIDs in this group
+    pub process_count: usize,
+    pub leader_pid: u32,            // Group leader PID
+    pub session_id: u32,            // Session this group belongs to
+}
+
+impl ProcessGroup {
+    /// Create a new process group
+    pub fn new(pgid: u32, leader_pid: u32, session_id: u32) -> Self {
+        let mut processes = [None; 256];
+        processes[0] = Some(leader_pid);
+        
+        ProcessGroup {
+            pgid,
+            processes,
+            process_count: 1,
+            leader_pid,
+            session_id,
+        }
+    }
+
+    /// Add process to group
+    pub fn add_process(&mut self, pid: u32) -> bool {
+        if self.process_count < 256 {
+            self.processes[self.process_count] = Some(pid);
+            self.process_count += 1;
+            return true;
+        }
+        false
+    }
+
+    /// Remove process from group
+    pub fn remove_process(&mut self, pid: u32) -> bool {
+        for i in 0..self.process_count {
+            if self.processes[i] == Some(pid) {
+                // Shift remaining
+                for j in i..(self.process_count - 1) {
+                    self.processes[j] = self.processes[j + 1];
+                }
+                self.process_count -= 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Send signal to all processes in group
+    pub fn signal_all(&self, signal: Signal) {
+        for i in 0..self.process_count {
+            if let Some(pid) = self.processes[i] {
+                // Would send signal to process
+                let _ = (pid, signal);
+            }
+        }
+    }
+}
+
+impl Default for ProcessGroup {
+    fn default() -> Self {
+        Self::new(0, 0, 0)
+    }
+}
+
+/// Session for process group management
+pub struct Session {
+    pub sid: u32,                   // Session ID
+    pub leader_pid: u32,            // Session leader PID
+    pub process_groups: [Option<u32>; 256],  // PGIDs in session
+    pub group_count: usize,
+}
+
+impl Session {
+    /// Create a new session
+    pub fn new(sid: u32, leader_pid: u32) -> Self {
+        Session {
+            sid,
+            leader_pid,
+            process_groups: [None; 256],
+            group_count: 0,
+        }
+    }
+
+    /// Add process group to session
+    pub fn add_group(&mut self, pgid: u32) -> bool {
+        if self.group_count < 256 {
+            self.process_groups[self.group_count] = Some(pgid);
+            self.group_count += 1;
+            return true;
+        }
+        false
+    }
+}
+
+impl Default for Session {
+    fn default() -> Self {
+        Self::new(0, 0)
     }
 }
 
