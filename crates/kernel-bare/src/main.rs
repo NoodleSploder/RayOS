@@ -4488,9 +4488,20 @@ extern "C" fn timer_interrupt_handler() {
 
 #[no_mangle]
 extern "C" fn keyboard_interrupt_handler() {
-    IRQ_KBD_COUNT.fetch_add(1, Ordering::Relaxed);
     // Read scancode from PS/2 data port.
     let sc = unsafe { inb(0x60) };
+    keyboard_handle_scancode(sc);
+    unsafe {
+        if LAPIC_MMIO != 0 {
+            lapic_eoi();
+        } else {
+            pic_eoi(1);
+        }
+    }
+}
+
+pub(crate) fn keyboard_handle_scancode(sc: u8) {
+    IRQ_KBD_COUNT.fetch_add(1, Ordering::Relaxed);
     LAST_SCANCODE.store(sc as u64, Ordering::Relaxed);
 
     // Track modifier state (set 1 scancodes).
@@ -4518,13 +4529,15 @@ extern "C" fn keyboard_interrupt_handler() {
         if let Some(ch) = scancode_set1_to_ascii(sc, shift, caps) {
             kbd_buf_push(ch);
             LAST_ASCII.store(ch as u64, Ordering::Relaxed);
-        }
-    }
-    unsafe {
-        if LAPIC_MMIO != 0 {
-            lapic_eoi();
-        } else {
-            pic_eoi(1);
+
+            static KBD_ASCII_LOG_COUNT: core::sync::atomic::AtomicU32 =
+                core::sync::atomic::AtomicU32::new(0);
+            let n = KBD_ASCII_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if n < 64 {
+                serial_write_str("RAYOS_KBD_ASCII=0x");
+                serial_write_hex_u64(ch as u64);
+                serial_write_str("\n");
+            }
         }
     }
 }
@@ -4555,6 +4568,22 @@ fn kbd_buf_pop() -> Option<u8> {
 }
 
 fn kbd_try_read_byte() -> Option<u8> {
+    if let Some(b) = kbd_buf_pop() {
+        return Some(b);
+    }
+
+    // Fallback: poll the i8042 output buffer for pending scancodes.
+    // This keeps the RayOS command loop responsive even when IRQ1 delivery is
+    // disrupted by VMX external-interrupt exiting / timeslicing.
+    for _ in 0..8u32 {
+        let st = unsafe { inb(0x0064) };
+        if (st & 0x01) == 0 {
+            break;
+        }
+        let sc = unsafe { inb(0x0060) };
+        keyboard_handle_scancode(sc);
+    }
+
     kbd_buf_pop()
 }
 
@@ -7198,6 +7227,7 @@ fn kernel_main() -> ! {
         match state {
             1 => ("[..] Linux Desktop: starting", 0xff_ff_00),
             2 => ("[OK] Linux Desktop: available", 0x00_ff_00),
+            5 => ("[..] Linux Desktop: presenting", 0xff_ff_00),
             3 => ("[OK] Linux Desktop: running", 0x00_ff_00),
             4 => ("[..] Linux Desktop: stopping", 0xff_ff_00),
             _ => ("[--] Linux Desktop: unavailable", 0xaa_aa_aa),
@@ -7844,7 +7874,10 @@ fn kernel_main() -> ! {
         let mut t = 0usize;
         while t < nt {
             let tok = toks[t];
-            if eq_ignore_ascii_case(tok, b"hide") {
+            if eq_ignore_ascii_case(tok, b"hide")
+                || eq_ignore_ascii_case(tok, b"ide")
+                || starts_with_ignore_ascii_case(tok, b"hid")
+            {
                 seen_hide = true;
             } else if eq_ignore_ascii_case(tok, b"linux") || eq_ignore_ascii_case(tok, b"linu") {
                 seen_linux = true;
@@ -8256,6 +8289,17 @@ fn kernel_main() -> ! {
                 b'\n' => {
                     serial_write_str("\n");
 
+                    // Debug (throttled): log the exact entered line to help diagnose
+                    // headless `sendkey` parsing issues.
+                    static INPUT_LINE_LOG_COUNT: core::sync::atomic::AtomicU32 =
+                        core::sync::atomic::AtomicU32::new(0);
+                    let n = INPUT_LINE_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+                    if n < 8 {
+                        serial_write_str("RAYOS_INPUT_LINE:");
+                        serial_write_bytes(&line_buf[..len]);
+                        serial_write_str("\n");
+                    }
+
                     // Process entered line.
                     if len != 0 {
                         if line_buf[0] == b':' {
@@ -8413,12 +8457,24 @@ fn kernel_main() -> ! {
                                 }
                                 #[cfg(feature = "vmm_hypervisor")]
                                 {
-                                    // 3 = running (presented)
-                                    LINUX_DESKTOP_STATE.store(3, Ordering::Relaxed);
-                                    chat.push_line(b"SYS: ", b"showing Linux desktop (presentation only)");
+                                    // For the embedded VMM path, request that the in-kernel
+                                    // Linux guest starts (or continues) running.
                                     // For the embedded VMM path, request that the in-kernel
                                     // Linux guest starts (or continues) running.
                                     crate::hypervisor::linux_desktop_vmm_request_start();
+
+                                    // UI state: only report "running" once a scanout exists.
+                                    if guest_surface::surface_snapshot().is_some() {
+                                        // 3 = running (presented)
+                                        LINUX_DESKTOP_STATE.store(3, Ordering::Relaxed);
+                                    } else {
+                                        // 5 = presenting (waiting for scanout)
+                                        LINUX_DESKTOP_STATE.store(5, Ordering::Relaxed);
+                                    }
+                                    chat.push_line(
+                                        b"SYS: ",
+                                        b"showing Linux desktop (presentation only)",
+                                    );
                                 }
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
@@ -8438,12 +8494,41 @@ fn kernel_main() -> ! {
                                             b"SYS: ",
                                             b"no scanout yet; waiting for dev_scanout producer",
                                         );
-                                        serial_write_str("SYS: no scanout yet; waiting for dev_scanout producer\n");
+                                        serial_write_str(
+                                            "SYS: no scanout yet; waiting for dev_scanout producer\n",
+                                        );
                                     }
-                                    #[cfg(not(feature = "dev_scanout"))]
+                                    #[cfg(all(
+                                        feature = "vmm_hypervisor",
+                                        feature = "vmm_linux_guest",
+                                        feature = "vmm_virtio_gpu",
+                                        not(feature = "dev_scanout")
+                                    ))]
                                     {
-                                        chat.push_line(b"SYS: ", b"no guest scanout available; run RAYOS_KERNEL_FEATURES=dev_scanout");
-                                        serial_write_str("SYS: no guest scanout available; run RAYOS_KERNEL_FEATURES=dev_scanout\n");
+                                        chat.push_line(
+                                            b"SYS: ",
+                                            b"no guest scanout yet; waiting for Linux virtio-gpu to publish",
+                                        );
+                                        serial_write_str(
+                                            "SYS: no guest scanout yet; waiting for Linux virtio-gpu to publish\n",
+                                        );
+                                    }
+                                    #[cfg(all(
+                                        not(feature = "dev_scanout"),
+                                        not(all(
+                                            feature = "vmm_hypervisor",
+                                            feature = "vmm_linux_guest",
+                                            feature = "vmm_virtio_gpu"
+                                        ))
+                                    ))]
+                                    {
+                                        chat.push_line(
+                                            b"SYS: ",
+                                            b"no guest scanout available; run RAYOS_KERNEL_FEATURES=dev_scanout",
+                                        );
+                                        serial_write_str(
+                                            "SYS: no guest scanout available; run RAYOS_KERNEL_FEATURES=dev_scanout\n",
+                                        );
                                     }
                                     render_chat_log(&chat);
                                 }
@@ -8451,6 +8536,17 @@ fn kernel_main() -> ! {
                                 guest_surface::set_presentation_state(
                                     guest_surface::PresentationState::Presented,
                                 );
+
+                                // If a scanout already exists (e.g. after hide/show), emit the
+                                // deterministic marker immediately. This avoids depending on the
+                                // PIT tick boundary to detect the Presented transition.
+                                if let Some(surface) = guest_surface::surface_snapshot() {
+                                    serial_write_str("RAYOS_LINUX_DESKTOP_PRESENTED:ok:");
+                                    serial_write_hex_u64(surface.width as u64);
+                                    serial_write_str("x");
+                                    serial_write_hex_u64(surface.height as u64);
+                                    serial_write_str("\n");
+                                }
                                 serial_write_str(
                                     "RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n",
                                 );
@@ -9023,7 +9119,7 @@ fn kernel_main() -> ! {
             #[cfg(feature = "vmm_hypervisor")]
             {
                 let cur = LINUX_DESKTOP_STATE.load(Ordering::Relaxed);
-                if cur == 2 || cur == 3 {
+                if cur == 2 || cur == 3 || cur == 5 {
                     crate::hypervisor::linux_desktop_vmm_tick();
                 }
             }
@@ -9064,12 +9160,33 @@ fn kernel_main() -> ! {
                     // Entering Presented: render the current scanout immediately
                     // (even if no new frame_seq has been bumped yet).
                     if let Some(surface) = guest_surface::surface_snapshot() {
+                        // Also emit a deterministic marker on (re)show when a scanout
+                        // is already available. This keeps headless automation stable
+                        // across hide/show cycles.
+                        serial_write_str("RAYOS_LINUX_DESKTOP_PRESENTED:ok:");
+                        serial_write_hex_u64(surface.width as u64);
+                        serial_write_str("x");
+                        serial_write_hex_u64(surface.height as u64);
+                        serial_write_str("\n");
+
+                        #[cfg(feature = "vmm_hypervisor")]
+                        {
+                            if LINUX_DESKTOP_STATE.load(Ordering::Relaxed) == 5 {
+                                LINUX_DESKTOP_STATE.store(3, Ordering::Relaxed);
+                            }
+                        }
                         present_guest_surface(surface, fs);
                     }
                     last_guest_frame_seq = fs;
                 } else if fs != last_guest_frame_seq {
                     last_guest_frame_seq = fs;
                     if let Some(surface) = guest_surface::surface_snapshot() {
+                        #[cfg(feature = "vmm_hypervisor")]
+                        {
+                            if LINUX_DESKTOP_STATE.load(Ordering::Relaxed) == 5 {
+                                LINUX_DESKTOP_STATE.store(3, Ordering::Relaxed);
+                            }
+                        }
                         present_guest_surface(surface, fs);
                     }
                 }

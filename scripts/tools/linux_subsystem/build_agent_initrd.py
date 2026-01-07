@@ -57,6 +57,27 @@ def _unsquashfs_cat(*, modloop: Path, inner_path: str, out_path: Path) -> None:
         )
 
 
+def _parse_modules_dep(text: str) -> dict[str, list[str]]:
+    dep_map: dict[str, list[str]] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or ":" not in line:
+            continue
+        mod, deps = line.split(":", 1)
+        mod = mod.strip()
+        dep_list = [d for d in deps.strip().split() if d]
+        dep_map[mod] = dep_list
+    return dep_map
+
+
+def _collect_transitive_modules(*, root: str, dep_map: dict[str, list[str]], out: set[str]) -> None:
+    if root in out:
+        return
+    out.add(root)
+    for dep in dep_map.get(root, []):
+        _collect_transitive_modules(root=dep, dep_map=dep_map, out=out)
+
+
 def _include_input_modules_from_modloop(*, tmp_root: Path, modloop: Path) -> None:
     # Best-effort: if unsquashfs isn't installed, keep building an initrd that can still boot.
     if shutil.which("unsquashfs") is None:
@@ -79,13 +100,28 @@ def _include_input_modules_from_modloop(*, tmp_root: Path, modloop: Path) -> Non
             out_path=tmp_root / "lib" / "modules" / kernver / name,
         )
 
-    # Minimal set for virtio-input e2e in initramfs:
-    # - virtio_input creates an input device
-    # - evdev exposes it as /dev/input/event0
-    for rel in [
+    # Bundle a small, correct subset of modules by following dependencies from modules.dep.
+    # This keeps the initrd small while allowing rdinit=/rayos_init to modprobe virtio-input
+    # and virtio-gpu without relying on Alpine init to mount modloop.
+    dep_text = (tmp_root / "lib" / "modules" / kernver / "modules.dep").read_text(
+        encoding="utf-8",
+        errors="replace",
+    )
+    dep_map = _parse_modules_dep(dep_text)
+
+    wanted_roots = [
+        # virtio-input e2e in initramfs:
         "kernel/drivers/virtio/virtio_input.ko",
         "kernel/drivers/input/evdev.ko",
-    ]:
+        # RayOS-native Linux desktop milestone: let the guest bind virtio-gpu.
+        "kernel/drivers/gpu/drm/virtio/virtio-gpu.ko",
+    ]
+
+    wanted: set[str] = set()
+    for root in wanted_roots:
+        _collect_transitive_modules(root=root, dep_map=dep_map, out=wanted)
+
+    for rel in sorted(wanted):
         _unsquashfs_cat(
             modloop=modloop,
             inner_path=f"{base}/{rel}",

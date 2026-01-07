@@ -168,6 +168,16 @@ impl VirtioGpuModel {
         req: &proto::VirtioGpuResourceCreate2d,
         resp_hdr: &mut proto::VirtioGpuCtrlHdr,
     ) {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:RESOURCE_CREATE_2D rid=");
+        crate::serial_write_hex_u64(req.resource_id as u64);
+        crate::serial_write_str(" w=");
+        crate::serial_write_hex_u64(req.width as u64);
+        crate::serial_write_str(" h=");
+        crate::serial_write_hex_u64(req.height as u64);
+        crate::serial_write_str(" fmt=");
+        crate::serial_write_hex_u64(req.format as u64);
+        crate::serial_write_str("\n");
+
         let Some(slot) = self.alloc_slot(req.resource_id) else {
             resp_hdr.type_ = proto::VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY;
             return;
@@ -197,6 +207,16 @@ impl VirtioGpuModel {
     ) {
         let is_scanout = self.scanout_resource_id == resource_id;
 
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:RESOURCE_ATTACH_BACKING rid=");
+        crate::serial_write_hex_u64(resource_id as u64);
+        crate::serial_write_str(" addr=");
+        crate::serial_write_hex_u64(entry.addr);
+        crate::serial_write_str(" len=");
+        crate::serial_write_hex_u64(entry.length as u64);
+        crate::serial_write_str(" scanout=");
+        crate::serial_write_hex_u64(is_scanout as u64);
+        crate::serial_write_str("\n");
+
         let Some(slot) = self.find_slot_mut(resource_id) else {
             resp_hdr.type_ = proto::VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID;
             return;
@@ -207,6 +227,9 @@ impl VirtioGpuModel {
 
         let snapshot = *slot;
         if is_scanout && snapshot.is_valid() && snapshot.backing_addr != 0 {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:PUBLISH_FROM_ATTACH rid=");
+            crate::serial_write_hex_u64(resource_id as u64);
+            crate::serial_write_str("\n");
             self.publish_scanout_from(&snapshot);
         }
     }
@@ -216,6 +239,16 @@ impl VirtioGpuModel {
         req: &proto::VirtioGpuSetScanout,
         resp_hdr: &mut proto::VirtioGpuCtrlHdr,
     ) {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SET_SCANOUT id=");
+        crate::serial_write_hex_u64(req.scanout_id as u64);
+        crate::serial_write_str(" rid=");
+        crate::serial_write_hex_u64(req.resource_id as u64);
+        crate::serial_write_str(" rect=");
+        crate::serial_write_hex_u64(req.rect.width as u64);
+        crate::serial_write_str("x");
+        crate::serial_write_hex_u64(req.rect.height as u64);
+        crate::serial_write_str("\n");
+
         // We only support scanout 0 for now.
         if req.scanout_id != 0 {
             resp_hdr.type_ = proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER;
@@ -231,6 +264,9 @@ impl VirtioGpuModel {
             let snapshot = *slot;
             if snapshot.backing_addr != 0 && snapshot.is_valid() {
                 // Use the resource dimensions; rect may reflect a sub-rectangle.
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:PUBLISH_FROM_SET_SCANOUT rid=");
+                crate::serial_write_hex_u64(req.resource_id as u64);
+                crate::serial_write_str("\n");
                 self.publish_scanout_from(&snapshot);
             }
         }

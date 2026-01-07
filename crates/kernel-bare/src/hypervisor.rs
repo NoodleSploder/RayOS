@@ -1306,6 +1306,11 @@ const MMIO_COUNTER_SIZE: u64 = PAGE_SIZE as u64;
 const MMIO_VIRTIO_BASE: u64 = MMIO_COUNTER_BASE + MMIO_COUNTER_SIZE;
 const MMIO_VIRTIO_SIZE: u64 = PAGE_SIZE as u64;
 
+// virtio-gpu uses a "host visible" shared-memory region on some kernels.
+// We expose a small, byte-addressable window immediately after the virtio-mmio regs.
+const MMIO_VIRTIO_GPU_SHM_BASE: u64 = MMIO_VIRTIO_BASE + MMIO_VIRTIO_SIZE;
+const MMIO_VIRTIO_GPU_SHM_SIZE: u64 = 2 * 1024 * 1024; // 2 MiB
+
 // IOAPIC MMIO (x86 legacy): Linux programs IRQ vectors here when APIC/IOAPIC is enabled.
 // We emulate the minimal IOREGSEL/IOWIN interface and a small redirection table.
 const MMIO_IOAPIC_BASE: u64 = 0xFEC0_0000;
@@ -1383,6 +1388,13 @@ const VIRTIO_MMIO_QUEUE_DRIVER_OFFSET: u64 = 0x088;
 
 const VIRTIO_MMIO_QUEUE_USED_LOW_OFFSET: u64 = 0x0A0;
 const VIRTIO_MMIO_QUEUE_USED_HIGH_OFFSET: u64 = 0x0A4;
+
+// Modern virtio-mmio shared-memory region registers (used by some drivers, including virtio-gpu).
+const VIRTIO_MMIO_SHM_SEL_OFFSET: u64 = 0x0AC;
+const VIRTIO_MMIO_SHM_LEN_LOW_OFFSET: u64 = 0x0B0;
+const VIRTIO_MMIO_SHM_LEN_HIGH_OFFSET: u64 = 0x0B4;
+const VIRTIO_MMIO_SHM_BASE_LOW_OFFSET: u64 = 0x0B8;
+const VIRTIO_MMIO_SHM_BASE_HIGH_OFFSET: u64 = 0x0BC;
 
 // Legacy alias used by older guest blobs in this repo.
 const VIRTIO_MMIO_QUEUE_SIZE_OFFSET: u64 = 0x098;
@@ -1480,6 +1492,23 @@ const VIRTIO_CONSOLE_DEVICE_ID: u32 = 3;
 // Safety: accessed only from the single-core hypervisor path today.
 #[cfg(feature = "vmm_virtio_gpu")]
 static mut VIRTIO_GPU_DEVICE: VirtioGpuDevice = VirtioGpuDevice::new();
+
+// Scratch page used to assemble scatter-gather virtio-gpu requests (notably
+// RESOURCE_ATTACH_BACKING where Linux commonly places the mem-entry in a
+// separate descriptor).
+#[cfg(feature = "vmm_virtio_gpu")]
+static mut VIRTIO_GPU_SG_SCRATCH_PHYS: u64 = 0;
+
+#[cfg(feature = "vmm_virtio_gpu")]
+unsafe fn virtio_gpu_sg_scratch_phys() -> Option<u64> {
+    if VIRTIO_GPU_SG_SCRATCH_PHYS != 0 {
+        return Some(VIRTIO_GPU_SG_SCRATCH_PHYS);
+    }
+    let p = crate::phys_alloc_page()?;
+    core::ptr::write_bytes(crate::phys_to_virt(p) as *mut u8, 0, PAGE_SIZE);
+    VIRTIO_GPU_SG_SCRATCH_PHYS = p;
+    Some(p)
+}
 const VIRTIO_NET_TX_QUEUE: u16 = 0;
 const VIRTIO_NET_RX_QUEUE: u16 = 1;
 const VIRTIO_NET_PKT_MAX: usize = 2048;
@@ -1694,6 +1723,36 @@ unsafe fn host_pic_eoi_for_vector(vector: u8) {
         host_outb(0x00A0, 0x20);
     }
     host_outb(0x0020, 0x20);
+}
+
+#[inline(always)]
+unsafe fn host_lapic_eoi_if_present() {
+    // When RayOS is using the local APIC/IOAPIC, EOIs must be issued to the LAPIC.
+    // External-interrupt VM-exits are sourced from host interrupts, so best-effort
+    // acknowledge them here to avoid repeated EXTINT exits.
+    if LAPIC_MMIO != 0 {
+        let lapic = crate::phys_to_virt(LAPIC_MMIO) as *mut u32;
+        // LAPIC EOI register is at offset 0xB0.
+        core::ptr::write_volatile(lapic.add(0xB0 / 4), 0);
+    }
+}
+
+#[inline(always)]
+unsafe fn host_drain_i8042_scancodes() -> u32 {
+    // Drain a small bounded batch of pending PS/2 scancodes from the host i8042.
+    // This allows RayOS to continue receiving headless-injected commands (QEMU `sendkey`)
+    // even while the guest is running with external-interrupt exiting enabled.
+    let mut drained: u32 = 0;
+    for _ in 0..32u32 {
+        let st = host_inb(0x0064);
+        if (st & 0x01) == 0 {
+            break;
+        }
+        let sc = host_inb(0x0060);
+        crate::keyboard_handle_scancode(sc);
+        drained = drained.wrapping_add(1);
+    }
+    drained
 }
 
 #[inline(always)]
@@ -2126,6 +2185,9 @@ struct VirtioMmioState {
     queue_align: AtomicU32,
     queue_pfn: [AtomicU32; 2],
 
+    // Modern virtio-mmio shared-memory region selection.
+    shm_sel: AtomicU32,
+
     // virtio-input config selection state (select/subsel fields).
     // Linux-style virtio-input queries are modeled as reads from the MMIO config space
     // after the guest writes select/subsel.
@@ -2188,6 +2250,8 @@ impl VirtioMmioState {
             queue_align: AtomicU32::new(4096),
             queue_pfn: [AtomicU32::new(0), AtomicU32::new(0)],
 
+            shm_sel: AtomicU32::new(0),
+
             #[cfg(feature = "vmm_virtio_input")]
             input_cfg_select: AtomicU32::new(0),
             #[cfg(feature = "vmm_virtio_input")]
@@ -2227,7 +2291,9 @@ fn virtio_device_features(device_id: u32) -> u64 {
         // addresses, which would break our simple guest-physical writes.
         VIRTIO_INPUT_DEVICE_ID => VIRTIO_F_VERSION_1,
         VIRTIO_NET_DEVICE_ID => legacy_lowbit_plus_v1,
-        VIRTIO_GPU_DEVICE_ID => legacy_lowbit_plus_v1,
+        // Avoid advertising any device-specific virtio-gpu feature bits unless we actually
+        // implement them. Some kernels treat bit0 as VIRGL and will probe SHM regions.
+        VIRTIO_GPU_DEVICE_ID => VIRTIO_F_VERSION_1,
         VIRTIO_CONSOLE_DEVICE_ID => legacy_lowbit_plus_v1,
         _ => legacy_lowbit_plus_v1,
     }
@@ -3042,6 +3108,23 @@ fn init_hypervisor_mmio() {
             crate::serial_write_str("RAYOS_VMM:VMX:MMIO_VIRTIO_FAIL\n");
         }
 
+        // Provide a minimal host-visible SHM region for virtio-gpu.
+        // This is used by some Linux kernels during virtio-gpu probe.
+        #[cfg(feature = "vmm_virtio_gpu")]
+        {
+            let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+            if dev == VIRTIO_GPU_DEVICE_ID {
+                let shm_region = MmioRegion {
+                    base: MMIO_VIRTIO_GPU_SHM_BASE,
+                    size: MMIO_VIRTIO_GPU_SHM_SIZE,
+                    handler: virtio_gpu_shm_handler,
+                };
+                if !register_mmio_region(shm_region) {
+                    crate::serial_write_str("RAYOS_VMM:VMX:MMIO_VIRTIO_GPU_SHM_FAIL\n");
+                }
+            }
+        }
+
         let ioapic_region = MmioRegion {
             base: MMIO_IOAPIC_BASE,
             size: MMIO_IOAPIC_SIZE,
@@ -3062,6 +3145,87 @@ fn init_hypervisor_mmio() {
             crate::serial_write_str("RAYOS_VMM:VIRTIO_CONSOLE:ENABLED\n");
         } else if dev == VIRTIO_INPUT_DEVICE_ID {
             crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENABLED\n");
+        }
+    }
+}
+
+// Backing store for the virtio-gpu host-visible SHM region.
+// Safety: accessed only from the single-core hypervisor path today.
+#[cfg(feature = "vmm_virtio_gpu")]
+const VIRTIO_GPU_HOST_VISIBLE_SHM_PAGE_COUNT: usize =
+    (MMIO_VIRTIO_GPU_SHM_SIZE as usize + PAGE_SIZE - 1) / PAGE_SIZE;
+
+#[cfg(feature = "vmm_virtio_gpu")]
+static mut VIRTIO_GPU_HOST_VISIBLE_SHM_PAGES: [u64; VIRTIO_GPU_HOST_VISIBLE_SHM_PAGE_COUNT] =
+    [0u64; VIRTIO_GPU_HOST_VISIBLE_SHM_PAGE_COUNT];
+
+#[cfg(feature = "vmm_virtio_gpu")]
+static mut VIRTIO_GPU_HOST_VISIBLE_SHM_READY: bool = false;
+
+#[cfg(feature = "vmm_virtio_gpu")]
+unsafe fn ensure_virtio_gpu_host_visible_shm_ready() -> bool {
+    if VIRTIO_GPU_HOST_VISIBLE_SHM_READY {
+        return true;
+    }
+
+    for i in 0..VIRTIO_GPU_HOST_VISIBLE_SHM_PAGE_COUNT {
+        let Some(p) = crate::phys_alloc_page() else {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SHM_ALLOC_FAIL\n");
+            return false;
+        };
+        VIRTIO_GPU_HOST_VISIBLE_SHM_PAGES[i] = p;
+        core::ptr::write_bytes(crate::phys_to_virt(p) as *mut u8, 0, PAGE_SIZE);
+    }
+
+    VIRTIO_GPU_HOST_VISIBLE_SHM_READY = true;
+    true
+}
+
+#[cfg(feature = "vmm_virtio_gpu")]
+fn virtio_gpu_shm_handler(
+    _regs: &mut GuestRegs,
+    access: &MmioAccess,
+    value: Option<u64>,
+) -> Option<u64> {
+    let size = access.size;
+    if !(size == 1 || size == 2 || size == 4 || size == 8) {
+        return None;
+    }
+
+    let off = access.offset as usize;
+    if off.saturating_add(size) > (MMIO_VIRTIO_GPU_SHM_SIZE as usize) {
+        return None;
+    }
+
+    unsafe {
+        if !ensure_virtio_gpu_host_visible_shm_ready() {
+            return None;
+        }
+        match access.kind {
+            MmioAccessKind::Read => {
+                let mut out: u64 = 0;
+                for i in 0..size {
+                    let idx = off + i;
+                    let page = idx / PAGE_SIZE;
+                    let page_off = idx % PAGE_SIZE;
+                    let phys = VIRTIO_GPU_HOST_VISIBLE_SHM_PAGES[page] + page_off as u64;
+                    let b = core::ptr::read_volatile(crate::phys_to_virt(phys) as *const u8);
+                    out |= (b as u64) << (8 * i);
+                }
+                Some(out)
+            }
+            MmioAccessKind::Write => {
+                let v = value.unwrap_or(0);
+                for i in 0..size {
+                    let idx = off + i;
+                    let page = idx / PAGE_SIZE;
+                    let page_off = idx % PAGE_SIZE;
+                    let phys = VIRTIO_GPU_HOST_VISIBLE_SHM_PAGES[page] + page_off as u64;
+                    let b = ((v >> (8 * i)) & 0xFF) as u8;
+                    core::ptr::write_volatile(crate::phys_to_virt(phys) as *mut u8, b);
+                }
+                None
+            }
         }
     }
 }
@@ -3478,6 +3642,102 @@ fn virtio_mmio_handler(
                 Some(VIRTIO_MMIO_STATE.queue_ready[qi].load(Ordering::Relaxed) as u64)
             }
         }
+
+        // Modern virtio-mmio SHM registers.
+        // For virtio-gpu, expose a small host-visible SHM region so Linux can reserve it during probe.
+        (VIRTIO_MMIO_SHM_SEL_OFFSET, MmioAccessKind::Read) => {
+            Some(VIRTIO_MMIO_STATE.shm_sel.load(Ordering::Relaxed) as u64)
+        }
+        (VIRTIO_MMIO_SHM_SEL_OFFSET, MmioAccessKind::Write) => {
+            VIRTIO_MMIO_STATE.shm_sel.store(write_value as u32, Ordering::Relaxed);
+            #[cfg(feature = "vmm_virtio_gpu")]
+            {
+                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_GPU_DEVICE_ID {
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:SHM_SEL=");
+                    crate::serial_write_hex_u64(write_value);
+                    crate::serial_write_str("\n");
+                }
+            }
+            None
+        }
+        (VIRTIO_MMIO_SHM_LEN_LOW_OFFSET, MmioAccessKind::Read) => {
+            #[cfg(feature = "vmm_virtio_gpu")]
+            {
+                let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+                let sel = VIRTIO_MMIO_STATE.shm_sel.load(Ordering::Relaxed);
+                if dev == VIRTIO_GPU_DEVICE_ID && sel <= 1 {
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:SHM_LEN_LOW sel=");
+                    crate::serial_write_hex_u64(sel as u64);
+                    crate::serial_write_str(" val=");
+                    crate::serial_write_hex_u64((MMIO_VIRTIO_GPU_SHM_SIZE & 0xFFFF_FFFF) as u64);
+                    crate::serial_write_str("\n");
+                    Some((MMIO_VIRTIO_GPU_SHM_SIZE & 0xFFFF_FFFF) as u64)
+                } else {
+                    Some(0)
+                }
+            }
+            #[cfg(not(feature = "vmm_virtio_gpu"))]
+            {
+                Some(0)
+            }
+        }
+        (VIRTIO_MMIO_SHM_LEN_HIGH_OFFSET, MmioAccessKind::Read) => {
+            #[cfg(feature = "vmm_virtio_gpu")]
+            {
+                let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+                let sel = VIRTIO_MMIO_STATE.shm_sel.load(Ordering::Relaxed);
+                if dev == VIRTIO_GPU_DEVICE_ID && sel <= 1 {
+                    Some((MMIO_VIRTIO_GPU_SHM_SIZE >> 32) as u64)
+                } else {
+                    Some(0)
+                }
+            }
+            #[cfg(not(feature = "vmm_virtio_gpu"))]
+            {
+                Some(0)
+            }
+        }
+        (VIRTIO_MMIO_SHM_BASE_LOW_OFFSET, MmioAccessKind::Read) => {
+            #[cfg(feature = "vmm_virtio_gpu")]
+            {
+                let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+                let sel = VIRTIO_MMIO_STATE.shm_sel.load(Ordering::Relaxed);
+                if dev == VIRTIO_GPU_DEVICE_ID && sel <= 1 {
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:SHM_BASE_LOW sel=");
+                    crate::serial_write_hex_u64(sel as u64);
+                    crate::serial_write_str(" val=");
+                    crate::serial_write_hex_u64((MMIO_VIRTIO_GPU_SHM_BASE & 0xFFFF_FFFF) as u64);
+                    crate::serial_write_str("\n");
+                    Some((MMIO_VIRTIO_GPU_SHM_BASE & 0xFFFF_FFFF) as u64)
+                } else {
+                    Some(0)
+                }
+            }
+            #[cfg(not(feature = "vmm_virtio_gpu"))]
+            {
+                Some(0)
+            }
+        }
+        (VIRTIO_MMIO_SHM_BASE_HIGH_OFFSET, MmioAccessKind::Read) => {
+            #[cfg(feature = "vmm_virtio_gpu")]
+            {
+                let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+                let sel = VIRTIO_MMIO_STATE.shm_sel.load(Ordering::Relaxed);
+                if dev == VIRTIO_GPU_DEVICE_ID && sel <= 1 {
+                    Some((MMIO_VIRTIO_GPU_SHM_BASE >> 32) as u64)
+                } else {
+                    Some(0)
+                }
+            }
+            #[cfg(not(feature = "vmm_virtio_gpu"))]
+            {
+                Some(0)
+            }
+        }
+        (VIRTIO_MMIO_SHM_LEN_LOW_OFFSET, MmioAccessKind::Write) => None,
+        (VIRTIO_MMIO_SHM_LEN_HIGH_OFFSET, MmioAccessKind::Write) => None,
+        (VIRTIO_MMIO_SHM_BASE_LOW_OFFSET, MmioAccessKind::Write) => None,
+        (VIRTIO_MMIO_SHM_BASE_HIGH_OFFSET, MmioAccessKind::Write) => None,
 
         // Modern split address registers (high parts).
         (VIRTIO_MMIO_QUEUE_DESC_HIGH_OFFSET, MmioAccessKind::Read) => {
@@ -4033,6 +4293,47 @@ fn virtio_mmio_handler(
                             None
                         }
                     }
+
+                    // Minimal virtio-gpu config space.
+                    // virtio-gpu device config (little-endian u32s):
+                    //   0x00 events_read
+                    //   0x04 events_clear
+                    //   0x08 num_scanouts
+                    //   0x0c num_capsets
+                    #[cfg(feature = "vmm_virtio_gpu")]
+                    VIRTIO_GPU_DEVICE_ID => {
+                        let cfg_offset = access.offset - VIRTIO_MMIO_CONFIG_SPACE_OFFSET;
+                        match access.kind {
+                            MmioAccessKind::Read => {
+                                let events_read: u32 = 0;
+                                let events_clear: u32 = 0;
+                                let num_scanouts: u32 = 1;
+                                let num_capsets: u32 = 0;
+
+                                let mut out: u64 = 0;
+                                for i in 0..access.size {
+                                    let off = cfg_offset + i as u64;
+                                    let b: u8 = if off < 4 {
+                                        events_read.to_le_bytes()[off as usize]
+                                    } else if (4..8).contains(&off) {
+                                        events_clear.to_le_bytes()[(off - 4) as usize]
+                                    } else if (8..12).contains(&off) {
+                                        num_scanouts.to_le_bytes()[(off - 8) as usize]
+                                    } else if (12..16).contains(&off) {
+                                        num_capsets.to_le_bytes()[(off - 12) as usize]
+                                    } else {
+                                        0
+                                    };
+                                    out |= (b as u64) << (8 * i);
+                                }
+                                Some(out)
+                            }
+                            MmioAccessKind::Write => {
+                                // events_clear is write-only in the spec; we currently model no events.
+                                None
+                            }
+                        }
+                    }
                     #[cfg(feature = "vmm_virtio_input")]
                     VIRTIO_INPUT_DEVICE_ID => {
                         let cfg_offset = access.offset - VIRTIO_MMIO_CONFIG_SPACE_OFFSET;
@@ -4059,7 +4360,20 @@ fn virtio_mmio_handler(
                     _ => None,
                 }
             } else {
-                crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:UNKNOWN_ACCESS\n");
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:UNKNOWN_ACCESS off=");
+                crate::serial_write_hex_u64(access.offset);
+                crate::serial_write_str(" kind=");
+                crate::serial_write_str(match access.kind {
+                    MmioAccessKind::Read => "R",
+                    MmioAccessKind::Write => "W",
+                });
+                crate::serial_write_str(" size=");
+                crate::serial_write_hex_u64(access.size as u64);
+                if access.kind == MmioAccessKind::Write {
+                    crate::serial_write_str(" val=");
+                    crate::serial_write_hex_u64(write_value);
+                }
+                crate::serial_write_str("\n");
                 None
             }
         }
@@ -4606,6 +4920,13 @@ unsafe fn ensure_io_bitmaps() -> bool {
         set_trap_a(p);
     }
 
+    // Intercept the legacy PS/2 i8042 controller ports.
+    // Rationale: RayOS owns the UI/control plane; if the guest can read i8042 output
+    // (0x60), it will consume scancodes injected via QEMU monitor `sendkey`, starving
+    // the RayOS command loop. The guest should receive input via virtio-input instead.
+    set_trap_a(0x0060); // i8042 data port
+    set_trap_a(0x0064); // i8042 status/command port
+
     IO_BITMAP_A_PHYS = a;
     IO_BITMAP_B_PHYS = b;
     IO_BITMAPS_READY = true;
@@ -5076,7 +5397,19 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
                 }
 
                 let vec = if ok_intr { (intr_info & 0xFF) as u8 } else { 0x20 };
+                host_lapic_eoi_if_present();
                 host_pic_eoi_for_vector(vec);
+                let drained = host_drain_i8042_scancodes();
+
+                // If this EXTINT delivered keyboard input while we are running in an
+                // embedded time-slice, yield back to the caller so the RayOS UI/command
+                // loop can process the buffered bytes promptly.
+                unsafe {
+                    if drained != 0 && VMX_TIMESLICE_ACTIVE != 0 {
+                        VMX_TIMESLICE_SAVED_GUEST_REGS = *regs;
+                        return 1;
+                    }
+                }
                 0
             }
             0 => {
@@ -5381,12 +5714,106 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
                         _ => 0,
                     };
 
+                    // Minimal emulation for a PS/2 i8042 controller (ports 0x60/0x64).
+                    // We trap these ports so the guest can't consume host-injected scancodes
+                    // intended for RayOS, but we still want Linux to initialize cleanly.
+                    //
+                    // Emulation contract:
+                    // - Provide a functional controller command interface (CTR read/write, self-test).
+                    // - Never surface actual keyboard scancodes to the guest (no attached device).
+                    // - Keep status sane (OBF reflects our synthetic response buffer).
+                    #[inline(always)]
+                    unsafe fn i8042_handle_io(port: u16, direction_in: bool, regs: &mut GuestRegs) {
+                        // State is per-VMM (global) because we only run one guest.
+                        static mut OUT_BUF: u8 = 0;
+                        static mut OUT_FULL: bool = false;
+                        static mut CTR: u8 = 0x00;
+                        static mut EXPECT_CTR_DATA: bool = false;
+                        static mut LAST_CMD: u8 = 0;
+
+                        if direction_in {
+                            if port == 0x0064 {
+                                // Status register.
+                                // bit0 OBF: output buffer full
+                                // bit1 IBF: input buffer full (we're always ready)
+                                // bit2 SYS: system flag (doesn't matter much)
+                                let st: u8 = (if OUT_FULL { 1 } else { 0 }) | (1 << 2);
+                                regs.rax = (regs.rax & !0xFF) | (st as u64);
+                            } else {
+                                // Data port.
+                                if OUT_FULL {
+                                    regs.rax = (regs.rax & !0xFF) | (OUT_BUF as u64);
+                                    OUT_FULL = false;
+                                } else {
+                                    regs.rax = (regs.rax & !0xFF) | 0u64;
+                                }
+                            }
+                            return;
+                        }
+
+                        // direction OUT
+                        let v = (regs.rax & 0xFF) as u8;
+                        if port == 0x0064 {
+                            LAST_CMD = v;
+                            EXPECT_CTR_DATA = false;
+
+                            // Commands that expect a response byte on the data port.
+                            match v {
+                                0x20 => {
+                                    // Read controller command byte.
+                                    OUT_BUF = CTR;
+                                    OUT_FULL = true;
+                                }
+                                0x60 => {
+                                    // Write controller command byte (next OUT to 0x60 is data).
+                                    EXPECT_CTR_DATA = true;
+                                }
+                                0xAA => {
+                                    // Controller self-test: 0x55 = OK.
+                                    OUT_BUF = 0x55;
+                                    OUT_FULL = true;
+                                }
+                                0xAB => {
+                                    // Test PS/2 port 1: 0x00 = OK.
+                                    OUT_BUF = 0x00;
+                                    OUT_FULL = true;
+                                }
+                                0xA9 => {
+                                    // Test PS/2 port 2: 0x00 = OK.
+                                    OUT_BUF = 0x00;
+                                    OUT_FULL = true;
+                                }
+                                // 0xAD/0xAE disable/enable port 1
+                                // 0xA7/0xA8 disable/enable port 2
+                                _ => {
+                                    // No response.
+                                }
+                            }
+                        } else {
+                            // port == 0x0060 (data)
+                            if EXPECT_CTR_DATA {
+                                CTR = v;
+                                EXPECT_CTR_DATA = false;
+                            } else {
+                                // Guest is attempting to send a device command.
+                                // No attached keyboard/mouse; ignore.
+                                let _ = LAST_CMD;
+                            }
+                        }
+                    }
+
                     if size == 1 {
                         if !direction_in && port == 0x00E9 {
                             let ch = (regs.rax & 0xFF) as u8;
                             crate::serial_write_str("RAYOS_GUEST_E9:");
                             crate::serial_write_byte(ch);
                             crate::serial_write_str("\n");
+                        }
+
+                        // i8042 keyboard controller: keep the guest from consuming
+                        // host-injected scancodes intended for RayOS.
+                        if port == 0x0060 || port == 0x0064 {
+                            unsafe { i8042_handle_io(port, direction_in, regs) };
                         }
 
                         if pic_is_port(port) {
@@ -6641,6 +7068,28 @@ fn write_guest_bytes(gpa: u64, data: &[u8]) -> bool {
 }
 
 fn guest_gpa_to_phys(gpa: u64) -> Option<u64> {
+    #[cfg(feature = "vmm_virtio_gpu")]
+    {
+        // virtio-gpu host-visible SHM window is exposed as an MMIO range, but the
+        // virtio-gpu driver will also use that GPA as backing memory for scanout.
+        // Translate that MMIO GPA into a CPU-visible host physical address backed
+        // by our in-kernel SHM buffer.
+        if gpa >= MMIO_VIRTIO_GPU_SHM_BASE
+            && gpa < MMIO_VIRTIO_GPU_SHM_BASE + MMIO_VIRTIO_GPU_SHM_SIZE
+        {
+            // Lazily allocate a CPU-visible SHM backing store on first use.
+            unsafe {
+                if !ensure_virtio_gpu_host_visible_shm_ready() {
+                    return None;
+                }
+                let off = (gpa - MMIO_VIRTIO_GPU_SHM_BASE) as usize;
+                let page = off / PAGE_SIZE;
+                let page_off = off % PAGE_SIZE;
+                return Some(VIRTIO_GPU_HOST_VISIBLE_SHM_PAGES[page] + page_off as u64);
+            }
+        }
+    }
+
     if gpa >= GUEST_RAM_SIZE_BYTES as u64 {
         return None;
     }
@@ -7734,16 +8183,104 @@ unsafe fn handle_virtio_gpu_chain(header: VirtqDesc, descs: &[VirtqDesc]) -> u32
         return 0;
     };
 
-    // Run the controlq handler and log result; the device model will publish
-    // scanout/meta updates and call GuestScanoutPublisher.frame_ready() which
-    // emits the first-frame marker on transition.
-    let written = VIRTIO_GPU_DEVICE.handle_controlq_gpa(
-        req.addr,
-        req.len as usize,
-        resp_desc.addr,
-        resp_desc.len as usize,
-        guest_gpa_to_phys,
-    );
+    // Some Linux drivers use scatter-gather for RESOURCE_ATTACH_BACKING:
+    // - descriptor 0: VirtioGpuResourceAttachBackingHdr (0x20)
+    // - descriptor 1: first VirtioGpuMemEntry (0x10)
+    // - descriptor N: response (writable)
+    // Our GPA handler expects a contiguous request buffer, so assemble a
+    // contiguous request for this specific case.
+    let mut hdr_buf = [0u8; core::mem::size_of::<crate::virtio_gpu_proto::VirtioGpuCtrlHdr>()];
+    let mut cmd_type: u32 = 0;
+    if read_guest_bytes(req.addr, &mut hdr_buf) {
+        cmd_type = u32::from_le_bytes([hdr_buf[0], hdr_buf[1], hdr_buf[2], hdr_buf[3]]);
+    }
+
+    let written = if cmd_type == crate::virtio_gpu_proto::VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING
+        && (req.flags & VIRTQ_DESC_F_WRITE) == 0
+        && (req.len as usize) < (core::mem::size_of::<crate::virtio_gpu_proto::VirtioGpuResourceAttachBackingHdr>()
+            + core::mem::size_of::<crate::virtio_gpu_proto::VirtioGpuMemEntry>())
+    {
+        // Find the next readable descriptor to source the first mem entry.
+        let mut entry_desc: Option<VirtqDesc> = None;
+        for d in descs {
+            if (d.flags & VIRTQ_DESC_F_WRITE) != 0 {
+                continue;
+            }
+            entry_desc = Some(*d);
+            break;
+        }
+
+        if let (Some(entry_d), Some(scratch_phys)) = (entry_desc, virtio_gpu_sg_scratch_phys()) {
+            let total_len = (req.len as usize).saturating_add(entry_d.len as usize);
+            if total_len <= PAGE_SIZE {
+                let scratch_ptr = crate::phys_to_virt(scratch_phys) as *mut u8;
+                let scratch = core::slice::from_raw_parts_mut(scratch_ptr, total_len);
+
+                let mut ok = true;
+                ok &= read_guest_bytes(req.addr, &mut scratch[..req.len as usize]);
+                ok &= read_guest_bytes(
+                    entry_d.addr,
+                    &mut scratch[req.len as usize..total_len],
+                );
+
+                if ok {
+                    // Translate embedded backing GPA -> host phys so the model points
+                    // at CPU-visible memory.
+                    let entry_off = core::mem::size_of::<crate::virtio_gpu_proto::VirtioGpuResourceAttachBackingHdr>();
+                    if total_len >= entry_off + core::mem::size_of::<crate::virtio_gpu_proto::VirtioGpuMemEntry>() {
+                        let entry_ptr = scratch_ptr.add(entry_off)
+                            as *mut crate::virtio_gpu_proto::VirtioGpuMemEntry;
+                        let mut entry = core::ptr::read_unaligned(entry_ptr);
+                        if let Some(backing_phys) = guest_gpa_to_phys(entry.addr) {
+                            entry.addr = backing_phys;
+                            core::ptr::write_unaligned(entry_ptr, entry);
+                        }
+                    }
+
+                    let resp_phys = match guest_gpa_to_phys(resp_desc.addr) {
+                        Some(p) => p,
+                        None => {
+                            crate::serial_write_str(
+                                "RAYOS_VMM:VIRTIO_GPU:SG_RESP_TRANSLATE_FAIL\n",
+                            );
+                            0
+                        }
+                    };
+
+                    if resp_phys != 0 {
+                        VIRTIO_GPU_DEVICE.handle_controlq(
+                            scratch_phys,
+                            total_len,
+                            resp_phys,
+                            resp_desc.len as usize,
+                        )
+                    } else {
+                        0
+                    }
+                } else {
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SG_REQ_READ_FAIL\n");
+                    0
+                }
+            } else {
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SG_REQ_TOO_BIG\n");
+                0
+            }
+        } else {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:SG_NO_ENTRY_DESC\n");
+            0
+        }
+    } else {
+        // Run the normal GPA handler; the device model will publish scanout/meta
+        // updates and call GuestScanoutPublisher.frame_ready() which emits the
+        // first-frame marker on transition.
+        VIRTIO_GPU_DEVICE.handle_controlq_gpa(
+            req.addr,
+            req.len as usize,
+            resp_desc.addr,
+            resp_desc.len as usize,
+            guest_gpa_to_phys,
+        )
+    };
     crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:CONTROLQ_DONE\n");
     written as u32
 }
@@ -9653,7 +10190,9 @@ fn run_guest_timeslice() -> bool {
     let host_pic1_imr = unsafe { host_inb(0x0021) };
     let host_pic2_imr = unsafe { host_inb(0x00A1) };
     unsafe {
-        host_outb(0x0021, 0xFF);
+        // Keep IRQ0 masked (timer) to avoid EXTINT churn, but leave IRQ1 (keyboard)
+        // unmasked so QEMU `sendkey` input remains deliverable while the guest runs.
+        host_outb(0x0021, 0xFD);
         host_outb(0x00A1, 0xFF);
     }
 
@@ -9672,6 +10211,34 @@ fn run_guest_timeslice() -> bool {
     unsafe {
         host_outb(0x0021, host_pic1_imr);
         host_outb(0x00A1, host_pic2_imr);
+    }
+
+    // Poll/drain i8042 scancodes after each guest slice so typed input still reaches the
+    // RayOS UI loop even though IRQ1 is masked during VMX time-slices.
+    // This keeps interactive commands (e.g. "hide linux desktop") usable while the guest runs.
+    let mut drained: u32 = 0;
+    let mut last_sc: u8 = 0;
+    for _ in 0..32u32 {
+        let st = unsafe { host_inb(0x0064) };
+        if (st & 0x01) == 0 {
+            break;
+        }
+        let sc = unsafe { host_inb(0x0060) };
+        drained = drained.wrapping_add(1);
+        last_sc = sc;
+        crate::keyboard_handle_scancode(sc);
+    }
+    if drained != 0 {
+        static KBD_POLL_LOG_COUNT: core::sync::atomic::AtomicU32 =
+            core::sync::atomic::AtomicU32::new(0);
+        let n = KBD_POLL_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+        if n < 16 {
+            crate::serial_write_str("RAYOS_VMM:KBD_POLL_DRAINED count=0x");
+            crate::serial_write_hex_u64(drained as u64);
+            crate::serial_write_str(" last=0x");
+            crate::serial_write_hex_u64(last_sc as u64);
+            crate::serial_write_str("\n");
+        }
     }
     if !ok {
         // VM entry failed; fall back to "not launched" so the next attempt

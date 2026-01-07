@@ -43,6 +43,36 @@ fi
 /bin/busybox mount -t sysfs sys /sys 2>/dev/null || true
 /bin/busybox mount -t devtmpfs dev /dev 2>/dev/null || true
 
+# Best-effort: load virtio + graphics drivers if modules are present.
+# Under the RayOS in-kernel VMM, virtio-mmio devices won't be auto-probed unless
+# the relevant drivers are built-in or explicitly loaded.
+if [ -x /sbin/modprobe ]; then
+	/sbin/modprobe virtio_mmio >/dev/null 2>&1 || true
+	/sbin/modprobe drm >/dev/null 2>&1 || true
+	/sbin/modprobe drm_kms_helper >/dev/null 2>&1 || true
+	/sbin/modprobe virtio_gpu >/dev/null 2>&1 || true
+	/sbin/modprobe virtio-gpu >/dev/null 2>&1 || true
+elif /bin/busybox --list 2>/dev/null | /bin/busybox grep -q '^modprobe$'; then
+	/bin/busybox modprobe virtio_mmio >/dev/null 2>&1 || true
+	/bin/busybox modprobe drm >/dev/null 2>&1 || true
+	/bin/busybox modprobe drm_kms_helper >/dev/null 2>&1 || true
+	/bin/busybox modprobe virtio_gpu >/dev/null 2>&1 || true
+	/bin/busybox modprobe virtio-gpu >/dev/null 2>&1 || true
+fi
+
+# Debug aid: show whether Linux already has an iomem owner for the virtio-mmio + SHM ranges.
+# This helps diagnose virtio-gpu's "Could not reserve host visible region" (EBUSY).
+if [ -r /proc/iomem ]; then
+	for pat in 10001000 10002000 10202000; do
+		lines="$(/bin/busybox grep -i "$pat" /proc/iomem 2>/dev/null | /bin/busybox head -n 3 2>/dev/null)"
+		if [ -n "$lines" ]; then
+			emit_marker "RAYOS_DBG:IOMEM:$pat:$lines"
+		else
+			emit_marker "RAYOS_DBG:IOMEM:$pat:(no match)"
+		fi
+	done
+fi
+
 # Allow feature-gating guest-agent probes via kernel cmdline.
 # The agent script reads environment variables, so we bridge cmdline -> env here.
 if [ -r /proc/cmdline ]; then

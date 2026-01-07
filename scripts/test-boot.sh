@@ -1513,7 +1513,7 @@ if [ -n "$QEMU_TIMEOUT_SECS" ]; then
 fi
 
 "${QEMU_PREFIX[@]}" "$QEMU_BIN" \
-    -machine q35 \
+    -machine q35,graphics=on,i8042=on \
     -m 2048 \
     -rtc base=utc,clock=host \
     -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \

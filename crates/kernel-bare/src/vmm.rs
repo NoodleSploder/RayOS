@@ -44,6 +44,7 @@ impl GuestScanoutPublisher {
 #[cfg(feature = "vmm_virtio_gpu")]
 pub mod virtio_gpu {
     use core::{mem, ptr};
+    use core::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::virtio_gpu_model::VirtioGpuModel;
     use crate::virtio_gpu_proto as proto;
@@ -80,6 +81,8 @@ pub mod virtio_gpu {
     pub struct VirtioGpuDevice {
         model: VirtioGpuModel,
     }
+
+    static VIRTIO_GPU_REQ_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
 
     impl VirtioGpuDevice {
         pub const fn new() -> Self {
@@ -129,6 +132,20 @@ pub mod virtio_gpu {
             }
 
             let req_hdr: proto::VirtioGpuCtrlHdr = phys_read_unaligned(req_phys);
+
+            // Bounded request tracing for bring-up (GPA path). This is especially
+            // important for RESOURCE_ATTACH_BACKING which is handled specially.
+            let n = VIRTIO_GPU_REQ_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if n < 256 {
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:GPA_REQ type=");
+                crate::serial_write_hex_u64(req_hdr.type_ as u64);
+                crate::serial_write_str(" len=");
+                crate::serial_write_hex_u64(req_len as u64);
+                crate::serial_write_str(" req_gpa=");
+                crate::serial_write_hex_u64(req_gpa);
+                crate::serial_write_str("\n");
+            }
+
             if req_hdr.type_ != proto::VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING {
                 return self.handle_controlq(req_phys, req_len, resp_phys, resp_len);
             }
@@ -139,6 +156,7 @@ pub mod virtio_gpu {
                 < mem::size_of::<proto::VirtioGpuResourceAttachBackingHdr>()
                     + mem::size_of::<proto::VirtioGpuMemEntry>()
             {
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:ATTACH_BACKING:req_too_small\n");
                 let hdr = init_resp_hdr_from_req(
                     &req_hdr,
                     proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
@@ -152,7 +170,18 @@ pub mod virtio_gpu {
                 + mem::size_of::<proto::VirtioGpuResourceAttachBackingHdr>() as u64;
             let mut entry: proto::VirtioGpuMemEntry = phys_read_unaligned(entry_phys);
 
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:ATTACH_BACKING rid=");
+            crate::serial_write_hex_u64(base.resource_id as u64);
+            crate::serial_write_str(" n=");
+            crate::serial_write_hex_u64(base.nr_entries as u64);
+            crate::serial_write_str(" addr_gpa=");
+            crate::serial_write_hex_u64(entry.addr);
+            crate::serial_write_str(" len=");
+            crate::serial_write_hex_u64(entry.length as u64);
+            crate::serial_write_str("\n");
+
             let Some(backing_phys) = translate_gpa_to_phys(entry.addr) else {
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:ATTACH_BACKING:translate_fail\n");
                 let hdr = init_resp_hdr_from_req(
                     &req_hdr,
                     proto::VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER,
@@ -201,6 +230,16 @@ pub mod virtio_gpu {
             }
 
             let req_hdr: proto::VirtioGpuCtrlHdr = phys_read_unaligned(req_phys);
+
+            // Bounded request tracing for bring-up.
+            let n = VIRTIO_GPU_REQ_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+            if n < 256 {
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:REQ type=");
+                crate::serial_write_hex_u64(req_hdr.type_ as u64);
+                crate::serial_write_str(" len=");
+                crate::serial_write_hex_u64(req_len as u64);
+                crate::serial_write_str("\n");
+            }
             match req_hdr.type_ {
                 proto::VIRTIO_GPU_CMD_GET_DISPLAY_INFO => {
                     if resp_len < mem::size_of::<proto::VirtioGpuRespDisplayInfo>() {
