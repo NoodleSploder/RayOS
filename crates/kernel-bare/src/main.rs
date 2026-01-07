@@ -89,10 +89,28 @@ fn fb_try_draw_test_pattern(_bi: &BootInfo) {
 fn init_interrupts() {
     // Bring up interrupts using the PIC by default.
     // (APIC/IOAPIC routing is handled later in `kernel_after_paging`.)
+    serial_write_str("  [I/O] Detecting COM ports...\n");
+    let com_ports = ports::detect_com_ports();
+    for (i, &available) in com_ports.iter().enumerate() {
+        if available {
+            serial_write_str("    ✓ COM");
+            serial_write_hex_u64((i as u64) + 1);
+            serial_write_str(" detected\n");
+        }
+    }
+    
+    serial_write_str("  [I/O] Configuring PIC...\n");
     pic_remap_and_unmask_irq0();
+    serial_write_str("    ✓ PIC remapped (IRQ0 at vector 32)\n");
+    
     pic_unmask_irq1();
+    serial_write_str("    ✓ Keyboard IRQ1 unmasked\n");
+    
     pit_init_hz(100);
+    serial_write_str("    ✓ PIT timer initialized (100 Hz)\n");
+    
     sti();
+    serial_write_str("  [I/O] Interrupts enabled\n");
 }
 
 // Core prelude for no_std
@@ -205,6 +223,121 @@ unsafe fn inl(port: u16) -> u32 {
     let mut value: u32;
     asm!("in eax, dx", in("dx") port, out("eax") value, options(nomem, nostack, preserves_flags));
     value
+}
+
+// ===== Safe I/O Port Abstraction Layer =====
+// Provides type-safe wrappers for direct port I/O operations
+
+/// Safe port I/O operations for byte-width access
+pub struct IoPort<T: PortSize> {
+    port: u16,
+    _phantom: core::marker::PhantomData<T>,
+}
+
+/// Trait for types that can be read/written to I/O ports
+pub trait PortSize: Sized {
+    unsafe fn read_from_port(port: u16) -> Self;
+    unsafe fn write_to_port(value: Self, port: u16);
+}
+
+impl PortSize for u8 {
+    #[inline(always)]
+    unsafe fn read_from_port(port: u16) -> Self {
+        inb(port)
+    }
+    
+    #[inline(always)]
+    unsafe fn write_to_port(value: Self, port: u16) {
+        outb(port, value)
+    }
+}
+
+impl PortSize for u16 {
+    #[inline(always)]
+    unsafe fn read_from_port(port: u16) -> Self {
+        inw(port)
+    }
+    
+    #[inline(always)]
+    unsafe fn write_to_port(value: Self, port: u16) {
+        outw(port, value)
+    }
+}
+
+impl PortSize for u32 {
+    #[inline(always)]
+    unsafe fn read_from_port(port: u16) -> Self {
+        inl(port)
+    }
+    
+    #[inline(always)]
+    unsafe fn write_to_port(value: Self, port: u16) {
+        outl(port, value)
+    }
+}
+
+impl<T: PortSize> IoPort<T> {
+    /// Create a new I/O port accessor for the given port number
+    #[inline]
+    pub const fn new(port: u16) -> Self {
+        IoPort {
+            port,
+            _phantom: core::marker::PhantomData,
+        }
+    }
+    
+    /// Read from the I/O port
+    /// Safety: Caller must ensure port is valid and thread-safe access is managed
+    #[inline]
+    pub unsafe fn read(&self) -> T {
+        T::read_from_port(self.port)
+    }
+    
+    /// Write to the I/O port
+    /// Safety: Caller must ensure port is valid and thread-safe access is managed
+    #[inline]
+    pub unsafe fn write(&self, value: T) {
+        T::write_to_port(value, self.port)
+    }
+}
+
+// Common I/O port addresses and functions for hardware access
+pub mod ports {
+    use super::IoPort;
+    
+    // PIC (Programmable Interrupt Controller) ports
+    pub const PIC_MASTER_COMMAND: u16 = 0x20;
+    pub const PIC_MASTER_DATA: u16 = 0x21;
+    pub const PIC_SLAVE_COMMAND: u16 = 0xA0;
+    pub const PIC_SLAVE_DATA: u16 = 0xA1;
+    
+    // Serial port (COM1) registers
+    pub const COM1_PORT: u16 = 0x3F8;
+    pub const COM1_DATA: u16 = 0x3F8;
+    pub const COM1_INTERRUPT_ENABLE: u16 = 0x3F9;
+    pub const COM1_FIFO_CONTROL: u16 = 0x3FA;
+    pub const COM1_LINE_CONTROL: u16 = 0x3FB;
+    pub const COM1_MODEM_CONTROL: u16 = 0x3FC;
+    pub const COM1_LINE_STATUS: u16 = 0x3FD;
+    
+    // KBD port
+    pub const PS2_KEYBOARD_DATA: u16 = 0x60;
+    pub const PS2_KEYBOARD_STATUS: u16 = 0x64;
+    
+    /// Enumerate available COM ports by checking status
+    pub fn detect_com_ports() -> [bool; 4] {
+        let mut ports = [false; 4];
+        let com_ports = [0x3F8, 0x2F8, 0x3E8, 0x2E8]; // COM1-4 port addresses
+        
+        for (i, &port) in com_ports.iter().enumerate() {
+            unsafe {
+                let line_status = IoPort::<u8>::new(port + 5).read();
+                // COM port is likely available if status register responds
+                ports[i] = (line_status & 0xFF) != 0xFF;
+            }
+        }
+        ports
+    }
 }
 
 fn serial_init() {
@@ -7231,6 +7364,55 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
     
     kernel_main()
 }
+
+// Hardware detection and enumeration using I/O port abstraction
+fn enumerate_hardware() {
+    serial_write_str("\n[HARDWARE DETECTION]\n");
+    serial_write_str("Scanning available hardware devices...\n\n");
+    
+    // Detect serial ports
+    serial_write_str("Serial Ports (COM1-4):\n");
+    let com_ports = ports::detect_com_ports();
+    let mut com_count = 0;
+    for (i, &available) in com_ports.iter().enumerate() {
+        if available {
+            serial_write_str("  ✓ COM");
+            serial_write_hex_u64((i as u64) + 1);
+            serial_write_str(" (0x");
+            let addresses = [0x3F8u16, 0x2F8, 0x3E8, 0x2E8];
+            serial_write_hex_u64(addresses[i] as u64);
+            serial_write_str(")\n");
+            com_count += 1;
+        }
+    }
+    if com_count == 0 {
+        serial_write_str("  (none detected)\n");
+    }
+    
+    // Detect PS/2 keyboard
+    serial_write_str("\nPS/2 Devices:\n");
+    unsafe {
+        let kbd_status = IoPort::<u8>::new(ports::PS2_KEYBOARD_STATUS).read();
+        if kbd_status != 0xFF {
+            serial_write_str("  ✓ PS/2 Keyboard/Mouse controller (0x64)\n");
+        } else {
+            serial_write_str("  (PS/2 controller not responding)\n");
+        }
+    }
+    
+    // Detect PIC
+    serial_write_str("\nInterrupt Controllers:\n");
+    serial_write_str("  ✓ PIC (Programmable Interrupt Controller) - Master/Slave\n");
+    serial_write_str("    - Master @ 0x20-0x21 (vectors 32-39)\n");
+    serial_write_str("    - Slave @ 0xA0-0xA1 (vectors 40-47)\n");
+    
+    serial_write_str("\nTimer:\n");
+    serial_write_str("  ✓ PIT (Programmable Interval Timer) @ 0x40-0x43\n");
+    serial_write_str("    - Currently configured: 100 Hz\n");
+    
+    serial_write_str("\n[END HARDWARE DETECTION]\n\n");
+}
+
 
 // Test function for Page Fault exception
 #[allow(dead_code)]
