@@ -89,9 +89,9 @@ fn fb_try_draw_test_pattern(_bi: &BootInfo) {
 fn init_cpu_features() {
     // Detect and log CPU capabilities
     let features = CpuFeatures::detect();
-    
+
     serial_write_str("  [CPU] Detecting features...\n");
-    
+
     // Vendor
     serial_write_str("    Vendor: ");
     for &byte in &features.vendor_id {
@@ -103,7 +103,7 @@ fn init_cpu_features() {
         }
     }
     serial_write_str("\n");
-    
+
     // Brand
     serial_write_str("    Brand:  ");
     for &byte in &features.brand_string {
@@ -112,7 +112,7 @@ fn init_cpu_features() {
         }
     }
     serial_write_str("\n");
-    
+
     // Family, Model, Stepping
     serial_write_str("    Family: 0x");
     serial_write_hex_u64(features.family as u64);
@@ -121,7 +121,7 @@ fn init_cpu_features() {
     serial_write_str(", Stepping: 0x");
     serial_write_hex_u64(features.stepping as u64);
     serial_write_str("\n");
-    
+
     // Critical features
     serial_write_str("    Features: ");
     if features.lm { serial_write_str("64-bit "); }
@@ -138,7 +138,7 @@ fn init_cpu_features() {
     if features.aes { serial_write_str("AES "); }
     if features.vmx { serial_write_str("VMX "); }
     serial_write_str("\n");
-    
+
     // Summary
     serial_write_str("    Capability: ");
     serial_write_str(features.summary());
@@ -644,12 +644,12 @@ impl CpuFeatures {
 #[inline]
 pub fn cpuid(leaf: u32) -> CpuidOutput {
     let mut result = CpuidOutput { eax: 0, ebx: 0, ecx: 0, edx: 0 };
-    
+
     // Call the assembly helper
     unsafe {
         cpuid_asm(leaf, &mut result);
     }
-    
+
     result
 }
 
@@ -675,6 +675,450 @@ cpuid_asm:
     pop rbx
     ret
 "#);
+
+// ===== Virtual Memory & Paging Module =====
+// Page table abstraction and virtual memory utilities
+
+/// Page table entry flags (x86-64)
+pub mod page_flags {
+    pub const PRESENT: u64 = 1 << 0;        // P: Page is present in memory
+    pub const WRITABLE: u64 = 1 << 1;       // W: Page is writable
+    pub const USER: u64 = 1 << 2;           // U: User-mode accessible
+    pub const WRITE_THROUGH: u64 = 1 << 3;  // WT: Write-through caching
+    pub const NO_CACHE: u64 = 1 << 4;       // CD: Cache disable
+    pub const ACCESSED: u64 = 1 << 5;       // A: Page accessed
+    pub const DIRTY: u64 = 1 << 6;          // D: Page written to
+    pub const HUGE: u64 = 1 << 7;           // PS: Page is huge (2MiB/1GiB)
+    pub const GLOBAL: u64 = 1 << 8;         // G: Global page
+    pub const NO_EXECUTE: u64 = 1 << 63;    // NX: No-execute bit
+}
+
+/// Virtual memory statistics
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryStats {
+    pub total_pages: u64,           // Total 4K pages in system
+    pub mapped_pages: u64,          // Currently mapped pages
+    pub free_pages: u64,            // Free pages available
+    pub heap_used: u64,             // Heap allocation used
+    pub kernel_pages: u64,          // Kernel image pages
+    pub hhdm_pages: u64,            // HHDM-mapped pages
+}
+
+/// Page table level (x86-64 has 4 levels)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageLevel {
+    L4,  // PML4 (top level)
+    L3,  // PDPT
+    L2,  // PDT
+    L1,  // PTE (page table)
+}
+
+/// Virtual to physical address translation result
+#[derive(Debug, Clone, Copy)]
+pub struct TranslationResult {
+    pub physical_addr: u64,
+    pub flags: u64,
+    pub is_huge: bool,
+    pub page_size: u64, // 4096 or 2097152 (2MiB)
+}
+
+/// Virtual memory management utilities
+pub struct PageTableMgr;
+
+impl PageTableMgr {
+    /// Read CR3 register (contains PML4 physical address)
+    #[inline]
+    fn read_cr3() -> u64 {
+        let cr3: u64;
+        unsafe {
+            asm!("mov {}, cr3", out(reg) cr3, options(nostack, preserves_flags));
+        }
+        cr3
+    }
+
+    /// Get the PML4 base address from CR3
+    #[inline]
+    fn get_pml4_base() -> u64 {
+        Self::read_cr3() & 0x_ffff_ffff_ffff_f000
+    }
+
+    /// Get a page table entry at a given level
+    /// Returns (entry_value, is_present)
+    fn get_pte(page_table_base: u64, index: u16) -> (u64, bool) {
+        if page_table_base == 0 {
+            return (0, false);
+        }
+        
+        // Convert physical address to virtual (via HHDM)
+        let virt_addr = HHDM_OFFSET + page_table_base + (index as u64 * 8);
+        
+        // Safety: we're reading from a mapped page table in HHDM
+        let entry = unsafe { *(virt_addr as *const u64) };
+        let is_present = (entry & page_flags::PRESENT) != 0;
+        (entry, is_present)
+    }
+
+    /// Extract index from virtual address for a given page level
+    #[inline]
+    fn get_page_table_index(virt: u64, level: PageLevel) -> u16 {
+        let shift = match level {
+            PageLevel::L4 => 39,
+            PageLevel::L3 => 30,
+            PageLevel::L2 => 21,
+            PageLevel::L1 => 12,
+        };
+        ((virt >> shift) & 0x1FF) as u16
+    }
+
+    /// Get physical address for a given virtual address
+    /// Returns Some(TranslationResult) if address is mapped
+    pub fn translate_virt_to_phys_detailed(virt: u64) -> Option<TranslationResult> {
+        let mut current_base = Self::get_pml4_base();
+        let mut current_level = PageLevel::L4;
+
+        loop {
+            let index = Self::get_page_table_index(virt, current_level);
+            let (entry, present) = Self::get_pte(current_base, index);
+            
+            if !present {
+                return None;
+            }
+
+            let phys_addr = entry & 0x_ffff_ffff_ffff_f000;
+            let is_huge = (entry & page_flags::HUGE) != 0;
+
+            // Check if this is a huge page
+            if is_huge && (current_level == PageLevel::L2 || current_level == PageLevel::L3) {
+                // This is a 2MiB or 1GiB page
+                let page_size = if current_level == PageLevel::L2 {
+                    0x200000  // 2MiB
+                } else {
+                    0x40000000  // 1GiB
+                };
+                
+                let offset = virt & (page_size - 1);
+                return Some(TranslationResult {
+                    physical_addr: phys_addr + offset,
+                    flags: entry,
+                    is_huge: true,
+                    page_size,
+                });
+            }
+
+            // Continue walking
+            if current_level == PageLevel::L1 {
+                // We've reached the PTE level
+                let offset = virt & 0xFFF;
+                return Some(TranslationResult {
+                    physical_addr: phys_addr + offset,
+                    flags: entry,
+                    is_huge: false,
+                    page_size: 0x1000,  // 4KiB
+                });
+            }
+
+            // Move to next level
+            current_base = phys_addr;
+            current_level = match current_level {
+                PageLevel::L4 => PageLevel::L3,
+                PageLevel::L3 => PageLevel::L2,
+                PageLevel::L2 => PageLevel::L1,
+                PageLevel::L1 => unreachable!(),
+            };
+        }
+    }
+
+    /// Get physical address for a given virtual address
+    /// Returns None if address is not mapped
+    pub fn translate_virt_to_phys(virt: u64) -> Option<u64> {
+        Self::translate_virt_to_phys_detailed(virt).map(|result| result.physical_addr)
+    }
+
+    /// Check if virtual address is mapped
+    pub fn is_mapped(virt: u64) -> bool {
+        Self::translate_virt_to_phys(virt).is_some()
+    }
+
+    /// Get flags for a virtual address
+    pub fn get_flags(virt: u64) -> Option<u64> {
+        Self::translate_virt_to_phys_detailed(virt).map(|result| result.flags)
+    }
+
+    /// Check if an address is writable
+    pub fn is_writable(virt: u64) -> bool {
+        Self::get_flags(virt)
+            .map(|flags| (flags & page_flags::WRITABLE) != 0)
+            .unwrap_or(false)
+    }
+
+    /// Check if an address is user-accessible
+    pub fn is_user_accessible(virt: u64) -> bool {
+        Self::get_flags(virt)
+            .map(|flags| (flags & page_flags::USER) != 0)
+            .unwrap_or(false)
+    }
+
+    /// Get memory statistics
+    pub fn memory_stats() -> MemoryStats {
+        // For now, return placeholder values
+        // A full implementation would iterate through page tables
+        MemoryStats {
+            total_pages: 0,
+            mapped_pages: 0,
+            free_pages: 0,
+            heap_used: 0,
+            kernel_pages: 0,
+            hhdm_pages: 0,
+        }
+    }
+
+    /// Calculate page table coverage for a given virtual address range
+    pub fn coverage_for_range(virt_start: u64, virt_end: u64) -> (u64, u64) {
+        // Returns (pages_needed, tables_needed)
+        let range_size = virt_end - virt_start;
+        let pages_needed = (range_size + 0xFFF) / 0x1000;
+        let tables_needed = (pages_needed + 511) / 512;
+        (pages_needed, tables_needed)
+    }
+
+    /// Count mapped pages in a virtual address range
+    pub fn count_mapped_pages(virt_start: u64, virt_end: u64, step: u64) -> u64 {
+        let mut count = 0;
+        let mut addr = virt_start;
+        
+        while addr < virt_end {
+            if Self::is_mapped(addr) {
+                count += 1;
+            }
+            addr += step;
+        }
+        
+        count
+    }
+}
+
+// ============================================================================
+// Kernel Module System
+// ============================================================================
+
+/// Module header magic number
+const MODULE_MAGIC: u32 = 0x524D_4F44;  // "RMOD" in little-endian
+
+/// Module status
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModuleStatus {
+    Loaded,
+    Initialized,
+    Running,
+    Unloading,
+    Unloaded,
+}
+
+/// Module initialization function type
+/// Returns true on success
+pub type ModuleInitFn = extern "C" fn() -> bool;
+
+/// Module cleanup function type
+pub type ModuleCleanupFn = extern "C" fn() -> ();
+
+/// Symbol entry in a module's symbol table
+#[derive(Debug, Clone, Copy)]
+pub struct Symbol {
+    pub name_ptr: u64,  // Pointer to null-terminated symbol name
+    pub value: u64,     // Symbol value (address or data)
+    pub size: u32,      // Size of symbol
+    pub kind: u8,       // Symbol kind (0=variable, 1=function, etc)
+}
+
+/// Kernel module header
+#[repr(C)]
+#[derive(Debug)]
+pub struct ModuleHeader {
+    pub magic: u32,                 // MODULE_MAGIC
+    pub version: u32,               // Module format version
+    pub name_ptr: u64,              // Pointer to module name string
+    pub init_fn: ModuleInitFn,      // Module initialization function
+    pub cleanup_fn: ModuleCleanupFn,// Module cleanup function
+    pub symbols_ptr: u64,           // Pointer to symbol table
+    pub symbols_count: u32,         // Number of symbols
+    pub dependencies_ptr: u64,      // Pointer to dependency list
+    pub dependencies_count: u32,    // Number of dependencies
+}
+
+/// Loaded kernel module
+#[derive(Debug)]
+pub struct LoadedModule {
+    pub name: [u8; 256],            // Module name
+    pub base_addr: u64,             // Base address in kernel memory
+    pub size: u64,                  // Total size in bytes
+    pub header: *const ModuleHeader,// Pointer to module header
+    pub status: ModuleStatus,       // Current status
+}
+
+/// Kernel module manager
+pub struct ModuleManager {
+    modules: [Option<LoadedModule>; 16],  // Support up to 16 modules
+    module_count: usize,
+}
+
+impl ModuleManager {
+    /// Create a new module manager
+    pub fn new() -> Self {
+        ModuleManager {
+            modules: [None, None, None, None, None, None, None, None,
+                      None, None, None, None, None, None, None, None],
+            module_count: 0,
+        }
+    }
+
+    /// Load a module from memory
+    /// Returns true on success
+    pub fn load_module(&mut self, module_addr: u64, module_size: u64) -> bool {
+        if self.module_count >= self.modules.len() {
+            serial_write_str("ERROR: Module limit reached\n");
+            return false;
+        }
+
+        // Validate the module header
+        let header = unsafe { &*(module_addr as *const ModuleHeader) };
+        if header.magic != MODULE_MAGIC {
+            serial_write_str("ERROR: Invalid module magic\n");
+            return false;
+        }
+
+        // Get module name
+        let mut name = [0u8; 256];
+        if header.name_ptr != 0 {
+            let name_str = unsafe { core::ffi::CStr::from_ptr(header.name_ptr as *const i8) };
+            if let Ok(n) = name_str.to_str() {
+                let bytes = n.as_bytes();
+                let copy_len = core::cmp::min(bytes.len(), 255);
+                name[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            }
+        }
+
+        let module = LoadedModule {
+            name,
+            base_addr: module_addr,
+            size: module_size,
+            header: header as *const ModuleHeader,
+            status: ModuleStatus::Loaded,
+        };
+
+        self.modules[self.module_count] = Some(module);
+        self.module_count += 1;
+
+        serial_write_str("✓ Module loaded: ");
+        serial_write_str(core::str::from_utf8(&name).unwrap_or("???"));
+        serial_write_str("\n");
+
+        true
+    }
+
+    /// Initialize a loaded module
+    pub fn init_module(&mut self, index: usize) -> bool {
+        if index >= self.module_count {
+            return false;
+        }
+
+        if let Some(ref mut module) = self.modules[index] {
+            if module.status != ModuleStatus::Loaded {
+                return false;  // Already initialized or in wrong state
+            }
+
+            let header = unsafe { &*module.header };
+            
+            // Call module initialization function
+            let success = (header.init_fn)();
+            
+            if success {
+                module.status = ModuleStatus::Initialized;
+                serial_write_str("✓ Module initialized\n");
+            } else {
+                serial_write_str("✗ Module initialization failed\n");
+            }
+
+            return success;
+        }
+
+        false
+    }
+
+    /// Initialize all loaded modules
+    pub fn init_all_modules(&mut self) -> usize {
+        let mut count = 0;
+        for i in 0..self.module_count {
+            if self.init_module(i) {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Find a module by name
+    pub fn find_module(&self, name: &str) -> Option<usize> {
+        for (i, module) in self.modules.iter().enumerate() {
+            if let Some(m) = module {
+                if let Ok(m_name) = core::str::from_utf8(&m.name) {
+                    if m_name.trim_end_matches('\0') == name {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Resolve a symbol in a module
+    pub fn resolve_symbol(&self, module_index: usize, symbol_name: &str) -> Option<u64> {
+        if module_index >= self.module_count {
+            return None;
+        }
+
+        let module = self.modules[module_index].as_ref()?;
+        let header = unsafe { &*module.header };
+
+        if header.symbols_count == 0 || header.symbols_ptr == 0 {
+            return None;
+        }
+
+        let symbols = unsafe {
+            core::slice::from_raw_parts(
+                header.symbols_ptr as *const Symbol,
+                header.symbols_count as usize,
+            )
+        };
+
+        for symbol in symbols {
+            if symbol.name_ptr != 0 {
+                if let Ok(sym_name) = unsafe {
+                    core::str::from_utf8(core::ffi::CStr::from_ptr(symbol.name_ptr as *const i8)
+                        .to_bytes())
+                } {
+                    if sym_name == symbol_name {
+                        return Some(symbol.value);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Get module count
+    pub fn module_count(&self) -> usize {
+        self.module_count
+    }
+
+    /// Get module info
+    pub fn get_module_info(&self, index: usize) -> Option<&LoadedModule> {
+        if index < self.module_count {
+            self.modules[index].as_ref()
+        } else {
+            None
+        }
+    }
+}
 
 fn serial_init() {
     unsafe {
@@ -4310,6 +4754,14 @@ const DEFAULT_HHDM_PHYS_LIMIT: u64 = 0x1_0000_0000; // 4GiB
 static HHDM_PHYS_LIMIT: AtomicU64 = AtomicU64::new(DEFAULT_HHDM_PHYS_LIMIT);
 static HHDM_ACTIVE: AtomicBool = AtomicBool::new(false);
 
+// Module manager instance (will be initialized later in kernel_main)
+static mut MODULE_MGR: Option<ModuleManager> = None;
+
+#[inline(always)]
+fn hhdm_offset() -> u64 {
+    HHDM_OFFSET
+}
+
 #[inline(always)]
 fn hhdm_phys_limit() -> u64 {
     HHDM_PHYS_LIMIT.load(Ordering::Relaxed)
@@ -6929,6 +7381,13 @@ fn init_paging() {
     // - Low identity: map only what we still need to execute safely at low VA
     //   (kernel image + current stack page). This removes the broad identity map.
 
+    serial_write_str("[PAGING] Initializing page tables...\n");
+    serial_write_str("  HHDM offset: 0xffff");
+    serial_write_hex_u64(crate::hhdm_offset() >> 32);
+    serial_write_str("00000000\n");
+    serial_write_str("  Page size: 4 KB (0x1000) and 2 MiB (0x200000)\n");
+    serial_write_str("  Paging levels: 4 (PML4, PDPT, PDT, PTE)\n");
+
     const ONE_GIB: u64 = 0x4000_0000;
     const TWO_MIB: u64 = 0x20_0000;
 
@@ -7082,11 +7541,22 @@ fn init_paging() {
         }
 
         // Switch to our new page tables.
+        serial_write_str("  [PML4] Physical address: 0x");
+        serial_write_hex_u64(pml4);
+        serial_write_str("\n");
+        serial_write_str("  [HHDM] Mapping 0x");
+        serial_write_hex_u64(hhdm_phys_limit());
+        serial_write_str(" bytes at 0xffff");
+        serial_write_hex_u64(crate::hhdm_offset() >> 32);
+        serial_write_str("00000000\n");
+        serial_write_str("  [PAGING] Activating page tables...\n");
         asm!("mov cr3, {0}", in(reg) pml4, options(nostack, preserves_flags));
+        serial_write_str("  [CR3] Loaded (paging enabled)\n");
     }
 
     CURRENT_PML4_PHYS.store(pml4, Ordering::Relaxed);
     HHDM_ACTIVE.store(true, Ordering::Relaxed);
+    serial_write_str("[PAGING] Page table initialization complete\n");
 }
 
 fn init_paging_final_no_identity() {
@@ -7094,6 +7564,8 @@ fn init_paging_final_no_identity() {
     // - HHDM: map 0..HHDM_LIMIT at HHDM_OFFSET (2MiB pages)
     // - Kernel: map kernel physical image at KERNEL_BASE (2MiB pages)
     // No low identity mappings.
+
+    serial_write_str("[PAGING] Finalizing page tables (removing identity mappings)...\n");
 
     const ONE_GIB: u64 = 0x4000_0000;
     const TWO_MIB: u64 = 0x20_0000;
@@ -7230,10 +7702,13 @@ fn init_paging_final_no_identity() {
     }
 
     unsafe {
+        serial_write_str("  [CR3] Reloading with final page tables...\n");
         asm!("mov cr3, {0}", in(reg) pml4, options(nostack, preserves_flags));
+        serial_write_str("  [CR3] Loaded (identity mappings removed)\n");
     }
     CURRENT_PML4_PHYS.store(pml4, Ordering::Relaxed);
     HHDM_ACTIVE.store(true, Ordering::Relaxed);
+    serial_write_str("[PAGING] Final page table configuration complete\n");
 }
 
 //=============================================================================
@@ -7609,6 +8084,13 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
     serial_write_str("  paging: final_no_identity...\n");
     init_paging_final_no_identity();
     serial_write_str("  paging: final_no_identity OK\n");
+
+    // Initialize module manager
+    serial_write_str("  modules: initializing manager...\n");
+    unsafe {
+        MODULE_MGR = Some(ModuleManager::new());
+    }
+    serial_write_str("  modules: manager OK\n");
 
     // From here on, prefer HHDM virtual addresses for physical resources.
     unsafe {
