@@ -187,14 +187,26 @@ fi
 if [ $USBONLY -eq 0 ]; then
     echo "Creating ISO image..."
     if command -v xorriso &>/dev/null; then
-        xorriso -as mkisofs -R -J -L \
-            -boot-load-size 4 -boot-info-table \
-            -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin \
+        xorriso -as mkisofs \
+            -R -J -L -iso-level 3 -V "RayOS" \
+            -e EFI/efiboot.img -no-emul-boot -isohybrid-mbr /usr/share/syslinux/isohdpfx.bin \
+            -isohybrid-gpt-basdat \
             -o "$BUILD_DIR/${OUTPUT}.iso" \
-            iso-content/ 2>&1 | grep -v "^xorriso" || true
+            "$WORK_DIR/iso-content/" 2>/dev/null
         if [ -f "$BUILD_DIR/${OUTPUT}.iso" ]; then
             SIZE=$(du -h "$BUILD_DIR/${OUTPUT}.iso" | cut -f1)
             echo "✓ ISO created: ${OUTPUT}.iso ($SIZE)"
+        else
+            # Try fallback method with mkisofs if available
+            if command -v mkisofs &>/dev/null; then
+                mkisofs -R -J -L \
+                    -o "$BUILD_DIR/${OUTPUT}.iso" \
+                    "$WORK_DIR/iso-content/" 2>/dev/null
+                if [ -f "$BUILD_DIR/${OUTPUT}.iso" ]; then
+                    SIZE=$(du -h "$BUILD_DIR/${OUTPUT}.iso" | cut -f1)
+                    echo "✓ ISO created (legacy): ${OUTPUT}.iso ($SIZE)"
+                fi
+            fi
         fi
     else
         echo "✗ xorriso not available - cannot create ISO"
