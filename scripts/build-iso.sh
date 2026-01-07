@@ -94,6 +94,12 @@ create_iso_for_arch() {
 
     echo '{"vms":{}}' > "$RAYOS_DIR/registry.json"
 
+    # Optional: include the installer binary if built
+    local INSTALLER_BINARY="$ROOT_DIR/crates/installer/target/release/rayos-installer"
+    if [ -f "$INSTALLER_BINARY" ]; then
+        cp "$INSTALLER_BINARY" "$RAYOS_DIR/installer.bin"
+    fi
+
     # Create an EFI System Partition (ESP) FAT image for UEFI boot.
     local ESP_IMG="$BOOT_DIR/efiboot.img"
     # Keep < 32 MiB so El Torito load-size stays representable for picky firmware.
@@ -112,6 +118,9 @@ NSH
         mcopy -i "$ESP_IMG" /tmp/startup.nsh ::/startup.nsh
         if [ -f "$KERNEL_SOURCE" ]; then
             mcopy -i "$ESP_IMG" "$KERNEL_SOURCE" ::/EFI/RAYOS/kernel.bin
+        fi
+        if [ -f "$RAYOS_DIR/installer.bin" ]; then
+            mcopy -i "$ESP_IMG" "$RAYOS_DIR/installer.bin" ::/EFI/RAYOS/installer.bin
         fi
         mcopy -i "$ESP_IMG" "$RAYOS_DIR/registry.json" ::/EFI/RAYOS/registry.json
     else
@@ -146,6 +155,9 @@ NSH
         echo "\\EFI\\BOOT\\${boot_efi_name}" | sudo tee -a "$ESP_MNT/startup.nsh" > /dev/null
         if [ -f "$KERNEL_SOURCE" ]; then
             sudo cp "$KERNEL_SOURCE" "$ESP_MNT/EFI/RAYOS/kernel.bin"
+        fi
+        if [ -f "$RAYOS_DIR/installer.bin" ]; then
+            sudo cp "$RAYOS_DIR/installer.bin" "$ESP_MNT/EFI/RAYOS/installer.bin"
         fi
         sudo cp "$RAYOS_DIR/registry.json" "$ESP_MNT/EFI/RAYOS/registry.json"
         sudo sync
@@ -223,6 +235,12 @@ create_universal_iso() {
 
     echo '{"vms":{}}' > "$RAYOS_DIR/registry.json"
 
+    # Optional: include the installer binary if built
+    local INSTALLER_BINARY="$ROOT_DIR/crates/installer/target/release/rayos-installer"
+    if [ -f "$INSTALLER_BINARY" ]; then
+        cp "$INSTALLER_BINARY" "$RAYOS_DIR/installer.bin"
+    fi
+
     local ESP_IMG="$BOOT_DIR/efiboot.img"
     # Keep < 32 MiB so El Torito load-size stays representable for picky firmware.
     dd if=/dev/zero of="$ESP_IMG" bs=1M count=31 status=none
@@ -242,6 +260,9 @@ NSH
         mcopy -i "$ESP_IMG" /tmp/startup.nsh ::/startup.nsh
         if [ -f "$KERNEL_SOURCE" ]; then
             mcopy -i "$ESP_IMG" "$KERNEL_SOURCE" ::/EFI/RAYOS/kernel.bin
+        fi
+        if [ -f "$RAYOS_DIR/installer.bin" ]; then
+            mcopy -i "$ESP_IMG" "$RAYOS_DIR/installer.bin" ::/EFI/RAYOS/installer.bin
         fi
         mcopy -i "$ESP_IMG" "$RAYOS_DIR/registry.json" ::/EFI/RAYOS/registry.json
     else
@@ -276,6 +297,9 @@ NSH
         sudo cp /tmp/startup.nsh "$ESP_MNT/startup.nsh"
         if [ -f "$KERNEL_SOURCE" ]; then
             sudo cp "$KERNEL_SOURCE" "$ESP_MNT/EFI/RAYOS/kernel.bin"
+        fi
+        if [ -f "$RAYOS_DIR/installer.bin" ]; then
+            sudo cp "$RAYOS_DIR/installer.bin" "$ESP_MNT/EFI/RAYOS/installer.bin"
         fi
         sudo cp "$RAYOS_DIR/registry.json" "$ESP_MNT/EFI/RAYOS/registry.json"
         sudo sync
@@ -423,6 +447,14 @@ NSH
     if [ -f "$KERNEL_SOURCE" ]; then
         sudo cp "$KERNEL_SOURCE" "$mnt/EFI/RAYOS/kernel.bin"
     fi
+
+    local INSTALLER_BINARY="$ROOT_DIR/crates/installer/target/release/rayos-installer"
+    if [ -f "$INSTALLER_BINARY" ]; then
+        sudo cp "$INSTALLER_BINARY" "$mnt/EFI/RAYOS/installer.bin"
+    fi
+
+    # Create registry.json for USB image
+    echo '{"vms":{}}' | sudo tee "$mnt/EFI/RAYOS/registry.json" > /dev/null
 
     sudo sync
     sudo umount "$mnt"

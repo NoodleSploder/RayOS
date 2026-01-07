@@ -14,12 +14,21 @@ impl GuestScanoutPublisher {
 
     pub fn publish_scanout(&self, surface: GuestSurface) {
         guest_surface::publish_surface(surface);
-        // Emit a deterministic marker when the in-kernel VMM publishes a guest scanout.
-        crate::serial_write_str("RAYOS_LINUX_DESKTOP_PRESENTED:ok:");
-        crate::serial_write_hex_u64(surface.width as u64);
-        crate::serial_write_str("x");
-        crate::serial_write_hex_u64(surface.height as u64);
-        crate::serial_write_str("\n");
+        crate::with_irqs_disabled(|| {
+            // Emit a deterministic marker when the in-kernel VMM publishes a guest scanout.
+            crate::serial_write_str("RAYOS_LINUX_DESKTOP_PRESENTED:ok:");
+            crate::serial_write_hex_u64(surface.width as u64);
+            crate::serial_write_str("x");
+            crate::serial_write_hex_u64(surface.height as u64);
+            crate::serial_write_str("\n");
+
+            // Only claim the desktop is "presented" once we're both:
+            //  - in Presented mode, and
+            //  - have a scanout published.
+            if guest_surface::presentation_state() == guest_surface::PresentationState::Presented {
+                crate::serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n");
+            }
+        });
     }
 
     pub fn frame_ready(&self) {
@@ -28,12 +37,14 @@ impl GuestScanoutPublisher {
         let prev = guest_surface::frame_seq();
         guest_surface::bump_frame_seq();
         let now = guest_surface::frame_seq();
-        crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:FRAME_READY:");
-        crate::serial_write_hex_u64(now);
-        crate::serial_write_str("\n");
-        if prev == 0 && now != 0 {
-            crate::serial_write_str("RAYOS_LINUX_DESKTOP_FIRST_FRAME:ok:\n");
-        }
+        crate::with_irqs_disabled(|| {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:FRAME_READY:");
+            crate::serial_write_hex_u64(now);
+            crate::serial_write_str("\n");
+            if prev == 0 && now != 0 {
+                crate::serial_write_str("RAYOS_LINUX_DESKTOP_FIRST_FRAME:ok:\n");
+            }
+        });
     }
 }
 

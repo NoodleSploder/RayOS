@@ -4125,6 +4125,26 @@ fn cli() {
     unsafe { asm!("cli", options(nomem, nostack, preserves_flags)) };
 }
 
+#[inline(always)]
+fn read_rflags() -> u64 {
+    let r: u64;
+    unsafe { asm!("pushfq; pop {0}", out(reg) r, options(nomem, nostack, preserves_flags)) };
+    r
+}
+
+#[inline(always)]
+pub(crate) fn with_irqs_disabled<F: FnOnce()>(f: F) {
+    // Preserve the caller's interrupt-enable state.
+    let interrupts_were_enabled = (read_rflags() & (1 << 9)) != 0;
+    if interrupts_were_enabled {
+        cli();
+    }
+    f();
+    if interrupts_were_enabled {
+        sti();
+    }
+}
+
 fn rdmsr(msr: u32) -> u64 {
     let low: u32;
     let high: u32;
@@ -4522,8 +4542,75 @@ pub(crate) fn keyboard_handle_scancode(sc: u8) {
         _ => {}
     }
 
+    // If the Linux desktop is currently presented, keep a deterministic escape hatch
+    // so the user can always return to the RayOS shell/UI.
+    // (Set-1: F12 make = 0x58)
+    if guest_surface::presentation_state() == guest_surface::PresentationState::Presented
+        && sc == 0x58
+    {
+        guest_surface::set_presentation_state(guest_surface::PresentationState::Hidden);
+        serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:HIDDEN\n");
+        // 2 = available (running hidden)
+        LINUX_DESKTOP_STATE.store(2, Ordering::Relaxed);
+        return;
+    }
+
+    // F11: show/present the Linux desktop (Set-1: F11 make = 0x57).
+    // This provides a deterministic single-key way to enter Presented mode.
+    if guest_surface::presentation_state() != guest_surface::PresentationState::Presented
+        && sc == 0x57
+    {
+        #[cfg(feature = "vmm_hypervisor")]
+        {
+            crate::hypervisor::linux_desktop_vmm_request_start();
+            // 5 = presenting (waiting for scanout)
+            LINUX_DESKTOP_STATE.store(5, Ordering::Relaxed);
+        }
+        #[cfg(not(feature = "vmm_hypervisor"))]
+        {
+            serial_write_str("RAYOS_HOST_EVENT_V0:SHOW_LINUX_DESKTOP\n");
+            // 1 = starting
+            LINUX_DESKTOP_STATE.store(1, Ordering::Relaxed);
+        }
+        guest_surface::set_presentation_state(guest_surface::PresentationState::Presented);
+
+        // If a scanout is already published (e.g. re-show after hide), emit a
+        // deterministic Presented marker immediately instead of waiting for a
+        // new SET_SCANOUT.
+        if guest_surface::surface_snapshot().is_some() {
+            serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n");
+        }
+        return;
+    }
+
+    // If the Linux desktop is currently presented, route keyboard input to the guest
+    // via virtio-input (when available). Keep a deterministic escape hatch so the
+    // user can always return to the RayOS shell/UI.
+    #[cfg(all(feature = "vmm_hypervisor", feature = "vmm_virtio_input"))]
+    {
+        if guest_surface::presentation_state() == guest_surface::PresentationState::Presented {
+            // Ignore extended scancode prefixes for now (E0/E1 sequences).
+            if sc == 0xE0 || sc == 0xE1 {
+                return;
+            }
+
+            let down = (sc & 0x80) == 0;
+            let code = (sc & 0x7F) as u16;
+            if code != 0 {
+                if crate::hypervisor::virtio_input_enqueue_key_state(code, down) {
+                    return;
+                }
+            }
+            // If virtio routing failed for any reason, fall back to RayOS input handling.
+        }
+    }
+
     // Ignore break codes for character generation.
+    // Also avoid feeding RayOS command input while a guest desktop is presented.
     if sc & 0x80 == 0 {
+        if guest_surface::presentation_state() == guest_surface::PresentationState::Presented {
+            return;
+        }
         let shift = SHIFT_DOWN.load(Ordering::Relaxed) != 0;
         let caps = CAPS_LOCK.load(Ordering::Relaxed) != 0;
         if let Some(ch) = scancode_set1_to_ascii(sc, shift, caps) {
@@ -7663,7 +7750,7 @@ fn kernel_main() -> ! {
             let tok = toks[t];
             if eq_ignore_ascii_case(tok, b"show") {
                 seen_show = true;
-            } else if eq_ignore_ascii_case(tok, b"desktop") {
+            } else if eq_ignore_ascii_case(tok, b"desktop") || eq_ignore_ascii_case(tok, b"deskktop") {
                 seen_desktop = true;
             } else if eq_ignore_ascii_case(tok, b"linux") || eq_ignore_ascii_case(tok, b"linu") {
                 seen_linux = true;
@@ -7674,7 +7761,10 @@ fn kernel_main() -> ! {
         // Accept either:
         // - "show" + "linux/linu" + "desktop" in any order
         // - or just "linux/linu" + "desktop" (for shorter commands)
-        (seen_linux && seen_desktop && seen_show) || (seen_linux && seen_desktop)
+        // - or the alias form "show desktop" (even with extra spaces)
+        (seen_linux && seen_desktop && seen_show)
+            || (seen_linux && seen_desktop)
+            || (seen_show && seen_desktop)
     }
 
     fn parse_linux_sendtext(line: &[u8]) -> Option<&[u8]> {
@@ -7881,12 +7971,13 @@ fn kernel_main() -> ! {
                 seen_hide = true;
             } else if eq_ignore_ascii_case(tok, b"linux") || eq_ignore_ascii_case(tok, b"linu") {
                 seen_linux = true;
-            } else if eq_ignore_ascii_case(tok, b"desktop") {
+            } else if eq_ignore_ascii_case(tok, b"desktop") || eq_ignore_ascii_case(tok, b"deskktop") {
                 seen_desktop = true;
             }
             t += 1;
         }
 
+        // Accept hide+desktop alias even without explicit linux token.
         seen_hide && (seen_desktop || seen_linux)
     }
 
@@ -8537,19 +8628,20 @@ fn kernel_main() -> ! {
                                     guest_surface::PresentationState::Presented,
                                 );
 
-                                // If a scanout already exists (e.g. after hide/show), emit the
-                                // deterministic marker immediately. This avoids depending on the
-                                // PIT tick boundary to detect the Presented transition.
+                                // Only emit PRESENTED once a scanout exists. If the scanout is
+                                // already available (e.g. after hide/show), emit markers now;
+                                // otherwise the virtio-gpu publish path will emit them when the
+                                // scanout arrives.
                                 if let Some(surface) = guest_surface::surface_snapshot() {
                                     serial_write_str("RAYOS_LINUX_DESKTOP_PRESENTED:ok:");
                                     serial_write_hex_u64(surface.width as u64);
                                     serial_write_str("x");
                                     serial_write_hex_u64(surface.height as u64);
                                     serial_write_str("\n");
+                                    serial_write_str(
+                                        "RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n",
+                                    );
                                 }
-                                serial_write_str(
-                                    "RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n",
-                                );
                             } else if is_show_windows_desktop(&line_buf[..len]) {
                                 serial_write_str("RAYOS_HOST_EVENT_V0:SHOW_WINDOWS_DESKTOP\n");
                                 chat.push_line(
@@ -9184,6 +9276,13 @@ fn kernel_main() -> ! {
                         #[cfg(feature = "vmm_hypervisor")]
                         {
                             if LINUX_DESKTOP_STATE.load(Ordering::Relaxed) == 5 {
+                                // First scanout after a "show" request: emit deterministic
+                                // markers now that we actually have something to present.
+                                serial_write_str("RAYOS_LINUX_DESKTOP_PRESENTED:ok:");
+                                serial_write_hex_u64(surface.width as u64);
+                                serial_write_str("x");
+                                serial_write_hex_u64(surface.height as u64);
+                                serial_write_str("\n");
                                 LINUX_DESKTOP_STATE.store(3, Ordering::Relaxed);
                             }
                         }
@@ -9591,26 +9690,50 @@ fn blit_guest_surface_panel(surface: guest_surface::GuestSurface) {
         return;
     }
 
-    let dst_w = DST_W.min(unsafe { FB_WIDTH }.saturating_sub(DST_X));
-    let dst_h = DST_H.min(unsafe { FB_HEIGHT }.saturating_sub(DST_Y));
+    let panel_w = DST_W.min(unsafe { FB_WIDTH }.saturating_sub(DST_X));
+    let panel_h = DST_H.min(unsafe { FB_HEIGHT }.saturating_sub(DST_Y));
 
-    let src_w = (surface.width as usize).min(dst_w);
-    let src_h = (surface.height as usize).min(dst_h);
+    let src_w_full = surface.width as usize;
+    let src_h_full = surface.height as usize;
     let src_stride = surface.stride_px as usize;
-    if src_w == 0 || src_h == 0 || src_stride < src_w {
+    if panel_w == 0 || panel_h == 0 || src_w_full == 0 || src_h_full == 0 || src_stride < src_w_full {
         return;
     }
 
-    // Clear the panel region behind the guest.
-    draw_box(DST_X, DST_Y, dst_w, dst_h, 0x1a_1a_2e);
+    // Fit the source into the panel while preserving aspect ratio.
+    // Use integer math only.
+    let mut dst_w = panel_w;
+    let mut dst_h = (panel_w.saturating_mul(src_h_full)) / src_w_full;
+    if dst_h > panel_h {
+        dst_h = panel_h;
+        dst_w = (panel_h.saturating_mul(src_w_full)) / src_h_full;
+        if dst_w > panel_w {
+            dst_w = panel_w;
+        }
+    }
+    if dst_w == 0 || dst_h == 0 {
+        return;
+    }
+
+    let dst_off_x = DST_X + (panel_w - dst_w) / 2;
+    let dst_off_y = DST_Y + (panel_h - dst_h) / 2;
+
+    // Clear the full panel region behind the guest (letterboxing).
+    draw_box(DST_X, DST_Y, panel_w, panel_h, 0x1a_1a_2e);
 
     unsafe {
         let fb = FB_BASE as *mut u32;
         let src = phys_as_ptr::<u32>(surface.backing_phys);
-        for y in 0..src_h {
-            let dst_off = (DST_Y + y) * FB_STRIDE + DST_X;
-            let src_off = y * src_stride;
-            core::ptr::copy_nonoverlapping(src.add(src_off), fb.add(dst_off), src_w);
+
+        // Nearest-neighbor scaling.
+        for y in 0..dst_h {
+            let sy = (y.saturating_mul(src_h_full)) / dst_h;
+            let dst_row = (dst_off_y + y) * FB_STRIDE + dst_off_x;
+            let src_row = sy * src_stride;
+            for x in 0..dst_w {
+                let sx = (x.saturating_mul(src_w_full)) / dst_w;
+                *fb.add(dst_row + x) = *src.add(src_row + sx);
+            }
         }
     }
 }

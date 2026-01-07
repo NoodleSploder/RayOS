@@ -69,34 +69,44 @@ const VMCS_ENTRY_EXCEPTION_ERROR_CODE: u64 = 0x4018;
 const VIRTIO_MMIO_IRQ_VECTOR_LINUX: u8 = 0x25;
 const VIRTIO_MMIO_IRQ_VECTOR_OTHER: u8 = 0x40;
 
-fn virtio_mmio_irq_vector() -> u8 {
+fn virtio_mmio_irq_vector_for_pin(pin: usize) -> u8 {
     if linux_guest_active() {
         // Prefer IOAPIC-programmed vectors when Linux enabled an IOAPIC domain.
         // Otherwise, derive the vector from the guest-programmed 8259 PIC offsets.
-        if let Some(v) = ioapic_vector_for_pin(VIRTIO_MMIO_IRQ_PIN) {
+        if let Some(v) = ioapic_vector_for_pin(pin) {
             v
         } else {
-            unsafe { pic_vector_for_irq_pin(VIRTIO_MMIO_IRQ_PIN).unwrap_or(VIRTIO_MMIO_IRQ_VECTOR_LINUX) }
+            unsafe { pic_vector_for_irq_pin(pin).unwrap_or(VIRTIO_MMIO_IRQ_VECTOR_LINUX) }
         }
     } else {
         VIRTIO_MMIO_IRQ_VECTOR_OTHER
     }
 }
 
-fn inject_virtio_mmio_irq() -> bool {
+fn virtio_mmio_irq_vector() -> u8 {
+    virtio_mmio_irq_vector_for_pin(VIRTIO_MMIO_IRQ_PIN)
+}
+
+fn inject_virtio_mmio_irq_for_pin(pin: usize) -> bool {
     if linux_guest_active() {
         // If Linux isn't using an IOAPIC vector for this pin, it is very likely
         // relying on the legacy PIC masking/unmasking semantics.
-        if ioapic_vector_for_pin(VIRTIO_MMIO_IRQ_PIN).is_none() {
+        if ioapic_vector_for_pin(pin).is_none() {
             unsafe {
-                if !pic_irq_pin_unmasked(VIRTIO_MMIO_IRQ_PIN) {
-                    crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:IRQ_MASKED_DEFER\n");
+                if !pic_irq_pin_unmasked(pin) {
+                    crate::with_irqs_disabled(|| {
+                        crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:IRQ_MASKED_DEFER\n");
+                    });
                     return false;
                 }
             }
         }
     }
-    inject_guest_interrupt(virtio_mmio_irq_vector())
+    inject_guest_interrupt(virtio_mmio_irq_vector_for_pin(pin))
+}
+
+fn inject_virtio_mmio_irq() -> bool {
+    inject_virtio_mmio_irq_for_pin(VIRTIO_MMIO_IRQ_PIN)
 }
 
 // Bounded retry attempts for pending interrupt injection
@@ -1311,12 +1321,25 @@ const MMIO_VIRTIO_SIZE: u64 = PAGE_SIZE as u64;
 const MMIO_VIRTIO_GPU_SHM_BASE: u64 = MMIO_VIRTIO_BASE + MMIO_VIRTIO_SIZE;
 const MMIO_VIRTIO_GPU_SHM_SIZE: u64 = 2 * 1024 * 1024; // 2 MiB
 
+// When both virtio-gpu and virtio-input are enabled, expose virtio-input as a second
+// virtio-mmio device. Place it after the virtio-gpu SHM window to avoid overlapping
+// address ranges.
+#[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_virtio_input"))]
+const MMIO_VIRTIO_INPUT_BASE: u64 = MMIO_VIRTIO_GPU_SHM_BASE + MMIO_VIRTIO_GPU_SHM_SIZE;
+#[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_virtio_input"))]
+const MMIO_VIRTIO_INPUT_SIZE: u64 = PAGE_SIZE as u64;
+
 // IOAPIC MMIO (x86 legacy): Linux programs IRQ vectors here when APIC/IOAPIC is enabled.
 // We emulate the minimal IOREGSEL/IOWIN interface and a small redirection table.
 const MMIO_IOAPIC_BASE: u64 = 0xFEC0_0000;
 const MMIO_IOAPIC_SIZE: u64 = PAGE_SIZE as u64;
 const IOAPIC_REDIRECT_ENTRIES: usize = 24;
 const VIRTIO_MMIO_IRQ_PIN: usize = 5;
+
+// Separate IRQ pin for the second virtio-mmio device (virtio-input) when virtio-gpu is
+// also enabled. This avoids sharing a single interrupt line between two devices.
+#[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_virtio_input"))]
+const VIRTIO_MMIO_INPUT_IRQ_PIN: usize = 6;
 
 static mut IOAPIC_REGSEL: u32 = 0;
 static mut IOAPIC_REDIR: [u64; IOAPIC_REDIRECT_ENTRIES] = [0; IOAPIC_REDIRECT_ENTRIES];
@@ -2143,7 +2166,7 @@ struct MmioRegion {
     handler: MmioHandler,
 }
 
-const MAX_MMIO_REGIONS: usize = 4;
+const MAX_MMIO_REGIONS: usize = 5;
 static mut MMIO_REGIONS: [Option<MmioRegion>; MAX_MMIO_REGIONS] = [None; MAX_MMIO_REGIONS];
 static mut MMIO_REGIONS_INITIALIZED: bool = false;
 static MMIO_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -2258,9 +2281,54 @@ impl VirtioMmioState {
             input_cfg_subsel: AtomicU32::new(0),
         }
     }
+
+    const fn new_with_device_id(device_id: u32) -> Self {
+        Self {
+            status: AtomicU32::new(0),
+            driver_features: [AtomicU32::new(0), AtomicU32::new(0)],
+            driver_features_sel: AtomicU32::new(0),
+            device_features_sel: AtomicU32::new(0),
+            interrupt_status: AtomicU32::new(0),
+            config_generation: AtomicU32::new(0),
+            interrupt_pending: AtomicU32::new(0),
+            interrupt_pending_attempts: AtomicU32::new(0),
+            interrupt_pending_last_tick: AtomicU64::new(0),
+            interrupt_backoff_total_attempts: AtomicU32::new(0),
+            interrupt_backoff_succeeded: AtomicU32::new(0),
+            interrupt_backoff_failed_max: AtomicU32::new(0),
+            device_id: AtomicU32::new(device_id),
+            queue_notify_count: AtomicU32::new(0),
+            queue_desc_address: [AtomicU64::new(0), AtomicU64::new(0)],
+            queue_driver_address: [AtomicU64::new(0), AtomicU64::new(0)],
+            queue_used_address: [AtomicU64::new(0), AtomicU64::new(0)],
+            queue_avail_index: [AtomicU16::new(0), AtomicU16::new(0)],
+            queue_used_index: [AtomicU16::new(0), AtomicU16::new(0)],
+            queue_size: [AtomicU32::new(0), AtomicU32::new(0)],
+            queue_ready: [AtomicU32::new(0), AtomicU32::new(0)],
+            queue_selected: AtomicU32::new(0),
+
+            guest_page_size: AtomicU32::new(4096),
+            queue_align: AtomicU32::new(4096),
+            queue_pfn: [AtomicU32::new(0), AtomicU32::new(0)],
+
+            shm_sel: AtomicU32::new(0),
+
+            #[cfg(feature = "vmm_virtio_input")]
+            input_cfg_select: AtomicU32::new(0),
+            #[cfg(feature = "vmm_virtio_input")]
+            input_cfg_subsel: AtomicU32::new(0),
+        }
+    }
 }
 
 static VIRTIO_MMIO_STATE: VirtioMmioState = VirtioMmioState::new();
+
+// When virtio-gpu is enabled, VIRTIO_MMIO_STATE is configured as a virtio-gpu device.
+// If virtio-input is also enabled, expose it as a *second* virtio-mmio device with its
+// own independent VirtioMmioState.
+#[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_virtio_input"))]
+static VIRTIO_MMIO_INPUT_STATE: VirtioMmioState =
+    VirtioMmioState::new_with_device_id(VIRTIO_INPUT_DEVICE_ID);
 
 fn virtio_device_features(device_id: u32) -> u64 {
     if VIRTIO_MMIO_VERSION_VALUE == 1 {
@@ -2499,8 +2567,9 @@ fn virtio_input_cfg_read_byte(cfg_offset: u64) -> u8 {
     //  2: size (ro)
     //  3..7: reserved
     //  8..: data
-    let select = VIRTIO_MMIO_STATE.input_cfg_select.load(Ordering::Relaxed) as u8;
-    let subsel = VIRTIO_MMIO_STATE.input_cfg_subsel.load(Ordering::Relaxed) as u8;
+    let mmio = virtio_input_mmio_state();
+    let select = mmio.input_cfg_select.load(Ordering::Relaxed) as u8;
+    let subsel = mmio.input_cfg_subsel.load(Ordering::Relaxed) as u8;
 
     // Compute current payload size + data byte for the requested offset.
     let (size, data_byte) = if cfg_offset >= 8 {
@@ -2614,12 +2683,11 @@ fn virtio_input_cfg_read_byte(cfg_offset: u64) -> u8 {
 
 #[cfg(feature = "vmm_virtio_input")]
 fn virtio_input_cfg_write_byte(cfg_offset: u64, byte: u8) {
+    let mmio = virtio_input_mmio_state();
     match cfg_offset {
         0 => {
-            let old = VIRTIO_MMIO_STATE.input_cfg_select.load(Ordering::Relaxed) as u8;
-            VIRTIO_MMIO_STATE
-                .input_cfg_select
-                .store(byte as u32, Ordering::Relaxed);
+            let old = mmio.input_cfg_select.load(Ordering::Relaxed) as u8;
+            mmio.input_cfg_select.store(byte as u32, Ordering::Relaxed);
             if old != byte {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:CFG_SELECT_WRITE=0x");
                 crate::serial_write_hex_u64(byte as u64);
@@ -2627,10 +2695,8 @@ fn virtio_input_cfg_write_byte(cfg_offset: u64, byte: u8) {
             }
         }
         1 => {
-            let old = VIRTIO_MMIO_STATE.input_cfg_subsel.load(Ordering::Relaxed) as u8;
-            VIRTIO_MMIO_STATE
-                .input_cfg_subsel
-                .store(byte as u32, Ordering::Relaxed);
+            let old = mmio.input_cfg_subsel.load(Ordering::Relaxed) as u8;
+            mmio.input_cfg_subsel.store(byte as u32, Ordering::Relaxed);
             if old != byte {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:CFG_SUBSEL_WRITE=0x");
                 crate::serial_write_hex_u64(byte as u64);
@@ -2710,11 +2776,12 @@ unsafe fn com1_match_marker_step(marker: &[u8], pos: &mut usize, byte: u8) -> bo
 #[cfg(feature = "vmm_virtio_input")]
 #[inline(always)]
 unsafe fn virtio_input_try_send_test_event() {
-    if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) != VIRTIO_INPUT_DEVICE_ID {
+    let mmio = virtio_input_mmio_state();
+    if mmio.device_id.load(Ordering::Relaxed) != VIRTIO_INPUT_DEVICE_ID {
         return;
     }
     const VIRTIO_STATUS_DRIVER_OK: u32 = 0x04;
-    let status = VIRTIO_MMIO_STATE.status.load(Ordering::Relaxed);
+    let status = mmio.status.load(Ordering::Relaxed);
     if (status & VIRTIO_STATUS_DRIVER_OK) == 0 {
         return;
     }
@@ -2841,7 +2908,33 @@ fn virtio_input_extract_writable_buf(
 }
 
 #[cfg(feature = "vmm_virtio_input")]
+fn virtio_input_mmio_state() -> &'static VirtioMmioState {
+    #[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_virtio_input"))]
+    {
+        &VIRTIO_MMIO_INPUT_STATE
+    }
+    #[cfg(not(feature = "vmm_virtio_gpu"))]
+    {
+        &VIRTIO_MMIO_STATE
+    }
+}
+
+#[cfg(feature = "vmm_virtio_input")]
+const fn virtio_input_irq_pin() -> usize {
+    #[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_virtio_input"))]
+    {
+        VIRTIO_MMIO_INPUT_IRQ_PIN
+    }
+    #[cfg(not(feature = "vmm_virtio_gpu"))]
+    {
+        VIRTIO_MMIO_IRQ_PIN
+    }
+}
+
+#[cfg(feature = "vmm_virtio_input")]
 unsafe fn virtio_input_complete_used(
+    mmio: &VirtioMmioState,
+    irq_pin: usize,
     used_base: u64,
     queue_size: u32,
     qi: usize,
@@ -2852,7 +2945,7 @@ unsafe fn virtio_input_complete_used(
         return false;
     }
     let queue_size_u64 = queue_size as u64;
-    let mut used_idx: u16 = VIRTIO_MMIO_STATE.queue_used_index[qi].load(Ordering::Relaxed);
+    let mut used_idx: u16 = mmio.queue_used_index[qi].load(Ordering::Relaxed);
     let used_ring_pos = (used_idx as u64) % queue_size_u64;
     let used_entry_offset =
         used_base + VIRTQ_USED_RING_OFFSET + used_ring_pos * VIRTQ_USED_ENTRY_SIZE;
@@ -2867,14 +2960,14 @@ unsafe fn virtio_input_complete_used(
     if !write_u16(used_base + VIRTQ_USED_IDX_OFFSET, used_idx) {
         return false;
     }
-    VIRTIO_MMIO_STATE.queue_used_index[qi].store(used_idx, Ordering::Relaxed);
+    mmio.queue_used_index[qi].store(used_idx, Ordering::Relaxed);
 
-    let old_int = VIRTIO_MMIO_STATE
+    let old_int = mmio
         .interrupt_status
         .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::Relaxed);
     // Model a level-triggered interrupt line: once asserted, keep it pending until
     // the guest ACKs (MMIO INTERRUPT_ACK clears interrupt_status).
-    let _ = VIRTIO_MMIO_STATE
+    let _ = mmio
         .interrupt_pending
         .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed);
 
@@ -2882,21 +2975,9 @@ unsafe fn virtio_input_complete_used(
     // retry later if the first inject occurred before Linux had a handler.
     if (old_int & VIRTIO_MMIO_INT_VRING) == 0 {
         let now = crate::TIMER_TICKS.load(Ordering::Relaxed);
-        if inject_virtio_mmio_irq() {
-            VIRTIO_MMIO_STATE
-                .interrupt_pending_attempts
-                .store(0, Ordering::Relaxed);
-            VIRTIO_MMIO_STATE
-                .interrupt_pending_last_tick
-                .store(now, Ordering::Relaxed);
-        } else {
-            VIRTIO_MMIO_STATE
-                .interrupt_pending_attempts
-                .store(0, Ordering::Relaxed);
-            VIRTIO_MMIO_STATE
-                .interrupt_pending_last_tick
-                .store(now, Ordering::Relaxed);
-        }
+        let _ = inject_virtio_mmio_irq_for_pin(irq_pin);
+        mmio.interrupt_pending_attempts.store(0, Ordering::Relaxed);
+        mmio.interrupt_pending_last_tick.store(now, Ordering::Relaxed);
     }
 
     true
@@ -2904,17 +2985,20 @@ unsafe fn virtio_input_complete_used(
 
 #[cfg(feature = "vmm_virtio_input")]
 unsafe fn virtio_input_pump_queue0() {
-    if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) != VIRTIO_INPUT_DEVICE_ID {
+    let mmio = virtio_input_mmio_state();
+    let irq_pin = virtio_input_irq_pin();
+
+    if mmio.device_id.load(Ordering::Relaxed) != VIRTIO_INPUT_DEVICE_ID {
         return;
     }
 
     let qi = VIRTIO_INPUT_EVENTQ_INDEX;
-    if VIRTIO_MMIO_STATE.queue_ready[qi].load(Ordering::Relaxed) == 0 {
+    if mmio.queue_ready[qi].load(Ordering::Relaxed) == 0 {
         return;
     }
 
-    let used_base = VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed);
-    let queue_size = VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed);
+    let used_base = mmio.queue_used_address[qi].load(Ordering::Relaxed);
+    let queue_size = mmio.queue_size[qi].load(Ordering::Relaxed);
     if used_base == 0 || queue_size == 0 {
         return;
     }
@@ -2960,8 +3044,10 @@ unsafe fn virtio_input_pump_queue0() {
             continue;
         }
 
-        if virtio_input_complete_used(used_base, queue_size, qi, buf.desc_id, 8) {
-            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITTEN\n");
+        if virtio_input_complete_used(mmio, irq_pin, used_base, queue_size, qi, buf.desc_id, 8) {
+            crate::with_irqs_disabled(|| {
+                crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITTEN\n");
+            });
 
             let mut used_idx_after = [0u8; 2];
             if read_guest_bytes(used_base + VIRTQ_USED_IDX_OFFSET, &mut used_idx_after) {
@@ -3055,6 +3141,28 @@ pub fn virtio_input_enqueue_key_press_release(evdev_code: u16) -> bool {
     }
 }
 
+#[cfg(feature = "vmm_virtio_input")]
+pub fn virtio_input_enqueue_key_state(evdev_code: u16, down: bool) -> bool {
+    const EV_KEY: u16 = 0x01;
+    const EV_SYN: u16 = 0x00;
+    const SYN_REPORT: u16 = 0x00;
+
+    let val: i32 = if down { 1 } else { 0 };
+    let ok1 = virtio_input_eventq_push(virtio_input_pack(EV_KEY, evdev_code, val));
+    let ok2 = virtio_input_eventq_push(virtio_input_pack(EV_SYN, SYN_REPORT, 0));
+    if ok1 && ok2 {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENQ_KEY_STATE code=0x");
+        crate::serial_write_hex_u64(evdev_code as u64);
+        crate::serial_write_str(" val=0x");
+        crate::serial_write_hex_u64(val as u64);
+        crate::serial_write_str("\n");
+        true
+    } else {
+        crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:ENQ_KEY_STATE_FAIL\n");
+        false
+    }
+}
+
 fn find_mmio_region(gpa: u64) -> Option<MmioRegion> {
     unsafe {
         for slot in MMIO_REGIONS.iter() {
@@ -3122,6 +3230,20 @@ fn init_hypervisor_mmio() {
                 if !register_mmio_region(shm_region) {
                     crate::serial_write_str("RAYOS_VMM:VMX:MMIO_VIRTIO_GPU_SHM_FAIL\n");
                 }
+            }
+        }
+
+        // When virtio-gpu is exposed via the primary virtio-mmio window, expose virtio-input
+        // via a second virtio-mmio window so Linux can enumerate both devices.
+        #[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_virtio_input"))]
+        {
+            let virtio_input_region = MmioRegion {
+                base: MMIO_VIRTIO_INPUT_BASE,
+                size: MMIO_VIRTIO_INPUT_SIZE,
+                handler: virtio_mmio_input_handler,
+            };
+            if !register_mmio_region(virtio_input_region) {
+                crate::serial_write_str("RAYOS_VMM:VMX:MMIO_VIRTIO_INPUT_FAIL\n");
             }
         }
 
@@ -3380,7 +3502,9 @@ fn ioapic_mmio_handler(
     }
 }
 
-fn virtio_mmio_handler(
+fn virtio_mmio_handler_impl(
+    mmio: &VirtioMmioState,
+    irq_pin: usize,
     _regs: &mut GuestRegs,
     access: &MmioAccess,
     value: Option<u64>,
@@ -3396,7 +3520,7 @@ fn virtio_mmio_handler(
 
     // Debug aid: trace virtio-blk MMIO traffic to diagnose Linux probe failures.
     // This is extremely verbose; keep it behind a feature flag.
-    let dev_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+    let dev_id = mmio.device_id.load(Ordering::Relaxed);
     let trace_virtio_blk = cfg!(feature = "vmm_trace_virtio_blk_mmio") && dev_id == VIRTIO_MMIO_DEVICE_ID_VALUE;
     if trace_virtio_blk {
         // Log all register accesses (including config space) so we can see what Linux
@@ -3425,14 +3549,14 @@ fn virtio_mmio_handler(
             Some(VIRTIO_MMIO_VERSION_VALUE as u64)
         }
         (VIRTIO_MMIO_DEVICE_ID_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) as u64)
+            Some(mmio.device_id.load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_VENDOR_ID_OFFSET, MmioAccessKind::Read) => {
             Some(VIRTIO_MMIO_VENDOR_ID_VALUE as u64)
         }
         (VIRTIO_MMIO_DEVICE_FEATURES_OFFSET, MmioAccessKind::Read) => {
-            let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
-            let sel = VIRTIO_MMIO_STATE.device_features_sel.load(Ordering::Relaxed) & 1;
+            let device_id = mmio.device_id.load(Ordering::Relaxed);
+            let sel = mmio.device_features_sel.load(Ordering::Relaxed) & 1;
             let feats = virtio_device_features(device_id);
             let word = if sel == 0 { feats as u32 } else { (feats >> 32) as u32 };
             #[cfg(feature = "vmm_virtio_input")]
@@ -3448,15 +3572,14 @@ fn virtio_mmio_handler(
             Some(word as u64)
         }
         (VIRTIO_MMIO_DEVICE_FEATURES_SEL_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_STATE.device_features_sel.load(Ordering::Relaxed) as u64)
+            Some(mmio.device_features_sel.load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_DEVICE_FEATURES_SEL_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE
-                .device_features_sel
+            mmio.device_features_sel
                 .store(write_value as u32, Ordering::Relaxed);
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:DEV_FEAT_SEL=");
                     crate::serial_write_hex_u64(write_value);
                     crate::serial_write_str("\n");
@@ -3465,24 +3588,23 @@ fn virtio_mmio_handler(
             None
         }
         (VIRTIO_MMIO_DRIVER_FEATURES_OFFSET, MmioAccessKind::Read) => {
-            let sel = (VIRTIO_MMIO_STATE.driver_features_sel.load(Ordering::Relaxed) & 1) as usize;
-            Some(VIRTIO_MMIO_STATE.driver_features[sel].load(Ordering::Relaxed) as u64)
+            let sel = (mmio.driver_features_sel.load(Ordering::Relaxed) & 1) as usize;
+            Some(mmio.driver_features[sel].load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_DRIVER_FEATURES_SEL_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_STATE.driver_features_sel.load(Ordering::Relaxed) as u64)
+            Some(mmio.driver_features_sel.load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_DRIVER_FEATURES_SEL_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE
-                .driver_features_sel
+            mmio.driver_features_sel
                 .store(write_value as u32, Ordering::Relaxed);
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:DRV_FEAT_SEL=");
                 crate::serial_write_hex_u64(write_value);
                 crate::serial_write_str("\n");
             }
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:DRV_FEAT_SEL=");
                     crate::serial_write_hex_u64(write_value);
                     crate::serial_write_str("\n");
@@ -3493,50 +3615,50 @@ fn virtio_mmio_handler(
 
         // Legacy virtio-mmio ABI registers.
         (VIRTIO_MMIO_GUEST_PAGE_SIZE_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_STATE.guest_page_size.load(Ordering::Relaxed) as u64)
+            Some(mmio.guest_page_size.load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_GUEST_PAGE_SIZE_OFFSET, MmioAccessKind::Write) => {
             let v = (write_value as u32).max(4096);
-            VIRTIO_MMIO_STATE.guest_page_size.store(v, Ordering::Relaxed);
+            mmio.guest_page_size.store(v, Ordering::Relaxed);
             None
         }
         (VIRTIO_MMIO_QUEUE_ALIGN_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_STATE.queue_align.load(Ordering::Relaxed) as u64)
+            Some(mmio.queue_align.load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_QUEUE_ALIGN_OFFSET, MmioAccessKind::Write) => {
             let v = (write_value as u32).max(16);
-            VIRTIO_MMIO_STATE.queue_align.store(v, Ordering::Relaxed);
+            mmio.queue_align.store(v, Ordering::Relaxed);
             None
         }
         (VIRTIO_MMIO_QUEUE_PFN_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 Some(0)
             } else {
-                Some(VIRTIO_MMIO_STATE.queue_pfn[qi].load(Ordering::Relaxed) as u64)
+                Some(mmio.queue_pfn[qi].load(Ordering::Relaxed) as u64)
             }
         }
         (VIRTIO_MMIO_QUEUE_PFN_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
 
             let pfn = write_value as u32;
-            VIRTIO_MMIO_STATE.queue_pfn[qi].store(pfn, Ordering::Relaxed);
+            mmio.queue_pfn[qi].store(pfn, Ordering::Relaxed);
 
             // A PFN of 0 resets the queue.
             if pfn == 0 {
-                VIRTIO_MMIO_STATE.queue_desc_address[qi].store(0, Ordering::Relaxed);
-                VIRTIO_MMIO_STATE.queue_driver_address[qi].store(0, Ordering::Relaxed);
-                VIRTIO_MMIO_STATE.queue_used_address[qi].store(0, Ordering::Relaxed);
-                VIRTIO_MMIO_STATE.queue_ready[qi].store(0, Ordering::Relaxed);
+                mmio.queue_desc_address[qi].store(0, Ordering::Relaxed);
+                mmio.queue_driver_address[qi].store(0, Ordering::Relaxed);
+                mmio.queue_used_address[qi].store(0, Ordering::Relaxed);
+                mmio.queue_ready[qi].store(0, Ordering::Relaxed);
                 return None;
             }
 
-            let page_size = VIRTIO_MMIO_STATE.guest_page_size.load(Ordering::Relaxed) as u64;
-            let align = VIRTIO_MMIO_STATE.queue_align.load(Ordering::Relaxed) as u64;
-            let qsz = VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed) as u64;
+            let page_size = mmio.guest_page_size.load(Ordering::Relaxed) as u64;
+            let align = mmio.queue_align.load(Ordering::Relaxed) as u64;
+            let qsz = mmio.queue_size[qi].load(Ordering::Relaxed) as u64;
 
             let base = (pfn as u64) * page_size;
             let desc_size = 16u64.saturating_mul(qsz);
@@ -3551,7 +3673,7 @@ fn virtio_mmio_handler(
 
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:Q_PFN_WRITE qi=");
                     crate::serial_write_hex_u64(qi as u64);
                     crate::serial_write_str(" pfn=0x");
@@ -3572,27 +3694,23 @@ fn virtio_mmio_handler(
                 }
             }
 
-            VIRTIO_MMIO_STATE.queue_desc_address[qi].store(base, Ordering::Relaxed);
-            VIRTIO_MMIO_STATE
-                .queue_driver_address[qi]
-                .store(avail_addr, Ordering::Relaxed);
-            VIRTIO_MMIO_STATE
-                .queue_used_address[qi]
-                .store(used_addr, Ordering::Relaxed);
-            VIRTIO_MMIO_STATE.queue_ready[qi].store(1, Ordering::Relaxed);
+            mmio.queue_desc_address[qi].store(base, Ordering::Relaxed);
+            mmio.queue_driver_address[qi].store(avail_addr, Ordering::Relaxed);
+            mmio.queue_used_address[qi].store(used_addr, Ordering::Relaxed);
+            mmio.queue_ready[qi].store(1, Ordering::Relaxed);
             None
         }
         (VIRTIO_MMIO_INTERRUPT_STATUS_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_STATE.interrupt_status.load(Ordering::Relaxed) as u64)
+            Some(mmio.interrupt_status.load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_CONFIG_GENERATION_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_STATE.config_generation.load(Ordering::Relaxed) as u64)
+            Some(mmio.config_generation.load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_STATUS_OFFSET, MmioAccessKind::Read) => {
-            let v = VIRTIO_MMIO_STATE.status.load(Ordering::Relaxed) as u64;
+            let v = mmio.status.load(Ordering::Relaxed) as u64;
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:STATUS_RD=");
                     crate::serial_write_hex_u64(v);
                     crate::serial_write_str("\n");
@@ -3601,13 +3719,13 @@ fn virtio_mmio_handler(
             Some(v)
         }
         (VIRTIO_MMIO_QUEUE_SELECT_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as u64)
+            Some(mmio.queue_selected.load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_QUEUE_NUM_MAX_OFFSET, MmioAccessKind::Read) => {
             // Return 0 for unsupported queues; Linux probes queue indices to discover count.
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             let v = if qi >= 2 { 0 } else { VIRTIO_QUEUE_SIZE_VALUE };
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:QUEUE_NUM_MAX qi=");
                 crate::serial_write_hex_u64(qi as u64);
                 crate::serial_write_str(" val=");
@@ -3616,7 +3734,7 @@ fn virtio_mmio_handler(
             }
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:QUEUE_NUM_MAX qi=");
                     crate::serial_write_hex_u64(qi as u64);
                     crate::serial_write_str(" val=");
@@ -3627,32 +3745,32 @@ fn virtio_mmio_handler(
             Some(v)
         }
         (VIRTIO_MMIO_QUEUE_NUM_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 Some(0)
             } else {
-                Some(VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed) as u64)
+                Some(mmio.queue_size[qi].load(Ordering::Relaxed) as u64)
             }
         }
         (VIRTIO_MMIO_QUEUE_READY_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 Some(0)
             } else {
-                Some(VIRTIO_MMIO_STATE.queue_ready[qi].load(Ordering::Relaxed) as u64)
+                Some(mmio.queue_ready[qi].load(Ordering::Relaxed) as u64)
             }
         }
 
         // Modern virtio-mmio SHM registers.
         // For virtio-gpu, expose a small host-visible SHM region so Linux can reserve it during probe.
         (VIRTIO_MMIO_SHM_SEL_OFFSET, MmioAccessKind::Read) => {
-            Some(VIRTIO_MMIO_STATE.shm_sel.load(Ordering::Relaxed) as u64)
+            Some(mmio.shm_sel.load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_SHM_SEL_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE.shm_sel.store(write_value as u32, Ordering::Relaxed);
+            mmio.shm_sel.store(write_value as u32, Ordering::Relaxed);
             #[cfg(feature = "vmm_virtio_gpu")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_GPU_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_GPU_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:SHM_SEL=");
                     crate::serial_write_hex_u64(write_value);
                     crate::serial_write_str("\n");
@@ -3663,8 +3781,8 @@ fn virtio_mmio_handler(
         (VIRTIO_MMIO_SHM_LEN_LOW_OFFSET, MmioAccessKind::Read) => {
             #[cfg(feature = "vmm_virtio_gpu")]
             {
-                let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
-                let sel = VIRTIO_MMIO_STATE.shm_sel.load(Ordering::Relaxed);
+                let dev = mmio.device_id.load(Ordering::Relaxed);
+                let sel = mmio.shm_sel.load(Ordering::Relaxed);
                 if dev == VIRTIO_GPU_DEVICE_ID && sel <= 1 {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:SHM_LEN_LOW sel=");
                     crate::serial_write_hex_u64(sel as u64);
@@ -3684,8 +3802,8 @@ fn virtio_mmio_handler(
         (VIRTIO_MMIO_SHM_LEN_HIGH_OFFSET, MmioAccessKind::Read) => {
             #[cfg(feature = "vmm_virtio_gpu")]
             {
-                let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
-                let sel = VIRTIO_MMIO_STATE.shm_sel.load(Ordering::Relaxed);
+                let dev = mmio.device_id.load(Ordering::Relaxed);
+                let sel = mmio.shm_sel.load(Ordering::Relaxed);
                 if dev == VIRTIO_GPU_DEVICE_ID && sel <= 1 {
                     Some((MMIO_VIRTIO_GPU_SHM_SIZE >> 32) as u64)
                 } else {
@@ -3700,8 +3818,8 @@ fn virtio_mmio_handler(
         (VIRTIO_MMIO_SHM_BASE_LOW_OFFSET, MmioAccessKind::Read) => {
             #[cfg(feature = "vmm_virtio_gpu")]
             {
-                let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
-                let sel = VIRTIO_MMIO_STATE.shm_sel.load(Ordering::Relaxed);
+                let dev = mmio.device_id.load(Ordering::Relaxed);
+                let sel = mmio.shm_sel.load(Ordering::Relaxed);
                 if dev == VIRTIO_GPU_DEVICE_ID && sel <= 1 {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:SHM_BASE_LOW sel=");
                     crate::serial_write_hex_u64(sel as u64);
@@ -3721,8 +3839,8 @@ fn virtio_mmio_handler(
         (VIRTIO_MMIO_SHM_BASE_HIGH_OFFSET, MmioAccessKind::Read) => {
             #[cfg(feature = "vmm_virtio_gpu")]
             {
-                let dev = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
-                let sel = VIRTIO_MMIO_STATE.shm_sel.load(Ordering::Relaxed);
+                let dev = mmio.device_id.load(Ordering::Relaxed);
+                let sel = mmio.shm_sel.load(Ordering::Relaxed);
                 if dev == VIRTIO_GPU_DEVICE_ID && sel <= 1 {
                     Some((MMIO_VIRTIO_GPU_SHM_BASE >> 32) as u64)
                 } else {
@@ -3741,43 +3859,43 @@ fn virtio_mmio_handler(
 
         // Modern split address registers (high parts).
         (VIRTIO_MMIO_QUEUE_DESC_HIGH_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 Some(0)
             } else {
-                Some((VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed) >> 32) as u64)
+                Some((mmio.queue_desc_address[qi].load(Ordering::Relaxed) >> 32) as u64)
             }
         }
         (VIRTIO_MMIO_QUEUE_AVAIL_HIGH_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 Some(0)
             } else {
-                Some((VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed) >> 32) as u64)
+                Some((mmio.queue_driver_address[qi].load(Ordering::Relaxed) >> 32) as u64)
             }
         }
         (VIRTIO_MMIO_QUEUE_USED_LOW_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 Some(0)
             } else {
-                Some((VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed) & 0xFFFF_FFFF) as u64)
+                Some((mmio.queue_used_address[qi].load(Ordering::Relaxed) & 0xFFFF_FFFF) as u64)
             }
         }
         (VIRTIO_MMIO_QUEUE_USED_HIGH_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 Some(0)
             } else {
-                Some((VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed) >> 32) as u64)
+                Some((mmio.queue_used_address[qi].load(Ordering::Relaxed) >> 32) as u64)
             }
         }
         (VIRTIO_MMIO_QUEUE_DESC_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return Some(0);
             }
-            let v = VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed);
+            let v = mmio.queue_desc_address[qi].load(Ordering::Relaxed);
             if access.size == 4 {
                 Some((v & 0xFFFF_FFFF) as u64)
             } else {
@@ -3785,18 +3903,18 @@ fn virtio_mmio_handler(
             }
         }
         (VIRTIO_MMIO_QUEUE_DRIVER_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return Some(0);
             }
-            Some(VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed))
+            Some(mmio.queue_driver_address[qi].load(Ordering::Relaxed))
         }
         (VIRTIO_MMIO_QUEUE_AVAIL_LOW_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return Some(0);
             }
-            let v = VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed);
+            let v = mmio.queue_driver_address[qi].load(Ordering::Relaxed);
             if access.size == 8 {
                 Some(v)
             } else {
@@ -3804,20 +3922,20 @@ fn virtio_mmio_handler(
             }
         }
         (VIRTIO_MMIO_QUEUE_SIZE_OFFSET, MmioAccessKind::Read) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return Some(0);
             }
-            Some(VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed) as u64)
+            Some(mmio.queue_size[qi].load(Ordering::Relaxed) as u64)
         }
         (VIRTIO_MMIO_DRIVER_FEATURES_OFFSET, MmioAccessKind::Write) => {
-            let sel = (VIRTIO_MMIO_STATE.driver_features_sel.load(Ordering::Relaxed) & 1) as usize;
-            VIRTIO_MMIO_STATE.driver_features[sel].store(write_value as u32, Ordering::Relaxed);
+            let sel = (mmio.driver_features_sel.load(Ordering::Relaxed) & 1) as usize;
+            mmio.driver_features[sel].store(write_value as u32, Ordering::Relaxed);
             crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:DRIVER_FEATURES=");
             crate::serial_write_hex_u64(write_value);
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str(" sel=");
                     crate::serial_write_hex_u64(sel as u64);
                 }
@@ -3826,7 +3944,7 @@ fn virtio_mmio_handler(
             None
         }
         (VIRTIO_MMIO_STATUS_OFFSET, MmioAccessKind::Write) => {
-            let old = VIRTIO_MMIO_STATE.status.load(Ordering::Relaxed);
+            let old = mmio.status.load(Ordering::Relaxed);
             #[cfg(not(feature = "vmm_virtio_input"))]
             let _ = old;
             let mut stored = write_value as u32;
@@ -3835,10 +3953,10 @@ fn virtio_mmio_handler(
             // negotiated feature bits and clear FEATURES_OK if it cannot accept them.
             const VIRTIO_STATUS_FEATURES_OK: u32 = 0x08;
             if (stored & VIRTIO_STATUS_FEATURES_OK) != 0 {
-                let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+                let device_id = mmio.device_id.load(Ordering::Relaxed);
                 let dev_feats = virtio_device_features(device_id);
-                let drv0 = VIRTIO_MMIO_STATE.driver_features[0].load(Ordering::Relaxed) as u64;
-                let drv1 = VIRTIO_MMIO_STATE.driver_features[1].load(Ordering::Relaxed) as u64;
+                let drv0 = mmio.driver_features[0].load(Ordering::Relaxed) as u64;
+                let drv1 = mmio.driver_features[1].load(Ordering::Relaxed) as u64;
                 let drv_feats = drv0 | (drv1 << 32);
                 if (drv_feats & !dev_feats) != 0 {
                     stored &= !VIRTIO_STATUS_FEATURES_OK;
@@ -3851,12 +3969,12 @@ fn virtio_mmio_handler(
                 }
             }
 
-            VIRTIO_MMIO_STATE.status.store(stored, Ordering::Relaxed);
+            mmio.status.store(stored, Ordering::Relaxed);
             crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:STATUS=");
             crate::serial_write_hex_u64(stored as u64);
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str(" old=");
                     crate::serial_write_hex_u64(old as u64);
                 }
@@ -3868,7 +3986,7 @@ fn virtio_mmio_handler(
                 // Emit a deterministic marker when the guest sets DRIVER_OK for virtio-input.
                 // This is a helpful milestone even when VMX-gated smokes are used.
                 const VIRTIO_STATUS_DRIVER_OK: u32 = 0x04;
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     let newv = write_value as u32;
                     if (old & VIRTIO_STATUS_DRIVER_OK) == 0 && (newv & VIRTIO_STATUS_DRIVER_OK) != 0 {
                         crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:DRIVER_OK\n");
@@ -3879,17 +3997,15 @@ fn virtio_mmio_handler(
         }
 
         (VIRTIO_MMIO_QUEUE_SELECT_OFFSET, MmioAccessKind::Write) => {
-            VIRTIO_MMIO_STATE
-                .queue_selected
-                .store(write_value as u32, Ordering::Relaxed);
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            mmio.queue_selected.store(write_value as u32, Ordering::Relaxed);
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:QUEUE_SEL=");
                 crate::serial_write_hex_u64(write_value);
                 crate::serial_write_str("\n");
             }
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:QUEUE_SEL=");
                     crate::serial_write_hex_u64(write_value);
                     crate::serial_write_str("\n");
@@ -3899,43 +4015,43 @@ fn virtio_mmio_handler(
         }
 
         (VIRTIO_MMIO_QUEUE_NUM_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:QUEUE_NUM qi=");
                 crate::serial_write_hex_u64(qi as u64);
                 crate::serial_write_str(" val=");
                 crate::serial_write_hex_u64(write_value);
                 crate::serial_write_str("\n");
             }
-            VIRTIO_MMIO_STATE.queue_size[qi].store(write_value as u32, Ordering::Relaxed);
+            mmio.queue_size[qi].store(write_value as u32, Ordering::Relaxed);
             None
         }
 
         (VIRTIO_MMIO_QUEUE_READY_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:QUEUE_READY qi=");
                 crate::serial_write_hex_u64(qi as u64);
                 crate::serial_write_str(" val=");
                 crate::serial_write_hex_u64(write_value);
                 crate::serial_write_str("\n");
             }
-            VIRTIO_MMIO_STATE.queue_ready[qi].store((write_value as u32) & 1, Ordering::Relaxed);
+            mmio.queue_ready[qi].store((write_value as u32) & 1, Ordering::Relaxed);
             None
         }
 
         (VIRTIO_MMIO_QUEUE_DESC_HIGH_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:Q_DESC_HIGH qi=");
                 crate::serial_write_hex_u64(qi as u64);
                 crate::serial_write_str(" val=");
@@ -3944,7 +4060,7 @@ fn virtio_mmio_handler(
             }
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:Q_DESC_HIGH_WRITE qi=");
                     crate::serial_write_hex_u64(qi as u64);
                     crate::serial_write_str(" size=");
@@ -3954,18 +4070,18 @@ fn virtio_mmio_handler(
                     crate::serial_write_str("\n");
                 }
             }
-            let old = VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed);
+            let old = mmio.queue_desc_address[qi].load(Ordering::Relaxed);
             let newv = (old & 0x0000_0000_FFFF_FFFF) | ((write_value as u32 as u64) << 32);
-            VIRTIO_MMIO_STATE.queue_desc_address[qi].store(newv, Ordering::Relaxed);
+            mmio.queue_desc_address[qi].store(newv, Ordering::Relaxed);
             None
         }
         // Spec QueueAvailHigh.
         (VIRTIO_MMIO_QUEUE_AVAIL_HIGH_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:Q_AVAIL_HIGH qi=");
                 crate::serial_write_hex_u64(qi as u64);
                 crate::serial_write_str(" val=");
@@ -3974,7 +4090,7 @@ fn virtio_mmio_handler(
             }
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:Q_AVAIL_HIGH_WRITE qi=");
                     crate::serial_write_hex_u64(qi as u64);
                     crate::serial_write_str(" size=");
@@ -3984,18 +4100,18 @@ fn virtio_mmio_handler(
                     crate::serial_write_str("\n");
                 }
             }
-            let old = VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed);
+            let old = mmio.queue_driver_address[qi].load(Ordering::Relaxed);
             let newv = (old & 0x0000_0000_FFFF_FFFF) | ((write_value as u32 as u64) << 32);
-            VIRTIO_MMIO_STATE.queue_driver_address[qi].store(newv, Ordering::Relaxed);
+            mmio.queue_driver_address[qi].store(newv, Ordering::Relaxed);
             None
         }
 
         (VIRTIO_MMIO_QUEUE_USED_LOW_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:Q_USED_LOW qi=");
                 crate::serial_write_hex_u64(qi as u64);
                 crate::serial_write_str(" val=");
@@ -4004,7 +4120,7 @@ fn virtio_mmio_handler(
             }
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:Q_USED_LOW_WRITE qi=");
                     crate::serial_write_hex_u64(qi as u64);
                     crate::serial_write_str(" size=");
@@ -4016,22 +4132,20 @@ fn virtio_mmio_handler(
             }
             // Some guests may issue a 64-bit store to the LOW offset.
             if access.size == 8 {
-                VIRTIO_MMIO_STATE
-                    .queue_used_address[qi]
-                    .store(write_value as u64, Ordering::Relaxed);
+                mmio.queue_used_address[qi].store(write_value as u64, Ordering::Relaxed);
             } else {
-                let old = VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed);
+                let old = mmio.queue_used_address[qi].load(Ordering::Relaxed);
                 let newv = (old & 0xFFFF_FFFF_0000_0000) | (write_value as u32 as u64);
-                VIRTIO_MMIO_STATE.queue_used_address[qi].store(newv, Ordering::Relaxed);
+                mmio.queue_used_address[qi].store(newv, Ordering::Relaxed);
             }
             None
         }
         (VIRTIO_MMIO_QUEUE_USED_HIGH_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:Q_USED_HIGH qi=");
                 crate::serial_write_hex_u64(qi as u64);
                 crate::serial_write_str(" val=");
@@ -4040,7 +4154,7 @@ fn virtio_mmio_handler(
             }
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:Q_USED_HIGH_WRITE qi=");
                     crate::serial_write_hex_u64(qi as u64);
                     crate::serial_write_str(" size=");
@@ -4050,17 +4164,17 @@ fn virtio_mmio_handler(
                     crate::serial_write_str("\n");
                 }
             }
-            let old = VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed);
+            let old = mmio.queue_used_address[qi].load(Ordering::Relaxed);
             let newv = (old & 0x0000_0000_FFFF_FFFF) | ((write_value as u32 as u64) << 32);
-            VIRTIO_MMIO_STATE.queue_used_address[qi].store(newv, Ordering::Relaxed);
+            mmio.queue_used_address[qi].store(newv, Ordering::Relaxed);
             None
         }
         (VIRTIO_MMIO_QUEUE_DESC_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:Q_DESC_LOW qi=");
                 crate::serial_write_hex_u64(qi as u64);
                 crate::serial_write_str(" size=");
@@ -4071,7 +4185,7 @@ fn virtio_mmio_handler(
             }
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:Q_DESC_LOW_WRITE qi=");
                     crate::serial_write_hex_u64(qi as u64);
                     crate::serial_write_str(" size=");
@@ -4083,26 +4197,22 @@ fn virtio_mmio_handler(
             }
             // Allow 64-bit whole writes at the base offset.
             if access.size == 8 {
-                VIRTIO_MMIO_STATE
-                    .queue_desc_address[qi]
-                    .store(write_value as u64, Ordering::Relaxed);
+                mmio.queue_desc_address[qi].store(write_value as u64, Ordering::Relaxed);
             } else {
-                let old = VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed);
+                let old = mmio.queue_desc_address[qi].load(Ordering::Relaxed);
                 let newv = (old & 0xFFFF_FFFF_0000_0000) | (write_value as u32 as u64);
-                VIRTIO_MMIO_STATE
-                    .queue_desc_address[qi]
-                    .store(newv, Ordering::Relaxed);
+                mmio.queue_desc_address[qi].store(newv, Ordering::Relaxed);
             }
             None
         }
         (VIRTIO_MMIO_QUEUE_DRIVER_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:Q_DRIVER_WRITE qi=");
                     crate::serial_write_hex_u64(qi as u64);
                     crate::serial_write_str(" size=");
@@ -4112,15 +4222,15 @@ fn virtio_mmio_handler(
                     crate::serial_write_str("\n");
                 }
             }
-            VIRTIO_MMIO_STATE.queue_driver_address[qi].store(write_value as u64, Ordering::Relaxed);
+            mmio.queue_driver_address[qi].store(write_value as u64, Ordering::Relaxed);
             None
         }
         (VIRTIO_MMIO_QUEUE_AVAIL_LOW_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
-            if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
+            if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_MMIO_DEVICE_ID_VALUE {
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_BLK:Q_AVAIL_LOW qi=");
                 crate::serial_write_hex_u64(qi as u64);
                 crate::serial_write_str(" size=");
@@ -4131,7 +4241,7 @@ fn virtio_mmio_handler(
             }
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:Q_AVAIL_LOW_WRITE qi=");
                     crate::serial_write_hex_u64(qi as u64);
                     crate::serial_write_str(" size=");
@@ -4142,24 +4252,20 @@ fn virtio_mmio_handler(
                 }
             }
             if access.size == 8 {
-                VIRTIO_MMIO_STATE
-                    .queue_driver_address[qi]
-                    .store(write_value as u64, Ordering::Relaxed);
+                mmio.queue_driver_address[qi].store(write_value as u64, Ordering::Relaxed);
             } else {
-                let old = VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed);
+                let old = mmio.queue_driver_address[qi].load(Ordering::Relaxed);
                 let newv = (old & 0xFFFF_FFFF_0000_0000) | (write_value as u32 as u64);
-                VIRTIO_MMIO_STATE
-                    .queue_driver_address[qi]
-                    .store(newv, Ordering::Relaxed);
+                mmio.queue_driver_address[qi].store(newv, Ordering::Relaxed);
             }
             None
         }
         (VIRTIO_MMIO_QUEUE_SIZE_OFFSET, MmioAccessKind::Write) => {
-            let qi = VIRTIO_MMIO_STATE.queue_selected.load(Ordering::Relaxed) as usize;
+            let qi = mmio.queue_selected.load(Ordering::Relaxed) as usize;
             if qi >= 2 {
                 return None;
             }
-            VIRTIO_MMIO_STATE.queue_size[qi].store(write_value as u32, Ordering::Relaxed);
+            mmio.queue_size[qi].store(write_value as u32, Ordering::Relaxed);
             None
         }
         (VIRTIO_MMIO_QUEUE_NOTIFY_OFFSET, MmioAccessKind::Write) => {
@@ -4170,13 +4276,12 @@ fn virtio_mmio_handler(
             } else {
                 write_value as usize
             };
-            let queue_desc_addr = VIRTIO_MMIO_STATE.queue_desc_address[qi].load(Ordering::Relaxed);
-            let queue_driver_addr =
-                VIRTIO_MMIO_STATE.queue_driver_address[qi].load(Ordering::Relaxed);
-            let queue_used_addr = VIRTIO_MMIO_STATE.queue_used_address[qi].load(Ordering::Relaxed);
-            let queue_size_value = VIRTIO_MMIO_STATE.queue_size[qi].load(Ordering::Relaxed);
-            let queue_ready_value = VIRTIO_MMIO_STATE.queue_ready[qi].load(Ordering::Relaxed);
-            VIRTIO_MMIO_STATE.queue_notify_count.fetch_add(1, Ordering::Relaxed);
+            let queue_desc_addr = mmio.queue_desc_address[qi].load(Ordering::Relaxed);
+            let queue_driver_addr = mmio.queue_driver_address[qi].load(Ordering::Relaxed);
+            let queue_used_addr = mmio.queue_used_address[qi].load(Ordering::Relaxed);
+            let queue_size_value = mmio.queue_size[qi].load(Ordering::Relaxed);
+            let queue_ready_value = mmio.queue_ready[qi].load(Ordering::Relaxed);
+            mmio.queue_notify_count.fetch_add(1, Ordering::Relaxed);
             crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:QUEUE_NOTIFY=");
             crate::serial_write_hex_u64(write_value);
             crate::serial_write_str("\n");
@@ -4184,7 +4289,9 @@ fn virtio_mmio_handler(
             log_virtq_descriptors(queue_desc_addr, queue_size_value);
             log_virtq_avail(queue_driver_addr, queue_size_value);
             log_virtq_used(queue_used_addr, queue_size_value);
-            process_virtq_queue(
+            process_virtq_queue_for(
+                mmio,
+                irq_pin,
                 queue_desc_addr,
                 queue_driver_addr,
                 queue_used_addr,
@@ -4196,21 +4303,15 @@ fn virtio_mmio_handler(
         }
         (VIRTIO_MMIO_INTERRUPT_ACK_OFFSET, MmioAccessKind::Write) => {
             // Virtio-MMIO spec: write 1s to clear corresponding bits.
-            let old = VIRTIO_MMIO_STATE.interrupt_status.load(Ordering::Relaxed);
+            let old = mmio.interrupt_status.load(Ordering::Relaxed);
             let new = old & !(write_value as u32);
-            VIRTIO_MMIO_STATE
-                .interrupt_status
-                .store(new, Ordering::Relaxed);
+            mmio.interrupt_status.store(new, Ordering::Relaxed);
             // Once all interrupt status bits are cleared, the level IRQ line is deasserted.
             // Stop any retry/pending machinery.
             if new == 0 {
-                VIRTIO_MMIO_STATE.interrupt_pending.store(0, Ordering::Relaxed);
-                VIRTIO_MMIO_STATE
-                    .interrupt_pending_attempts
-                    .store(0, Ordering::Relaxed);
-                VIRTIO_MMIO_STATE
-                    .interrupt_pending_last_tick
-                    .store(0, Ordering::Relaxed);
+                mmio.interrupt_pending.store(0, Ordering::Relaxed);
+                mmio.interrupt_pending_attempts.store(0, Ordering::Relaxed);
+                mmio.interrupt_pending_last_tick.store(0, Ordering::Relaxed);
                 set_interrupt_window_exiting(false);
             }
             if write_value != 0 || old != new {
@@ -4227,7 +4328,7 @@ fn virtio_mmio_handler(
         _ => {
             #[cfg(feature = "vmm_virtio_input")]
             {
-                if VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID
+                if mmio.device_id.load(Ordering::Relaxed) == VIRTIO_INPUT_DEVICE_ID
                     && access.offset < VIRTIO_MMIO_CONFIG_SPACE_OFFSET
                 {
                     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:UNHANDLED off=");
@@ -4248,7 +4349,7 @@ fn virtio_mmio_handler(
             }
             // Handle config space (MAC address for virtio-net, etc.)
             if access.offset >= VIRTIO_MMIO_CONFIG_SPACE_OFFSET {
-                let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
+                let device_id = mmio.device_id.load(Ordering::Relaxed);
                 match device_id {
                     // Minimal virtio-blk config space.
                     // Linux always reads `capacity` (u64, sectors) at offset 0.
@@ -4388,6 +4489,25 @@ fn virtio_mmio_handler(
     }
 
     out
+}
+
+fn virtio_mmio_handler(_regs: &mut GuestRegs, access: &MmioAccess, value: Option<u64>) -> Option<u64> {
+    virtio_mmio_handler_impl(&VIRTIO_MMIO_STATE, VIRTIO_MMIO_IRQ_PIN, _regs, access, value)
+}
+
+#[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_virtio_input"))]
+fn virtio_mmio_input_handler(
+    _regs: &mut GuestRegs,
+    access: &MmioAccess,
+    value: Option<u64>,
+) -> Option<u64> {
+    virtio_mmio_handler_impl(
+        &VIRTIO_MMIO_INPUT_STATE,
+        VIRTIO_MMIO_INPUT_IRQ_PIN,
+        _regs,
+        access,
+        value,
+    )
 }
 
 #[unsafe(naked)]
@@ -5239,9 +5359,7 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
         // the first (too-early) injection, so drive retries from general VM-exits.
         try_retry_pending_if_due();
 
-        unsafe {
-            VMX_TIMESLICE_LAST_EXIT_BASIC = exit_basic;
-        }
+        VMX_TIMESLICE_LAST_EXIT_BASIC = exit_basic;
 
         let action = match exit_basic {
             52 => {
@@ -5371,11 +5489,9 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
 
                 // When running the guest in an embedded time-slice, yield back to the caller
                 // after minimal maintenance and after re-arming the timer.
-                unsafe {
-                    if VMX_TIMESLICE_ACTIVE != 0 {
-                        VMX_TIMESLICE_SAVED_GUEST_REGS = *regs;
-                        return 1;
-                    }
+                if VMX_TIMESLICE_ACTIVE != 0 {
+                    VMX_TIMESLICE_SAVED_GUEST_REGS = *regs;
+                    return 1;
                 }
                 0
             }
@@ -5404,11 +5520,9 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
                 // If this EXTINT delivered keyboard input while we are running in an
                 // embedded time-slice, yield back to the caller so the RayOS UI/command
                 // loop can process the buffered bytes promptly.
-                unsafe {
-                    if drained != 0 && VMX_TIMESLICE_ACTIVE != 0 {
-                        VMX_TIMESLICE_SAVED_GUEST_REGS = *regs;
-                        return 1;
-                    }
+                if drained != 0 && VMX_TIMESLICE_ACTIVE != 0 {
+                    VMX_TIMESLICE_SAVED_GUEST_REGS = *regs;
+                    return 1;
                 }
                 0
             }
@@ -5813,7 +5927,7 @@ extern "C" fn vmx_exit_handler(regs: &mut GuestRegs) -> u8 {
                         // i8042 keyboard controller: keep the guest from consuming
                         // host-injected scancodes intended for RayOS.
                         if port == 0x0060 || port == 0x0064 {
-                            unsafe { i8042_handle_io(port, direction_in, regs) };
+                            i8042_handle_io(port, direction_in, regs);
                         }
 
                         if pic_is_port(port) {
@@ -9395,29 +9509,21 @@ unsafe fn log_guest_vmcs_state() {
     }
 }
 
-fn try_retry_pending_if_due() {
-    if VIRTIO_MMIO_STATE.interrupt_pending.load(Ordering::Relaxed) == 0 {
+fn try_retry_pending_if_due_for(state: &VirtioMmioState, irq_pin: usize) {
+    if state.interrupt_pending.load(Ordering::Relaxed) == 0 {
         return;
     }
 
     // If the guest has ACKed (no asserted interrupt status), stop retrying.
-    if VIRTIO_MMIO_STATE.interrupt_status.load(Ordering::Relaxed) == 0 {
-        VIRTIO_MMIO_STATE.interrupt_pending.store(0, Ordering::Relaxed);
-        VIRTIO_MMIO_STATE
-            .interrupt_pending_attempts
-            .store(0, Ordering::Relaxed);
-        VIRTIO_MMIO_STATE
-            .interrupt_pending_last_tick
-            .store(0, Ordering::Relaxed);
+    if state.interrupt_status.load(Ordering::Relaxed) == 0 {
+        state.interrupt_pending.store(0, Ordering::Relaxed);
+        state.interrupt_pending_attempts.store(0, Ordering::Relaxed);
+        state.interrupt_pending_last_tick.store(0, Ordering::Relaxed);
         return;
     }
 
-    let attempts = VIRTIO_MMIO_STATE
-        .interrupt_pending_attempts
-        .load(Ordering::Relaxed);
-    let last_tick = VIRTIO_MMIO_STATE
-        .interrupt_pending_last_tick
-        .load(Ordering::Relaxed);
+    let attempts = state.interrupt_pending_attempts.load(Ordering::Relaxed);
+    let last_tick = state.interrupt_pending_last_tick.load(Ordering::Relaxed);
     // Exponential backoff base (in VM-exits). We intentionally use VMEXIT_COUNT
     // because it is known to advance even when host timer ticks are not flowing.
     let base_backoff: u64 = 256;
@@ -9434,16 +9540,12 @@ fn try_retry_pending_if_due() {
     // If we've already exceeded attempts cap, give up.
     if attempts >= MAX_INT_INJECT_ATTEMPTS {
         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_FAILED_MAX\n");
-        VIRTIO_MMIO_STATE
+        state
             .interrupt_backoff_failed_max
             .fetch_add(1, Ordering::Relaxed);
-        VIRTIO_MMIO_STATE.interrupt_pending.store(0, Ordering::Relaxed);
-        VIRTIO_MMIO_STATE
-            .interrupt_pending_attempts
-            .store(0, Ordering::Relaxed);
-        VIRTIO_MMIO_STATE
-            .interrupt_pending_last_tick
-            .store(0, Ordering::Relaxed);
+        state.interrupt_pending.store(0, Ordering::Relaxed);
+        state.interrupt_pending_attempts.store(0, Ordering::Relaxed);
+        state.interrupt_pending_last_tick.store(0, Ordering::Relaxed);
         return;
     }
 
@@ -9453,36 +9555,37 @@ fn try_retry_pending_if_due() {
 
     // Time to retry.
     crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_ATTEMPT\n");
-    VIRTIO_MMIO_STATE
+    state
         .interrupt_backoff_total_attempts
         .fetch_add(1, Ordering::Relaxed);
-    if inject_virtio_mmio_irq() {
+    if inject_virtio_mmio_irq_for_pin(irq_pin) {
         // Keep pending until the guest ACKs (clears interrupt_status). This allows
         // re-delivery if the first injection occurred before Linux installed a handler.
         let now = VMEXIT_COUNT.load(Ordering::Relaxed) as u64;
-        VIRTIO_MMIO_STATE
-            .interrupt_pending_attempts
-            .store(0, Ordering::Relaxed);
-        VIRTIO_MMIO_STATE
-            .interrupt_pending_last_tick
-            .store(now, Ordering::Relaxed);
-        VIRTIO_MMIO_STATE
+        state.interrupt_pending_attempts.store(0, Ordering::Relaxed);
+        state.interrupt_pending_last_tick.store(now, Ordering::Relaxed);
+        state
             .interrupt_backoff_succeeded
             .fetch_add(1, Ordering::Relaxed);
         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_OK\n");
     } else {
         let next = attempts.wrapping_add(1);
-        VIRTIO_MMIO_STATE
-            .interrupt_pending_attempts
-            .store(next, Ordering::Relaxed);
-        VIRTIO_MMIO_STATE
-            .interrupt_pending_last_tick
-            .store(now, Ordering::Relaxed);
+        state.interrupt_pending_attempts.store(next, Ordering::Relaxed);
+        state.interrupt_pending_last_tick.store(now, Ordering::Relaxed);
         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_RETRY_FAIL\n");
         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_ATTEMPT=");
         crate::serial_write_hex_u64(next as u64);
         crate::serial_write_str("\n");
     }
+}
+
+fn try_retry_pending_if_due() {
+    try_retry_pending_if_due_for(&VIRTIO_MMIO_STATE, VIRTIO_MMIO_IRQ_PIN)
+}
+
+#[cfg(all(feature = "vmm_virtio_gpu", feature = "vmm_virtio_input"))]
+fn try_retry_pending_input_if_due() {
+    try_retry_pending_if_due_for(&VIRTIO_MMIO_INPUT_STATE, VIRTIO_MMIO_INPUT_IRQ_PIN)
 }
 
 #[cfg(test)]
@@ -9543,7 +9646,9 @@ mod tests {
     }
 }
 
-fn process_virtq_queue(
+fn process_virtq_queue_for(
+    mmio: &VirtioMmioState,
+    irq_pin: usize,
     desc_base: u64,
     driver_base: u64,
     used_base: u64,
@@ -9561,7 +9666,7 @@ fn process_virtq_queue(
     // Early backoff retry attempt: try a pending interrupt retry if due before
     // processing the queue to avoid starving retries when the guest isn't making
     // queue changes.
-    try_retry_pending_if_due();
+    try_retry_pending_if_due_for(mmio, irq_pin);
     let queue_size_u64 = queue_size as u64;
     // Index into per-queue arrays (cap to available queues)
     let qi = if queue_index as usize >= 2 {
@@ -9569,8 +9674,8 @@ fn process_virtq_queue(
     } else {
         queue_index as usize
     };
-    let mut avail_processed: u16 = VIRTIO_MMIO_STATE.queue_avail_index[qi].load(Ordering::Relaxed);
-    let mut used_idx: u16 = VIRTIO_MMIO_STATE.queue_used_index[qi].load(Ordering::Relaxed);
+    let mut avail_processed: u16 = mmio.queue_avail_index[qi].load(Ordering::Relaxed);
+    let mut used_idx: u16 = mmio.queue_used_index[qi].load(Ordering::Relaxed);
     let avail_idx = match read_u16(driver_base + VIRTQ_AVAIL_INDEX_OFFSET) {
         Some(v) => v,
         None => {
@@ -9595,9 +9700,10 @@ fn process_virtq_queue(
         }
 
         // virtio-input eventq: take and stash writable buffers for later completion.
+        let device_id = mmio.device_id.load(Ordering::Relaxed);
+
         #[cfg(feature = "vmm_virtio_input")]
         {
-            let device_id = VIRTIO_MMIO_STATE.device_id.load(Ordering::Relaxed);
             if device_id == VIRTIO_INPUT_DEVICE_ID && qi == VIRTIO_INPUT_EVENTQ_INDEX {
                 if let Some(buf) =
                     virtio_input_extract_writable_buf(desc_base, queue_size, desc_index as u32)
@@ -9613,6 +9719,8 @@ fn process_virtq_queue(
                             if write_guest_bytes(buf.addr, &bytes)
                                 && unsafe {
                                     virtio_input_complete_used(
+                                        mmio,
+                                        irq_pin,
                                         used_base,
                                         queue_size,
                                         qi,
@@ -9621,13 +9729,16 @@ fn process_virtq_queue(
                                     )
                                 }
                             {
-                                crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITTEN\n");
+                                crate::with_irqs_disabled(|| {
+                                    crate::serial_write_str(
+                                        "RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITTEN\n",
+                                    );
+                                });
                                 // Keep the local used_idx in sync with the per-queue
                                 // global index. virtio_input_complete_used() updates the
                                 // global index directly; without syncing here, the stale
                                 // local used_idx would overwrite it at function exit.
-                                used_idx = VIRTIO_MMIO_STATE.queue_used_index[qi]
-                                    .load(Ordering::Relaxed);
+                                used_idx = mmio.queue_used_index[qi].load(Ordering::Relaxed);
                                 avail_processed = avail_processed.wrapping_add(1);
                                 continue;
                             }
@@ -9642,7 +9753,9 @@ fn process_virtq_queue(
                     // them on the used ring can deadlock the virtqueue.
                     unsafe {
                         if virtio_input_freebuf_push(buf) {
-                            crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:BUF_STASHED\n");
+                            crate::with_irqs_disabled(|| {
+                                crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:BUF_STASHED\n");
+                            });
                             avail_processed = avail_processed.wrapping_add(1);
                         } else {
                             crate::serial_write_str("RAYOS_VMM:VIRTIO_INPUT:BUF_STASH_FULL\n");
@@ -9681,21 +9794,17 @@ fn process_virtq_queue(
                 }
 
                 // Signal a VRING update.
-                let old_int = VIRTIO_MMIO_STATE
+                let old_int = mmio
                     .interrupt_status
                     .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::Relaxed);
-                let _ = VIRTIO_MMIO_STATE
+                let _ = mmio
                     .interrupt_pending
                     .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed);
                 if (old_int & VIRTIO_MMIO_INT_VRING) == 0 {
                     let now = crate::TIMER_TICKS.load(Ordering::Relaxed);
-                    let _ = inject_virtio_mmio_irq();
-                    VIRTIO_MMIO_STATE
-                        .interrupt_pending_attempts
-                        .store(0, Ordering::Relaxed);
-                    VIRTIO_MMIO_STATE
-                        .interrupt_pending_last_tick
-                        .store(now, Ordering::Relaxed);
+                    let _ = inject_virtio_mmio_irq_for_pin(irq_pin);
+                    mmio.interrupt_pending_attempts.store(0, Ordering::Relaxed);
+                    mmio.interrupt_pending_last_tick.store(now, Ordering::Relaxed);
                 }
 
                 avail_processed = avail_processed.wrapping_add(1);
@@ -9738,7 +9847,7 @@ fn process_virtq_queue(
         }
 
         // Publish a device interrupt status bit for VRING updates.
-        let old_int = VIRTIO_MMIO_STATE
+        let old_int = mmio
             .interrupt_status
             .fetch_or(VIRTIO_MMIO_INT_VRING, Ordering::Relaxed);
         crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_STATUS_SET old=");
@@ -9749,32 +9858,24 @@ fn process_virtq_queue(
 
         // If this VRING interrupt bit was newly set, inject a VM-entry interrupt
         // so the guest will observe the IRQ (minimal injection path for P0).
-        let _ = VIRTIO_MMIO_STATE
+        let _ = mmio
             .interrupt_pending
             .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed);
         if (old_int & VIRTIO_MMIO_INT_VRING) == 0 {
             let now = crate::TIMER_TICKS.load(Ordering::Relaxed);
-            if inject_virtio_mmio_irq() {
+            if inject_virtio_mmio_irq_for_pin(irq_pin) {
                 crate::serial_write_str("RAYOS_VMM:VMX:INJECT_IRQ_VEC=0x");
-                crate::serial_write_hex_u64(virtio_mmio_irq_vector() as u64);
+                crate::serial_write_hex_u64(virtio_mmio_irq_vector_for_pin(irq_pin) as u64);
                 crate::serial_write_str("\n");
-                VIRTIO_MMIO_STATE
-                    .interrupt_pending_attempts
-                    .store(0, Ordering::Relaxed);
-                VIRTIO_MMIO_STATE
-                    .interrupt_pending_last_tick
-                    .store(now, Ordering::Relaxed);
+                mmio.interrupt_pending_attempts.store(0, Ordering::Relaxed);
+                mmio.interrupt_pending_last_tick.store(now, Ordering::Relaxed);
             } else {
                 crate::serial_write_str("RAYOS_VMM:VMX:INJECT_IRQ_FAIL\n");
                 // Mark pending so retries can be attempted later when VM environment
                 // might be ready (e.g., after APIC is initialized by guest).
-                VIRTIO_MMIO_STATE.interrupt_pending.store(1, Ordering::Relaxed);
-                VIRTIO_MMIO_STATE
-                    .interrupt_pending_attempts
-                    .store(0, Ordering::Relaxed);
-                VIRTIO_MMIO_STATE
-                    .interrupt_pending_last_tick
-                    .store(now, Ordering::Relaxed);
+                mmio.interrupt_pending.store(1, Ordering::Relaxed);
+                mmio.interrupt_pending_attempts.store(0, Ordering::Relaxed);
+                mmio.interrupt_pending_last_tick.store(now, Ordering::Relaxed);
                 crate::serial_write_str("RAYOS_VMM:VIRTIO_MMIO:INT_INJECT_PENDING\n");
             }
         }
@@ -9796,14 +9897,34 @@ fn process_virtq_queue(
         crate::serial_write_str("\n");
         avail_processed = avail_processed.wrapping_add(1);
     }
-    VIRTIO_MMIO_STATE.queue_avail_index[qi].store(avail_processed, Ordering::Relaxed);
-    VIRTIO_MMIO_STATE.queue_used_index[qi].store(used_idx, Ordering::Relaxed);
+    mmio.queue_avail_index[qi].store(avail_processed, Ordering::Relaxed);
+    mmio.queue_used_index[qi].store(used_idx, Ordering::Relaxed);
 
     #[cfg(feature = "vmm_virtio_input")]
     unsafe {
         // If this device is virtio-input, try to pump queued events into stashed buffers.
         virtio_input_pump_queue0();
     }
+}
+
+fn process_virtq_queue(
+    desc_base: u64,
+    driver_base: u64,
+    used_base: u64,
+    queue_size: u32,
+    queue_ready: u32,
+    queue_index: u64,
+) {
+    process_virtq_queue_for(
+        &VIRTIO_MMIO_STATE,
+        VIRTIO_MMIO_IRQ_PIN,
+        desc_base,
+        driver_base,
+        used_base,
+        queue_size,
+        queue_ready,
+        queue_index,
+    )
 }
 
 #[inline(always)]
@@ -10205,7 +10326,7 @@ fn run_guest_timeslice() -> bool {
         1u64
     };
 
-    let ok = unsafe { vmx_enter_timeslice_naked(entry_kind) } != 0;
+    let ok = vmx_enter_timeslice_naked(entry_kind) != 0;
 
     // Restore host PIC masks so RayOS continues to receive timer interrupts between slices.
     unsafe {

@@ -53,13 +53,16 @@ Installable RayOS requires a production path where:
 
 ### Installer flow (bootable USB)
 
+Distribution artifact for the installer is a **bootable UEFI ISO** intended to be written to a USB thumb drive. Booting from this media enters the RayOS installer environment directly (no host OS dependency).
+
 Installability implies an end-to-end install path on real machines:
 
 1) Boot from a RayOS USB stick (UEFI)
 2) Launch an **installer wizard** (text UI first is fine)
-3) Partitioning step:
-  - Select an existing partition, or
-  - Create a new partition (guided)
+3) Partitioning step (interactive partition manager/creator/selector is required):
+  - Enumerate existing disks/partitions and highlight RayOS-safe targets
+  - Allow selecting an existing partition, or
+  - Create a new partition (guided, with safety confirmations)
 4) Install RayOS boot artifacts + system image
 5) Configure persistence locations (RayOS data + VM storage)
 6) Reboot into the installed RayOS
@@ -198,6 +201,109 @@ Keep the initial installer minimal, but these are plausible options worth tracki
   - machine name
   - time/locale
   - policy defaults (e.g., whether Linux/Windows should autoboot hidden)
+
+---
+
+## 11) Installability 2026 Execution Checklist (Jan 07 Update)
+
+### 11.1 Blocker Audit
+
+| Area | Current State | Gaps / Blockers |
+| --- | --- | --- |
+| Bootable installer artifacts | No end-to-end installer image produced; `build_iso` creates dev harness media only | Need scripted ISO/USB build that bundles the installer runtime and validates signatures |
+| Installer wizard (partitioning + copy) | Spec exists (`INSTALLER_AND_BOOT_MANAGER_SPEC.md`); no runtime implementation | CLI/TUI flow to select target disk, partition safely, and copy RayOS system image |
+| Disk layout + persistence | Spec finalized (`DISK_LAYOUT_AND_PERSISTENCE.md`); serialization partially implemented via `VM_REGISTRY_SPEC.md` | Need code that materializes the layout on disk, mounts at boot, and enforces invariants |
+| Boot manager | Spec complete; current flows rely on UEFI fallback entries or dev harness | Implement minimal boot entry management + recovery entry provisioning |
+| Update & recovery | Strategy doc in place; automated updater/recovery artifacts not implemented | Build update package format, recovery partition layout, and validation tests |
+| Policy configuration | Schema defined; installer does not collect or apply defaults | Add policy bootstrap (networking, auto-boot, resource limits) during install |
+| Security posture | Threat model captured; secure boot & artifact signing unimplemented | Decide signing pipeline, ensure boot artifacts are verifiable, plan secure boot story |
+| Observability & crash recovery | Spec completed; tooling assumes dev harness | Implement persistent log rotation, crash dump capture, recovery shell integration |
+| Automated validation | Numerous headless smokes exist for VMM features; none for installer/update flows | Add CI headless tests that exercise install-to-disk, recovery boot, and update rollback |
+
+### 11.2 Near-Term Milestones
+
+1. **M1 Bootstrap Installer Runtime**
+  - Create a minimal installer binary (Rust) that can enumerate disks, detect existing RayOS installs, and emit a dry-run plan.
+  - Add integration test harness using QEMU disks to validate dry-run output.
+
+2. **M2 Guided Partition + Copy Flow**
+  - Implement interactive CLI wizard (text/console UI acceptable) with a partition manager/selector capable of safe edits before filesystem creation and system image copy.
+  - Integrate disk layout enforcement from `DISK_LAYOUT_AND_PERSISTENCE.md`.
+
+3. **M3 Boot Manager & Recovery Entry**
+  - Author boot entry provisioning code (UEFI Boot#### entries) and create a recovery boot option.
+  - Provide fallback instructions and automated verification via headless tests.
+
+4. **M4 Persistent Policy & Registry Bootstrap**
+  - During install, capture policy defaults and seed the VM registry with placeholders for Linux/Windows subsystems.
+  - Ensure first boot consumes the seeded policy/registry without relying on host tooling.
+
+5. **M5 Update/Recovery Pipeline Prototype**
+  - Define update image format, implement staged updates, and create recovery media build script.
+  - Add smoke tests for rollback and recovery boot.
+
+### 11.3 First Implementation Targets
+
+- Initialize a new crate/binary `crates/installer` with disk enumeration + dry-run planning (priority).
+- Provide a helper wrapper (`scripts/tools/run_installer_planner.sh`) so CI and developers can surface the JSON dry-run report quickly.
+- Default tooling emits a **sample layout**; require explicit `--enumerate-local-disks` opt-in (within installer/test VMs only) before touching `/sys/block`.
+- Produce a developer-facing checklist in `docs/RAYOS_TODO.md` referencing the new milestones so day-to-day work tracks against installability goals.
+- Schedule CI work item to prototype a headless install test (QEMU disk → install → reboot) once installer dry-run exists.
+
+---
+
+## 12) How to Build and Test Installer Media Locally (Jan 07, 2026)
+
+### Build installer ISO/USB artifacts
+
+Run this from the RayOS repo root:
+
+```bash
+scripts/build-installer-media.sh
+```
+
+Outputs:
+  - build/rayos-installer.iso (UEFI bootable ISO)
+  - build/rayos-installer-usb.img (raw USB image)
+
+### Run installer binary dry-run test
+
+This test runs the installer binary directly in sample mode (no local disk enumeration) and verifies it detects the sample disk layout and emits proper markers:
+
+```bash
+scripts/test-installer-dry-run.sh
+```
+
+Expected output:
+  - "PASS: Installer markers present and valid"
+  - "PASS: JSON payload contains disk records"
+  - Stderr markers: `RAYOS_INSTALLER:STARTED`, `RAYOS_INSTALLER:SAMPLE_MODE`, `RAYOS_INSTALLER:PLAN_GENERATED`, `RAYOS_INSTALLER:JSON_EMITTED`, `RAYOS_INSTALLER:COMPLETE`
+
+### Run headless QEMU smoke test for installer media
+
+This boots the installer USB image with a disposable virtual disk attached and checks for expected boot markers and installer binary presence:
+
+```bash
+scripts/test-installer-boot-headless.sh
+```
+
+Expected output:
+  - "PASS: installer media boots (markers present)"
+  - Serial and QEMU logs in build/
+
+This test does not touch any host disks and is safe to run on a dev machine.
+
+### Summary of installer media pipeline (Jan 07, 2026)
+
+| Component | Status | Location | Notes |
+| --- | --- | --- | --- |
+| Build script | ✓ Complete | [scripts/build-installer-media.sh](../../scripts/build-installer-media.sh) | Wraps `build-iso.sh` to produce installer-labeled ISO/USB artifacts |
+| Installer binary | ✓ Complete | [crates/installer/](../../crates/installer/) | Bundled into boot media ESP; emits markers for test verification |
+| Boot media smoke test | ✓ Complete | [scripts/test-installer-boot-headless.sh](../../scripts/test-installer-boot-headless.sh) | Verifies media boots under QEMU with attached target disk |
+| Installer dry-run test | ✓ Complete | [scripts/test-installer-dry-run.sh](../../scripts/test-installer-dry-run.sh) | Runs installer binary directly and validates marker sequence and JSON output |
+| Kernel/bootloader integration | ⏳ Pending | — | Bootloader needs to know when to invoke installer (via flag or special registry entry) |
+| Partition manager flow | ⏳ Pending | — | Interactive partition selection/creation; currently placeholder in installer planner |
+| Install-to-disk validation test | ⏳ Pending | — | Test that verifies installer can write to the target disk safely (dry-run only initially) |
 
 ---
 

@@ -41,10 +41,11 @@ fi
 
 # Base cmdline + virtio-mmio device declaration.
 # Note: size is 0x1000 (one page) and the address matches the in-kernel MMIO mapping.
-BASE_CMDLINE="console=ttyS0,115200n8 earlycon=uart,io,0x3f8,115200n8 rdinit=/rayos_init ignore_loglevel loglevel=7 panic=-1"
-echo "$BASE_CMDLINE virtio_mmio.device=0x1000@0x10001000:5" > "$CMDLINE_FILE"
+BASE_CMDLINE="console=ttyS0,115200n8 earlycon=uart,io,0x3f8,115200n8 rdinit=/rayos_init ignore_loglevel loglevel=7 panic=-1 i8042.nokbd=1 i8042.noaux=1 RAYOS_INPUT_PROBE=1"
+VIRTIO_MMIO_DEVICES="$(python3 "$ROOT_DIR/scripts/tools/vmm_mmio_map.py" --features "vmm_linux_guest,vmm_virtio_gpu,vmm_virtio_input")"
+echo "$BASE_CMDLINE $VIRTIO_MMIO_DEVICES" > "$CMDLINE_FILE"
 
-export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_linux_guest,vmm_linux_desktop_autostart,vmm_virtio_gpu}"
+export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_linux_guest,vmm_linux_desktop_autostart,vmm_virtio_gpu,vmm_virtio_input}"
 
 export RAYOS_LINUX_GUEST_KERNEL_SRC="$KERNEL"
 export RAYOS_LINUX_GUEST_INITRD_SRC="$INITRD"

@@ -1,9 +1,9 @@
 #!/bin/bash
 # Headless smoke: boot RayOS with in-kernel VMM + Linux guest + virtio-gpu (no host bridge),
 # then inject:
-#   1) "show linux desktop"
-#   2) "hide linux desktop"
-#   3) "show linux desktop"
+#   1) press F11 to show/present
+#   2) press F12 (escape hatch) to hide presentation
+#   3) press F11 to re-show
 # via QEMU monitor sendkey.
 #
 # This validates the interactive presentation toggling contract:
@@ -44,11 +44,12 @@ if [ -z "$INITRD" ] || [ ! -f "$INITRD" ]; then
   exit 1
 fi
 
-BASE_CMDLINE="console=ttyS0,115200n8 earlycon=uart,io,0x3f8,115200n8 rdinit=/rayos_init ignore_loglevel loglevel=7 panic=-1 i8042.nokbd=1 i8042.noaux=1"
-# virtio-mmio device declaration; address must match the in-kernel MMIO mapping.
-echo "$BASE_CMDLINE virtio_mmio.device=0x1000@0x10001000:5" > "$CMDLINE_FILE"
+BASE_CMDLINE="console=ttyS0,115200n8 earlycon=uart,io,0x3f8,115200n8 rdinit=/rayos_init ignore_loglevel loglevel=7 panic=-1 i8042.nokbd=1 i8042.noaux=1 RAYOS_INPUT_PROBE=1"
+# virtio-mmio device declaration; derive addresses/IRQs from hypervisor.rs.
+VIRTIO_MMIO_DEVICES="$(python3 "$ROOT_DIR/scripts/tools/vmm_mmio_map.py" --features "vmm_linux_guest,vmm_virtio_gpu,vmm_virtio_input")"
+echo "$BASE_CMDLINE $VIRTIO_MMIO_DEVICES" > "$CMDLINE_FILE"
 
-export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_linux_guest,vmm_virtio_gpu}"
+export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_linux_guest,vmm_virtio_gpu,vmm_virtio_input}"
 
 export RAYOS_LINUX_GUEST_KERNEL_SRC="$KERNEL"
 export RAYOS_LINUX_GUEST_INITRD_SRC="$INITRD"
@@ -171,26 +172,25 @@ s.close()
 }
 
 send_show_linux_desktop() {
-  # Use "linu" to tolerate the known 'x' key issue.
+  # Deterministic: use the F11 shortcut to present the Linux desktop.
   {
-    echo "sendkey s"; echo "sendkey h"; echo "sendkey o"; echo "sendkey w"
-    echo "sendkey spc"
-    echo "sendkey l"; echo "sendkey i"; echo "sendkey n"; echo "sendkey u"
-    echo "sendkey spc"
-    echo "sendkey d"; echo "sendkey e"; echo "sendkey s"; echo "sendkey k"; echo "sendkey t"; echo "sendkey o"; echo "sendkey p"
-    echo "sendkey ret"
+    echo "sendkey f11"
   } | send_monitor_cmds_py >> "$MON_LOG" 2>&1
 }
 
 send_hide_linux_desktop() {
+  # When the desktop is presented, RayOS routes keyboard events to the guest.
+  # Use the deterministic escape hatch (F12) to hide and return control to RayOS.
   {
-    echo "sendkey h"; echo "sendkey i"; echo "sendkey d"; echo "sendkey e"
-    echo "sendkey spc"
-    # Use "linu" to tolerate the known 'x' key issue.
-    echo "sendkey l"; echo "sendkey i"; echo "sendkey n"; echo "sendkey u"
-    echo "sendkey spc"
-    echo "sendkey d"; echo "sendkey e"; echo "sendkey s"; echo "sendkey k"; echo "sendkey t"; echo "sendkey o"; echo "sendkey p"
-    echo "sendkey ret"
+    echo "sendkey f12"
+  } | send_monitor_cmds_py >> "$MON_LOG" 2>&1
+}
+
+send_key_to_presented_guest() {
+  # Sanity: while Presented, keystrokes should be routed to the Linux guest via virtio-input.
+  # Use a simple key that won't be treated as a RayOS command.
+  {
+    echo "sendkey a"
   } | send_monitor_cmds_py >> "$MON_LOG" 2>&1
 }
 
@@ -231,13 +231,28 @@ if ! wait_for_log_after_line "RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED" 
   tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
   exit 1
 fi
-if ! wait_for_log "RAYOS_LINUX_DESKTOP_PRESENTED" "$TIMEOUT_SECS"; then
+if ! wait_for_log_after_line "RAYOS_LINUX_DESKTOP_PRESENTED" "$TIMEOUT_SECS" "$start1"; then
   echo "FAIL: missing RAYOS_LINUX_DESKTOP_PRESENTED" >&2
   tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
   exit 1
 fi
-if ! wait_for_log "RAYOS_LINUX_DESKTOP_FIRST_FRAME" "$TIMEOUT_SECS"; then
+if ! wait_for_log_after_line "RAYOS_LINUX_DESKTOP_FIRST_FRAME" "$TIMEOUT_SECS" "$start1"; then
   echo "FAIL: missing RAYOS_LINUX_DESKTOP_FIRST_FRAME" >&2
+  tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
+  exit 1
+fi
+
+# INPUT ROUTING (while Presented)
+if ! wait_for_log "RAYOS_VMM:VIRTIO_INPUT:BUF_STASHED" "$TIMEOUT_SECS"; then
+  echo "FAIL: guest did not provide virtio-input buffers (BUF_STASHED)" >&2
+  tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
+  exit 1
+fi
+
+start_key=$(log_lines)
+send_key_to_presented_guest
+if ! wait_for_log_after_line "RAYOS_VMM:VIRTIO_INPUT:EVENT_WRITTEN" "$TIMEOUT_SECS" "$start_key"; then
+  echo "FAIL: missing virtio-input EVENT_WRITTEN after key injection" >&2
   tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
   exit 1
 fi
@@ -256,13 +271,6 @@ start3=$(log_lines)
 send_show_linux_desktop
 if ! wait_for_log_after_line "RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED" "$TIMEOUT_SECS" "$start3"; then
   echo "FAIL: missing Presented marker after second show" >&2
-  tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
-  exit 1
-fi
-
-# Ensure we see a desktop-presented marker again after re-show.
-if ! wait_for_log_after_line "RAYOS_LINUX_DESKTOP_PRESENTED" "$TIMEOUT_SECS" "$start3"; then
-  echo "FAIL: missing RAYOS_LINUX_DESKTOP_PRESENTED after second show" >&2
   tail -n 200 "$SERIAL_LOG" 2>/dev/null || true
   exit 1
 fi

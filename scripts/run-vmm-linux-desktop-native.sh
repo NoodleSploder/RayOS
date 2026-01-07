@@ -29,9 +29,10 @@ if [ -z "$INITRD" ] || [ ! -f "$INITRD" ]; then
 fi
 
 CMDLINE_FILE="$WORK_DIR/vmm-linux-desktop-native-cmdline.txt"
-BASE_CMDLINE="console=ttyS0,115200n8 earlycon=uart,io,0x3f8,115200n8 rdinit=/rayos_init ignore_loglevel loglevel=7 panic=-1"
-# virtio-mmio device declaration; address must match the in-kernel MMIO mapping.
-echo "$BASE_CMDLINE virtio_mmio.device=0x1000@0x10001000:5" > "$CMDLINE_FILE"
+BASE_CMDLINE="console=ttyS0,115200n8 earlycon=uart,io,0x3f8,115200n8 rdinit=/rayos_init ignore_loglevel loglevel=7 panic=-1 RAYOS_INPUT_PROBE=1"
+# virtio-mmio device declaration; derive addresses/IRQs from hypervisor.rs.
+VIRTIO_MMIO_DEVICES="$(python3 "$ROOT_DIR/scripts/tools/vmm_mmio_map.py" --features "vmm_linux_guest,vmm_virtio_gpu,vmm_virtio_input")"
+echo "$BASE_CMDLINE $VIRTIO_MMIO_DEVICES" > "$CMDLINE_FILE"
 
 # Enable the in-kernel VMM + Linux guest + virtio-gpu (+ virtio-input for interactive pointer/keys).
 export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_linux_guest,vmm_virtio_gpu,vmm_virtio_input}"

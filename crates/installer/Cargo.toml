@@ -1,0 +1,17 @@
+[package]
+name = "rayos-installer"
+version = "0.0.1"
+edition = "2021"
+authors = ["RayOS Project"]
+description = "RayOS disk installer and dry-run planner"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+
+[target.'cfg(unix)'.dependencies]
+walkdir = "2.5"

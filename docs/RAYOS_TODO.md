@@ -85,6 +85,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 ### Installability (tracked plan)
 
 - Track: [INSTALLABLE_RAYOS_PLAN.md](INSTALLABLE_RAYOS_PLAN.md) (goal: RayOS is installable and does not rely on another machine; host-side QEMU/conductor becomes dev/CI harness only).
+	- 2026-01-07 checklist: see Section 11 for blocker audit, milestones, and first implementation targets (initialize `crates/installer`, add automated install dry-run tests).
 
 - **x86_64:** Headless boot + RAG + Cortex protocol paths have automated QEMU scripts. “System 1 GPU” exists in the std `kernel` path, but production readiness would still require sustained soak testing, failure-mode handling, and a security story (secure boot/measured boot, signed artifacts, sandboxing).
 - **aarch64:** UEFI bring-up + ELF-load+jump + post-`ExitBootServices` UART loop are automated. GPU work is currently **framebuffer/GOP discovery**, not compute adapter/device initialization, so “System 1 GPU reflex engine on aarch64” is not production-ready.
@@ -198,7 +199,11 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	23e) RayOS-native desktop presentation (remove VNC dependency) - ⏳ in progress
 	- Goal: `show linux desktop` presents Linux **inside RayOS** as a RayOS-owned surface/window.
 	- Product constraint: do not rely on a host OS VNC client; RayOS is the hypervisor.
-	- Status update (2026-01-06): headless in-OS presentation gate is now passing (scanout published + first frame).
+	- Status update (2026-01-07): headless in-OS presentation gate is now passing (scanout published + first frame).
+	- Status update (2026-01-07): headless show→hide→show presentation toggling is passing (no host bridge).
+		- Script: `./scripts/test-vmm-linux-desktop-native-show-hide-show-headless.sh`
+		- Note: scripts derive virtio-mmio MMIO bases/IRQs from `crates/kernel-bare/src/hypervisor.rs` via `scripts/tools/vmm_mmio_map.py` (avoid hardcoded addresses like `0x10202000`).
+	- Interaction contract (current): when Presented, keyboard input routes to the guest; press F12 to hide/escape back to the RayOS shell.
 	- Interactive dev entrypoint: `./scripts/run-vmm-linux-desktop-native.sh --graphical` (then type `show linux desktop` in RayOS).
 	- Prerequisites (blockers):
 		- ✅ In-OS VMM can boot Linux under hardware virtualization (VMX) and expose virtio devices.
@@ -263,6 +268,7 @@ This repo has strong, repeatable **headless smoke tests** and clear boot markers
 	- [✅] Present/Hide semantics do not kill the VM by default (presentation is UI-only; lifecycle is policy-controlled).
 		- Implemented (host bridge v0): `hide linux desktop` unpresents only (closes any VNC viewer) and keeps the desktop VM running.
 		- Headless smoke: `./scripts/test-desktop-show-hide-show-headless.sh`.
+		- Headless smoke (RayOS-native VMM): `./scripts/test-vmm-linux-desktop-native-show-hide-show-headless.sh`.
 	- [✅] Reboot persistence test: boot → write marker on disk → reboot RayOS → marker persists.
 		- Script: `./scripts/test-vmm-linux-persist-marker-reset-headless.sh` (uses QEMU monitor `system_reset` and asserts `RAYOS_LINUX_DISK_MARKER_PRESENT`).
 		- Gating: persist-marker behavior is enabled via the agent initramfs overlay marker (`/rayos_enable_persist_test`), requested by the host harness with `RAYOS_AGENT_ENABLE_PERSIST_TEST=1` when preparing the agent initrd.

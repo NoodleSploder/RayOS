@@ -43,10 +43,12 @@ if [ -z "$INITRD" ] || [ ! -f "$INITRD" ]; then
 fi
 
 BASE_CMDLINE="console=ttyS0,115200n8 earlycon=uart,io,0x3f8,115200n8 rdinit=/rayos_init ignore_loglevel loglevel=7 panic=-1"
-# Note: address must match the in-kernel MMIO mapping.
-echo "$BASE_CMDLINE virtio_mmio.device=0x1000@0x10001000:5" > "$CMDLINE_FILE"
+BASE_CMDLINE="${BASE_CMDLINE} RAYOS_INPUT_PROBE=1"
+# Note: derive addresses/IRQs from hypervisor.rs.
+VIRTIO_MMIO_DEVICES="$(python3 "$ROOT_DIR/scripts/tools/vmm_mmio_map.py" --features "vmm_linux_guest,vmm_virtio_gpu,vmm_virtio_input")"
+echo "$BASE_CMDLINE $VIRTIO_MMIO_DEVICES" > "$CMDLINE_FILE"
 
-export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_linux_guest,vmm_virtio_gpu}"
+export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_linux_guest,vmm_virtio_gpu,vmm_virtio_input}"
 
 export RAYOS_LINUX_GUEST_KERNEL_SRC="$KERNEL"
 export RAYOS_LINUX_GUEST_INITRD_SRC="$INITRD"
