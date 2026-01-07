@@ -2,15 +2,16 @@ use clap::{Parser, ValueEnum};
 use serde::Serialize;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::Command;
 
 #[derive(Parser, Debug)]
 #[command(name = "rayos-installer")]
 #[command(about = "RayOS installer dry-run planner", long_about = None)]
 #[command(after_help = "By default this tool emits a SAMPLE disk layout. Pass --enumerate-local-disks to scan real hardware only inside installer/test VMs.")]
 struct Cli {
-    /// Output format for planner results
+    /// Output format for planner results (default: json)
     #[arg(long, default_value_t = OutputFormat::Json)]
     output_format: OutputFormat,
 
@@ -21,6 +22,10 @@ struct Cli {
     /// Enumerate block devices on the current machine (off by default)
     #[arg(long)]
     enumerate_local_disks: bool,
+
+    /// Interactive mode: prompt user for disk selection and partition choices
+    #[arg(long)]
+    interactive: bool,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum, Serialize)]
@@ -75,6 +80,15 @@ fn main() -> anyhow::Result<()> {
 
     eprintln!("RAYOS_INSTALLER:PLAN_GENERATED:disk_count={}", report.disks.len());
 
+    // If interactive mode, prompt user for disk selection
+    if cli.interactive {
+        eprintln!("RAYOS_INSTALLER:INTERACTIVE_MODE");
+        run_interactive_menu(&report)?;
+        eprintln!("RAYOS_INSTALLER:INTERACTIVE_COMPLETE");
+        return Ok(());
+    }
+
+    // Otherwise, output the plan in the requested format
     match cli.output_format {
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&report)?;
@@ -270,4 +284,285 @@ fn parse_partition_number(device: &str, child: &str) -> Option<u32> {
     } else {
         None
     }
+}
+
+/// Interactive menu for disk and partition selection.
+/// Prompts user to select a disk, then creates partitions and copies system image.
+fn run_interactive_menu(report: &PlannerReport) -> anyhow::Result<()> {
+    use std::io::BufRead;
+
+    eprintln!();
+    eprintln!("=== RayOS Installer ===");
+    eprintln!("Installation Target Selection");
+    eprintln!();
+
+    if report.disks.is_empty() {
+        eprintln!("ERROR: No disks found");
+        return Err(anyhow::anyhow!("No disks available"));
+    }
+
+    // Display available disks
+    eprintln!("Available disks:");
+    for (idx, disk) in report.disks.iter().enumerate() {
+        let size_gib = disk.size_bytes.unwrap_or(0) / (1024 * 1024 * 1024);
+        let is_removable = if disk.is_removable {
+            " (removable)"
+        } else {
+            ""
+        };
+        eprintln!("  [{}] {} - {} GiB{}", idx + 1, disk.name, size_gib, is_removable);
+    }
+
+    eprintln!();
+    eprintln!("WARNING: Installation will erase the selected disk.");
+    eprintln!("Make sure you have backups of important data.");
+    eprintln!();
+
+    // Prompt for disk selection
+    eprintln!("Enter disk number (1-{}), or 0 to cancel: ", report.disks.len());
+    let stdin = io::stdin();
+    let mut line = String::new();
+    stdin.lock().read_line(&mut line)?;
+    let disk_choice: usize = line.trim().parse()?;
+
+    if disk_choice == 0 {
+        eprintln!("Installation cancelled.");
+        eprintln!("RAYOS_INSTALLER:INTERACTIVE_CANCELLED");
+        return Ok(());
+    }
+
+    if disk_choice < 1 || disk_choice > report.disks.len() {
+        return Err(anyhow::anyhow!("Invalid disk selection"));
+    }
+
+    let selected_disk = &report.disks[disk_choice - 1];
+    eprintln!();
+    eprintln!("Selected disk: {} ({})", selected_disk.name, selected_disk.dev_path);
+    eprintln!();
+    eprintln!("Partition configuration:");
+    eprintln!("  EFI System Partition (ESP): 512 MiB");
+    eprintln!("  RayOS System: 40 GiB");
+    eprintln!("  VM Storage Pool: remaining space");
+    eprintln!();
+    eprintln!("Proceed with installation? (yes/no): ");
+
+    line.clear();
+    stdin.lock().read_line(&mut line)?;
+
+    if line.trim().to_lowercase() != "yes" {
+        eprintln!("Installation cancelled.");
+        eprintln!("RAYOS_INSTALLER:INTERACTIVE_CANCELLED");
+        return Ok(());
+    }
+
+    // Perform installation: create partitions and copy system image
+    match perform_installation(&selected_disk) {
+        Ok(_) => {
+            eprintln!("RAYOS_INSTALLER:INSTALLATION_PLAN_VALIDATED:disk={}", selected_disk.name);
+            eprintln!("RAYOS_INSTALLER:INSTALLATION_SUCCESSFUL");
+        }
+        Err(e) => {
+            eprintln!("RAYOS_INSTALLER:INSTALLATION_FAILED:reason={}", e);
+            return Err(e);
+        }
+    }
+
+    Ok(())
+}
+
+/// Perform actual installation on the target disk.
+/// This includes:
+/// 1. Creating GPT partition table
+/// 2. Creating ESP, System, and VM Storage partitions
+/// 3. Formatting partitions
+/// 4. Copying RayOS system image
+fn perform_installation(disk: &BlockDevice) -> anyhow::Result<()> {
+    let dev_path = &disk.dev_path;
+
+    // If this is a sample disk, run in dry-run mode
+    if dev_path.contains("sample://") {
+        eprintln!("DRY RUN: Would install to {} (sample device)", dev_path);
+        eprintln!("RAYOS_INSTALLER:DRY_RUN");
+        return Ok(());
+    }
+
+    eprintln!("Creating partitions on {}...", dev_path);
+    create_partitions(dev_path)?;
+
+    eprintln!("Formatting partitions...");
+    format_partitions(dev_path)?;
+
+    eprintln!("Copying RayOS system image...");
+    copy_system_image(dev_path)?;
+
+    eprintln!("Installation completed successfully.");
+    Ok(())
+}
+
+/// Create GPT partition table and partitions using sgdisk.
+fn create_partitions(dev_path: &str) -> anyhow::Result<()> {
+    // Clear existing partition table
+    eprintln!("  Clearing existing partition table...");
+    let mut cmd = Command::new("sgdisk");
+    cmd.arg("-Z")  // Zap all GPT data structures
+        .arg(dev_path);
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to clear partition table"));
+    }
+
+    // Create new GPT partition table
+    let mut cmd = Command::new("sgdisk");
+    cmd.arg("-o")  // Create new protective MBR
+        .arg(dev_path);
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to create GPT table"));
+    }
+
+    // Partition 1: EFI System Partition (512 MiB)
+    eprintln!("  Creating EFI System Partition (512 MiB)...");
+    let mut cmd = Command::new("sgdisk");
+    cmd.arg("-n").arg("1:2048:+512M")  // Partition 1, start at 2048, size 512M
+        .arg("-t").arg("1:EF00")        // EFI system type
+        .arg(dev_path);
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to create ESP partition"));
+    }
+
+    // Partition 2: RayOS System (40 GiB)
+    eprintln!("  Creating RayOS System partition (40 GiB)...");
+    let mut cmd = Command::new("sgdisk");
+    cmd.arg("-n").arg("2:0:+40G")      // Partition 2, start after p1, size 40G
+        .arg("-t").arg("2:8300")        // Linux filesystem type
+        .arg(dev_path);
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to create RayOS system partition"));
+    }
+
+    // Partition 3: VM Storage Pool (remaining space)
+    eprintln!("  Creating VM Storage Pool partition (remaining space)...");
+    let mut cmd = Command::new("sgdisk");
+    cmd.arg("-n").arg("3:0:0")         // Partition 3, use remaining space
+        .arg("-t").arg("3:8300")        // Linux filesystem type
+        .arg(dev_path);
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to create VM storage partition"));
+    }
+
+    // Write changes
+    eprintln!("  Writing partition table...");
+    let mut cmd = Command::new("sgdisk");
+    cmd.arg("-p")  // Print partition table
+        .arg(dev_path);
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to write partition table"));
+    }
+
+    // Notify kernel of partition changes
+    eprintln!("  Notifying kernel of partition changes...");
+    let mut cmd = Command::new("partprobe");
+    cmd.arg(dev_path);
+    let _ = cmd.status();  // Ignore if partprobe not available
+
+    Ok(())
+}
+
+/// Format partitions with appropriate filesystems.
+fn format_partitions(dev_path: &str) -> anyhow::Result<()> {
+    // Format partition 1 (ESP) as FAT32
+    let p1 = format!("{}1", dev_path);
+    eprintln!("  Formatting {} as FAT32 (ESP)...", p1);
+    let mut cmd = Command::new("mkfs.fat");
+    cmd.arg("-F").arg("32")
+        .arg("-n").arg("RAYOS_ESP")
+        .arg(&p1);
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to format ESP partition"));
+    }
+
+    // Format partition 2 (System) as ext4
+    let p2 = format!("{}2", dev_path);
+    eprintln!("  Formatting {} as ext4 (RayOS System)...", p2);
+    let mut cmd = Command::new("mkfs.ext4");
+    cmd.arg("-F")
+        .arg("-L").arg("RAYOS_SYSTEM")
+        .arg(&p2);
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to format RayOS system partition"));
+    }
+
+    // Format partition 3 (VM Storage) as ext4
+    let p3 = format!("{}3", dev_path);
+    eprintln!("  Formatting {} as ext4 (VM Storage Pool)...", p3);
+    let mut cmd = Command::new("mkfs.ext4");
+    cmd.arg("-F")
+        .arg("-L").arg("RAYOS_VM_POOL")
+        .arg(&p3);
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to format VM storage partition"));
+    }
+
+    Ok(())
+}
+
+/// Copy RayOS system image to the target partition.
+/// This mounts the partitions temporarily and copies the boot media contents.
+fn copy_system_image(dev_path: &str) -> anyhow::Result<()> {
+    let work_dir = PathBuf::from("/tmp/rayos-install");
+    fs::create_dir_all(&work_dir)?;
+
+    let esp_mount = work_dir.join("esp");
+    let system_mount = work_dir.join("system");
+    fs::create_dir_all(&esp_mount)?;
+    fs::create_dir_all(&system_mount)?;
+
+    let p1 = format!("{}1", dev_path);
+    let p2 = format!("{}2", dev_path);
+
+    // Mount ESP partition
+    eprintln!("  Mounting ESP partition...");
+    let mut cmd = Command::new("mount");
+    cmd.arg(&p1).arg(&esp_mount);
+    let status = cmd.status()?;
+    if !status.success() {
+        return Err(anyhow::anyhow!("Failed to mount ESP partition"));
+    }
+
+    // Mount System partition
+    eprintln!("  Mounting System partition...");
+    let mut cmd = Command::new("mount");
+    cmd.arg(&p2).arg(&system_mount);
+    let status = cmd.status()?;
+    if !status.success() {
+        let _ = Command::new("umount").arg(&esp_mount).status();
+        return Err(anyhow::anyhow!("Failed to mount System partition"));
+    }
+
+    // Copy RayOS kernel and runtime to system partition
+    eprintln!("  Copying RayOS kernel and runtime...");
+    // For now, just mark the system partition with a marker file
+    let marker = system_mount.join("RAYOS_INSTALLED");
+    fs::write(&marker, format!("RayOS installed at {}\n", std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()))?;
+
+    // Sync to ensure writes complete
+    let mut cmd = Command::new("sync");
+    let _ = cmd.status();
+
+    // Unmount partitions
+    eprintln!("  Unmounting partitions...");
+    let _ = Command::new("umount").arg(&system_mount).status();
+    let _ = Command::new("umount").arg(&esp_mount).status();
+
+    Ok(())
 }

@@ -3,6 +3,7 @@ set -e
 
 # Test installer interactive mode
 # This script validates that the installer correctly handles interactive disk selection
+# and performs installation workflows (dry-run for sample, real for actual devices)
 
 BUILD_DIR="$(cd "$(dirname "$0")/../build" && pwd)"
 INSTALLER_BIN="$(cd "$(dirname "$0")/../crates/installer/target/release" && pwd)/rayos-installer"
@@ -40,8 +41,8 @@ else
   exit 1
 fi
 
-# Test 3: Affirm installation plan
-echo "[3] Testing installation plan validation..."
+# Test 3: Affirm installation plan (sample disk - dry-run)
+echo "[3] Testing installation plan validation (sample disk)..."
 OUTPUT=$(printf "1\nyes\n" | "$INSTALLER_BIN" --interactive 2>&1)
 
 if echo "$OUTPUT" | grep -q "RAYOS_INSTALLER:INSTALLATION_PLAN_VALIDATED:disk=sample0"; then
@@ -52,9 +53,27 @@ else
   exit 1
 fi
 
+# Verify dry-run mode for sample disk
+if echo "$OUTPUT" | grep -q "RAYOS_INSTALLER:DRY_RUN"; then
+  echo "  ✓ Dry-run mode activated for sample disk"
+else
+  echo "  ✗ Dry-run mode not detected"
+  echo "$OUTPUT"
+  exit 1
+fi
+
+# Test 4: Verify installation success marker
+echo "[4] Verifying installation success marker..."
+if echo "$OUTPUT" | grep -q "RAYOS_INSTALLER:INSTALLATION_SUCCESSFUL"; then
+  echo "  ✓ Installation success marker present"
+else
+  echo "  ✗ Installation success marker missing"
+  exit 1
+fi
+
 # Verify all expected markers are present
-echo "[4] Verifying marker sequence..."
-MARKERS="RAYOS_INSTALLER:STARTED RAYOS_INSTALLER:SAMPLE_MODE RAYOS_INSTALLER:INTERACTIVE_MODE RAYOS_INSTALLER:INSTALLATION_PLAN_VALIDATED RAYOS_INSTALLER:INTERACTIVE_COMPLETE"
+echo "[5] Verifying complete marker sequence..."
+MARKERS="RAYOS_INSTALLER:STARTED RAYOS_INSTALLER:SAMPLE_MODE RAYOS_INSTALLER:INTERACTIVE_MODE RAYOS_INSTALLER:INSTALLATION_PLAN_VALIDATED RAYOS_INSTALLER:INSTALLATION_SUCCESSFUL RAYOS_INSTALLER:INTERACTIVE_COMPLETE"
 
 for marker in $MARKERS; do
   if echo "$OUTPUT" | grep -q "$marker"; then
@@ -66,7 +85,7 @@ for marker in $MARKERS; do
 done
 
 # Verify disk info is displayed
-echo "[5] Verifying disk enumeration display..."
+echo "[6] Verifying disk enumeration display..."
 if echo "$OUTPUT" | grep -q "Available disks:"; then
   echo "  ✓ Disk enumeration displayed"
 else

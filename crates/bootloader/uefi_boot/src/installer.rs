@@ -30,7 +30,7 @@ fn read_registry_json(
     root: &mut uefi::proto::media::file::Directory,
 ) -> Result<Option<String>, &'static str> {
     let registry_path = "EFI\\RAYOS\\registry.json";
-    
+
     let file_handle = root
         .open(registry_path, FileMode::Read, FileAttribute::empty())
         .ok()
