@@ -1,4 +1,4 @@
-<!-- 
+<!--
 This file summarizes the current state of the RayOS installability effort
 as of January 7, 2026. It documents completed milestones, current capabilities,
 and the next steps for full end-to-end installation with bootloader integration.
@@ -76,11 +76,11 @@ All functionality is **thoroughly tested** with unit tests, integration tests, a
   - Affirm installation with dry-run: ✓ PASS
   - Marker sequence (8 markers): ✓ PASS
   - Disk enumeration display: ✓ PASS
-  
+
 - **Integration tests** (`scripts/test-installer-dry-run.sh`):
   - JSON output validation: ✓ PASS
   - Marker sequence: ✓ PASS
-  
+
 - **E2E framework** (`scripts/test-installer-e2e.sh`):
   - QEMU boot with virtual target disk
   - Installer invocation validation

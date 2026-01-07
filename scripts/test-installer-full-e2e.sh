@@ -63,7 +63,7 @@ sleep 2
 # Check if installer is running
 if pgrep -f "rayos-installer.*--interactive" > /dev/null; then
   echo "RAYOS_INSTALLER:AUTOTEST:DETECTED" >&2
-  
+
   # Simulate user selecting disk 1 and confirming yes
   (
     sleep 1
@@ -72,13 +72,13 @@ if pgrep -f "rayos-installer.*--interactive" > /dev/null; then
     echo "yes"
     sleep 2
   ) | /rayos-installer --interactive 2>&1 | tee -a /var/log/rayos-install.log
-  
+
   echo "RAYOS_INSTALLER:AUTOTEST:INSTALLATION_COMPLETE" >&2
-  
+
   # Create marker to indicate successful installation
   touch /install-marker
   sync
-  
+
   # Try to reboot (QEMU will notice timeout)
   reboot -f || true
 fi
@@ -137,16 +137,16 @@ echo "[Stage 4] Testing partition creation on virtual disk..."
 # Try to create partitions on the virtual disk
 if sgdisk -Z "$TARGET_DISK" 2>/dev/null; then
   echo "  ✓ Virtual disk ready for partitioning"
-  
+
   # Create partition table
   sgdisk -o "$TARGET_DISK" >/dev/null 2>&1
   echo "  ✓ GPT table created"
-  
+
   # Try to create partitions
   sgdisk -n 1:2048:+512M -t 1:EF00 "$TARGET_DISK" >/dev/null 2>&1 && echo "  ✓ ESP partition created"
   sgdisk -n 2:0:+40G -t 2:8300 "$TARGET_DISK" >/dev/null 2>&1 && echo "  ✓ System partition created"
   sgdisk -n 3:0:0 -t 3:8300 "$TARGET_DISK" >/dev/null 2>&1 && echo "  ✓ VM pool partition created"
-  
+
   # Validate partition table
   PARTITIONS=$(sgdisk -p "$TARGET_DISK" 2>/dev/null | grep -c "EF00\|8300" || true)
   if [ "$PARTITIONS" -ge 3 ]; then

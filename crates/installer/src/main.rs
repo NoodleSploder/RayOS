@@ -548,14 +548,14 @@ fn copy_system_image(dev_path: &str) -> anyhow::Result<()> {
 
     // Copy RayOS system image
     eprintln!("  Copying RayOS system files...");
-    
+
     // Try to find system image in common locations
     let system_image_paths = vec![
         PathBuf::from("/rayos-system-image"),  // In running system
         PathBuf::from("./build/rayos-system-image"),  // Dev build
         PathBuf::from("/tmp/rayos-system-image"),  // Temporary location
     ];
-    
+
     let mut image_found = false;
     for source_dir in &system_image_paths {
         if source_dir.exists() {
@@ -565,7 +565,7 @@ fn copy_system_image(dev_path: &str) -> anyhow::Result<()> {
             break;
         }
     }
-    
+
     if !image_found {
         eprintln!("    WARNING: System image not found, creating marker only");
     }
