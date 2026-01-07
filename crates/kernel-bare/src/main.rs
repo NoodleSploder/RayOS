@@ -1180,11 +1180,11 @@ impl PciDevice {
                 if Self::exists(bus, slot, 0) {
                     let vendor_id = Self::config_read_u16(bus, slot, 0, 0x00);
                     let device_id = Self::config_read_u16(bus, slot, 0, 0x02);
-                    
+
                     let class_subclass = Self::config_read_u16(bus, slot, 0, 0x0A);
                     let class = (class_subclass >> 8) as u8;
                     let subclass = (class_subclass & 0xFF) as u8;
-                    
+
                     let prog_if = Self::config_read_u16(bus, slot, 0, 0x08) as u8;
                     let header_type_val = Self::config_read_u16(bus, slot, 0, 0x0E);
                     let header_type = (header_type_val as u8) & 0x7F;
@@ -1211,11 +1211,11 @@ impl PciDevice {
                             if Self::exists(bus, slot, function) {
                                 let vendor_id = Self::config_read_u16(bus, slot, function, 0x00);
                                 let device_id = Self::config_read_u16(bus, slot, function, 0x02);
-                                
+
                                 let class_subclass = Self::config_read_u16(bus, slot, function, 0x0A);
                                 let class = (class_subclass >> 8) as u8;
                                 let subclass = (class_subclass & 0xFF) as u8;
-                                
+
                                 let prog_if = Self::config_read_u16(bus, slot, function, 0x08) as u8;
                                 let header_type_val = Self::config_read_u16(bus, slot, function, 0x0E);
                                 let header_type = (header_type_val as u8) & 0x7F;
@@ -1300,14 +1300,14 @@ pub trait BlockDevice {
     /// Read blocks from device
     /// Returns number of blocks successfully read
     fn read_blocks(&mut self, lba: u64, count: u32, buffer: &mut [u8]) -> u32;
-    
+
     /// Write blocks to device
     /// Returns number of blocks successfully written
     fn write_blocks(&mut self, lba: u64, count: u32, buffer: &[u8]) -> u32;
-    
+
     /// Get block size in bytes
     fn block_size(&self) -> u32;
-    
+
     /// Get capacity in blocks
     fn capacity_blocks(&self) -> u64;
 }
@@ -1327,19 +1327,19 @@ impl VirtIOBlockDevice {
         if magic != 0x74726976 {  // "virt" in little-endian
             return None;
         }
-        
+
         // Read version
         let version = unsafe { *((base_addr + 4) as *const u32) };
         if version == 0 {
             return None;  // Legacy device, not supported for now
         }
-        
+
         // Read device ID (should be 2 for block device)
         let device_id = unsafe { *((base_addr + 8) as *const u32) };
         if device_id != 2 {
             return None;  // Not a block device
         }
-        
+
         // For now, assume 512-byte blocks and reasonable capacity
         Some(VirtIOBlockDevice {
             base_addr,
@@ -1360,16 +1360,16 @@ impl BlockDevice for VirtIOBlockDevice {
         // 5. Return actual read count
         0  // Placeholder
     }
-    
+
     fn write_blocks(&mut self, _lba: u64, _count: u32, _buffer: &[u8]) -> u32 {
         // VirtIO block write implementation
         0  // Placeholder
     }
-    
+
     fn block_size(&self) -> u32 {
         self.block_size
     }
-    
+
     fn capacity_blocks(&self) -> u64 {
         self.capacity_blocks
     }
@@ -1396,7 +1396,7 @@ impl GenericBlockDevice {
                 capacity_blocks: 0x100000,
             });
         }
-        
+
         // Check for AHCI/SATA controller
         if device.class == 0x01 && device.subclass == 0x06 {
             // Mass storage, SATA controller
@@ -1407,7 +1407,7 @@ impl GenericBlockDevice {
                 capacity_blocks: 0x100000,
             });
         }
-        
+
         None
     }
 }
@@ -1421,10 +1421,10 @@ pub trait FileSystem {
     /// Read file by path
     /// Returns (bytes_read, data)
     fn read_file(&mut self, path: &str, buffer: &mut [u8]) -> Result<u32, u32>;
-    
+
     /// List directory entries
     fn list_dir(&mut self, path: &str) -> Result<u32, u32>;
-    
+
     /// Get file metadata (size, etc)
     fn file_size(&mut self, path: &str) -> Result<u64, u32>;
 }
@@ -1446,12 +1446,12 @@ impl FAT32FileSystem {
         if sector_data.len() < 512 {
             return None;
         }
-        
+
         // Check signature (0x55 0xAA at offset 510)
         if sector_data[510] != 0x55 || sector_data[511] != 0xAA {
             return None;
         }
-        
+
         // Extract FAT32 parameters
         let bytes_per_sector = ((sector_data[11] as u32) | ((sector_data[12] as u32) << 8));
         let sectors_per_cluster = sector_data[13] as u32;
@@ -1460,23 +1460,23 @@ impl FAT32FileSystem {
         let root_entries = ((sector_data[17] as u32) | ((sector_data[18] as u32) << 8));
         let total_sectors_16 = ((sector_data[19] as u32) | ((sector_data[20] as u32) << 8));
         let fat_size_16 = ((sector_data[22] as u32) | ((sector_data[23] as u32) << 8));
-        let total_sectors_32 = ((sector_data[32] as u32) | ((sector_data[33] as u32) << 8) | 
+        let total_sectors_32 = ((sector_data[32] as u32) | ((sector_data[33] as u32) << 8) |
                                 ((sector_data[34] as u32) << 16) | ((sector_data[35] as u32) << 24));
-        let fat_size_32 = ((sector_data[36] as u32) | ((sector_data[37] as u32) << 8) | 
+        let fat_size_32 = ((sector_data[36] as u32) | ((sector_data[37] as u32) << 8) |
                            ((sector_data[38] as u32) << 16) | ((sector_data[39] as u32) << 24));
-        
+
         let total_sectors = if total_sectors_16 != 0 {
             total_sectors_16 as u64
         } else {
             total_sectors_32 as u64
         };
-        
+
         let fat_size = if fat_size_16 != 0 {
             fat_size_16
         } else {
             fat_size_32
         };
-        
+
         Some(FAT32FileSystem {
             bytes_per_sector,
             sectors_per_cluster,
@@ -1499,12 +1499,12 @@ impl FileSystem for FAT32FileSystem {
         // 4. Read file data from clusters
         Err(1)  // Not implemented yet
     }
-    
+
     fn list_dir(&mut self, _path: &str) -> Result<u32, u32> {
         // List directory implementation
         Err(1)
     }
-    
+
     fn file_size(&mut self, _path: &str) -> Result<u64, u32> {
         // Get file size implementation
         Err(1)
@@ -1526,10 +1526,10 @@ impl BootConfig {
         if data.len() < 516 {
             return None;
         }
-        
+
         let mut linux_path = [0u8; 256];
         let mut windows_path = [0u8; 256];
-        
+
         // Copy paths (assuming simple format)
         if data[0..256].iter().any(|&b| b != 0) {
             linux_path.copy_from_slice(&data[0..256]);
@@ -1537,11 +1537,11 @@ impl BootConfig {
         if data[256..512].iter().any(|&b| b != 0) {
             windows_path.copy_from_slice(&data[256..512]);
         }
-        
+
         let boot_timeout = ((data[512] as u32) | ((data[513] as u32) << 8) |
                             ((data[514] as u32) << 16) | ((data[515] as u32) << 24));
         let default_vm = data[515];
-        
+
         Some(BootConfig {
             linux_vm_path: linux_path,
             windows_vm_path: windows_path,
@@ -1549,6 +1549,660 @@ impl BootConfig {
             default_vm,
         })
     }
+}
+
+// ============================================================================
+// FAT32 Directory & File Operations
+// ============================================================================
+
+/// FAT32 directory entry
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct DirectoryEntry {
+    pub name: [u8; 8],
+    pub ext: [u8; 3],
+    pub attributes: u8,
+    pub reserved: u8,
+    pub creation_time_tenths: u8,
+    pub creation_time: u16,
+    pub creation_date: u16,
+    pub last_access_date: u16,
+    pub high_cluster: u16,
+    pub write_time: u16,
+    pub write_date: u16,
+    pub low_cluster: u16,
+    pub file_size: u32,
+}
+
+impl DirectoryEntry {
+    /// Check if entry is a directory
+    pub fn is_dir(&self) -> bool {
+        (self.attributes & 0x10) != 0
+    }
+
+    /// Check if entry is a file
+    pub fn is_file(&self) -> bool {
+        !self.is_dir() && (self.attributes & 0x01) == 0
+    }
+
+    /// Check if entry is end marker
+    pub fn is_end(&self) -> bool {
+        self.name[0] == 0
+    }
+
+    /// Check if entry is unused
+    pub fn is_unused(&self) -> bool {
+        self.name[0] == 0xE5
+    }
+
+    /// Get cluster number (combine high and low 16-bit words)
+    pub fn get_cluster(&self) -> u32 {
+        ((self.high_cluster as u32) << 16) | (self.low_cluster as u32)
+    }
+
+    /// Get filename as string (with null termination)
+    pub fn get_name(&self) -> [u8; 12] {
+        let mut result = [0u8; 12];
+        let mut idx = 0;
+
+        // Copy name part
+        for &b in &self.name {
+            if b != 0x20 && idx < 8 {
+                result[idx] = b;
+                idx += 1;
+            }
+        }
+
+        // Add dot if extension exists
+        let has_ext = self.ext[0] != 0x20;
+        if has_ext && idx < 11 {
+            result[idx] = b'.';
+            idx += 1;
+        }
+
+        // Copy extension
+        for &b in &self.ext {
+            if b != 0x20 && idx < 12 {
+                result[idx] = b;
+                idx += 1;
+            }
+        }
+
+        result
+    }
+}
+
+impl FAT32FileSystem {
+    /// Calculate data area starting sector
+    pub fn data_start_sector(&self) -> u32 {
+        self.reserved_sectors + (self.num_fats * self.fat_size)
+    }
+
+    /// Calculate sector for given cluster
+    pub fn cluster_to_sector(&self, cluster: u32) -> u32 {
+        ((cluster - 2) * self.sectors_per_cluster) + self.data_start_sector()
+    }
+
+    /// Get next cluster in FAT chain
+    pub fn get_next_cluster(&mut self, cluster: u32, _fat_table: &[u32]) -> Option<u32> {
+        // In a real implementation, would read FAT sector and index into it
+        // For now, return None to indicate end of chain
+        if cluster == 0 {
+            None
+        } else {
+            Some(cluster)  // Stub - would follow FAT chain
+        }
+    }
+
+    /// Search for a file/directory in the root directory
+    pub fn find_entry(&mut self, name: &str, _entries: &[DirectoryEntry]) -> Option<DirectoryEntry> {
+        // Would search directory entries for matching name
+        // For now, return None
+        let _ = name;
+        None
+    }
+
+    /// Walk FAT chain and collect all clusters for a file
+    pub fn get_file_clusters(&mut self, start_cluster: u32, _fat_table: &[u32]) -> [u32; 256] {
+        let mut clusters = [0u32; 256];
+        clusters[0] = start_cluster;
+        // Would follow FAT chain to populate array
+        clusters
+    }
+
+    /// Parse raw directory sector into entries
+    pub fn parse_directory_sector(sector_data: &[u8]) -> [DirectoryEntry; 16] {
+        let mut entries = [DirectoryEntry {
+            name: [0u8; 8],
+            ext: [0u8; 3],
+            attributes: 0,
+            reserved: 0,
+            creation_time_tenths: 0,
+            creation_time: 0,
+            creation_date: 0,
+            last_access_date: 0,
+            high_cluster: 0,
+            write_time: 0,
+            write_date: 0,
+            low_cluster: 0,
+            file_size: 0,
+        }; 16];
+
+        for i in 0..16 {
+            let offset = i * 32;
+            if offset + 32 > sector_data.len() {
+                break;
+            }
+
+            entries[i].name[0] = sector_data[offset];
+            entries[i].name[1] = sector_data[offset + 1];
+            entries[i].name[2] = sector_data[offset + 2];
+            entries[i].name[3] = sector_data[offset + 3];
+            entries[i].name[4] = sector_data[offset + 4];
+            entries[i].name[5] = sector_data[offset + 5];
+            entries[i].name[6] = sector_data[offset + 6];
+            entries[i].name[7] = sector_data[offset + 7];
+            entries[i].ext[0] = sector_data[offset + 8];
+            entries[i].ext[1] = sector_data[offset + 9];
+            entries[i].ext[2] = sector_data[offset + 10];
+            entries[i].attributes = sector_data[offset + 11];
+            entries[i].reserved = sector_data[offset + 12];
+            entries[i].creation_time_tenths = sector_data[offset + 13];
+            entries[i].creation_time =
+                ((sector_data[offset + 14] as u16) | ((sector_data[offset + 15] as u16) << 8));
+            entries[i].creation_date =
+                ((sector_data[offset + 16] as u16) | ((sector_data[offset + 17] as u16) << 8));
+            entries[i].last_access_date =
+                ((sector_data[offset + 18] as u16) | ((sector_data[offset + 19] as u16) << 8));
+            entries[i].high_cluster =
+                ((sector_data[offset + 20] as u16) | ((sector_data[offset + 21] as u16) << 8));
+            entries[i].write_time =
+                ((sector_data[offset + 22] as u16) | ((sector_data[offset + 23] as u16) << 8));
+            entries[i].write_date =
+                ((sector_data[offset + 24] as u16) | ((sector_data[offset + 25] as u16) << 8));
+            entries[i].low_cluster =
+                ((sector_data[offset + 26] as u16) | ((sector_data[offset + 27] as u16) << 8));
+            entries[i].file_size = ((sector_data[offset + 28] as u32) |
+                ((sector_data[offset + 29] as u32) << 8) |
+                ((sector_data[offset + 30] as u32) << 16) |
+                ((sector_data[offset + 31] as u32) << 24));
+        }
+
+        entries
+    }
+}
+
+// ============================================================================
+// Process Management - Core Structures
+// ============================================================================
+
+/// Process state
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ProcessState {
+    Ready,
+    Running,
+    Blocked,
+    Terminated,
+}
+
+/// Saved processor context for context switching
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessContext {
+    pub rax: u64,
+    pub rbx: u64,
+    pub rcx: u64,
+    pub rdx: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub rbp: u64,
+    pub rsp: u64,
+    pub r8: u64,
+    pub r9: u64,
+    pub r10: u64,
+    pub r11: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+    pub rip: u64,
+    pub rflags: u64,
+}
+
+impl Default for ProcessContext {
+    fn default() -> Self {
+        ProcessContext {
+            rax: 0, rbx: 0, rcx: 0, rdx: 0, rsi: 0, rdi: 0, rbp: 0, rsp: 0,
+            r8: 0, r9: 0, r10: 0, r11: 0, r12: 0, r13: 0, r14: 0, r15: 0,
+            rip: 0, rflags: 0,
+        }
+    }
+}
+
+impl ProcessContext {
+    /// Create a new context with default values
+    pub fn new(entry_point: u64, stack_pointer: u64) -> Self {
+        ProcessContext {
+            rax: 0,
+            rbx: 0,
+            rcx: 0,
+            rdx: 0,
+            rsi: 0,
+            rdi: 0,
+            rbp: stack_pointer,
+            rsp: stack_pointer,
+            r8: 0,
+            r9: 0,
+            r10: 0,
+            r11: 0,
+            r12: 0,
+            r13: 0,
+            r14: 0,
+            r15: 0,
+            rip: entry_point,
+            rflags: 0x202,  // Interrupts enabled, reserved bit set
+        }
+    }
+
+    /// Save current CPU state (in real impl, would use inline asm)
+    pub fn save_current() -> Self {
+        // In a real implementation, this would read actual CPU registers
+        ProcessContext {
+            rax: 0, rbx: 0, rcx: 0, rdx: 0, rsi: 0, rdi: 0, rbp: 0, rsp: 0,
+            r8: 0, r9: 0, r10: 0, r11: 0, r12: 0, r13: 0, r14: 0, r15: 0,
+            rip: 0, rflags: 0,
+        }
+    }
+
+    /// Restore context (in real impl, would restore CPU registers)
+    pub fn restore(&self) {
+        // In a real implementation, would restore registers and jump to rip
+        let _ = self;
+    }
+}
+
+/// Process Control Block (PCB)
+pub struct ProcessControlBlock {
+    pub pid: u32,
+    pub ppid: u32,  // Parent PID
+    pub state: ProcessState,
+    pub context: ProcessContext,
+    pub stack_base: u64,
+    pub stack_size: u64,
+    pub heap_base: u64,
+    pub heap_size: u64,
+    pub priority: u8,
+    pub time_slice: u32,
+    pub time_used: u32,
+}
+
+impl Default for ProcessControlBlock {
+    fn default() -> Self {
+        ProcessControlBlock {
+            pid: 0,
+            ppid: 0,
+            state: ProcessState::Terminated,
+            context: ProcessContext {
+                rax: 0, rbx: 0, rcx: 0, rdx: 0, rsi: 0, rdi: 0, rbp: 0, rsp: 0,
+                r8: 0, r9: 0, r10: 0, r11: 0, r12: 0, r13: 0, r14: 0, r15: 0,
+                rip: 0, rflags: 0,
+            },
+            stack_base: 0,
+            stack_size: 0,
+            heap_base: 0,
+            heap_size: 0,
+            priority: 0,
+            time_slice: 0,
+            time_used: 0,
+        }
+    }
+}
+
+impl ProcessControlBlock {
+    /// Create a new process control block
+    pub fn new(pid: u32, ppid: u32, entry_point: u64, stack_base: u64, stack_size: u64) -> Self {
+        ProcessControlBlock {
+            pid,
+            ppid,
+            state: ProcessState::Ready,
+            context: ProcessContext::new(entry_point, stack_base + stack_size),
+            stack_base,
+            stack_size,
+            heap_base: 0,
+            heap_size: 0,
+            priority: 5,  // Default priority
+            time_slice: 10,  // 10 ms default time slice
+            time_used: 0,
+        }
+    }
+
+    /// Check if process is runnable
+    pub fn is_runnable(&self) -> bool {
+        self.state == ProcessState::Ready
+    }
+
+    /// Consume time slice
+    pub fn consume_time(&mut self, ticks: u32) {
+        self.time_used = self.time_used.saturating_add(ticks);
+    }
+
+    /// Check if time slice exhausted
+    pub fn time_slice_exhausted(&self) -> bool {
+        self.time_used >= self.time_slice
+    }
+
+    /// Reset time slice
+    pub fn reset_time_slice(&mut self) {
+        self.time_used = 0;
+    }
+}
+
+/// Process manager
+pub struct ProcessManager {
+    pub processes: [Option<ProcessControlBlock>; 256],
+    pub current_pid: u32,
+    pub next_pid: u32,
+    pub ready_queue: [u32; 256],
+    pub queue_head: usize,
+    pub queue_tail: usize,
+}
+
+impl ProcessManager {
+    /// Create a new process manager
+    pub fn new() -> Self {
+        ProcessManager {
+            processes: unsafe { core::mem::zeroed() },
+            current_pid: 0,
+            next_pid: 1,
+            ready_queue: [0; 256],
+            queue_head: 0,
+            queue_tail: 0,
+        }
+    }
+
+    /// Create a new process
+    pub fn create_process(&mut self, entry_point: u64, stack_size: u64) -> Option<u32> {
+        if self.next_pid >= 256 {
+            return None;  // Too many processes
+        }
+
+        let pid = self.next_pid;
+        self.next_pid += 1;
+
+        // Allocate stack space (stub - in real impl would allocate pages)
+        let stack_base = 0x80000000 + (pid as u64 * stack_size);
+
+        let mut pcb = ProcessControlBlock::new(pid, self.current_pid, entry_point, stack_base, stack_size);
+        pcb.state = ProcessState::Ready;
+
+        self.processes[pid as usize] = Some(pcb);
+        self.enqueue_ready(pid);
+
+        Some(pid)
+    }
+
+    /// Enqueue process to ready queue
+    pub fn enqueue_ready(&mut self, pid: u32) {
+        if self.queue_tail < 256 {
+            self.ready_queue[self.queue_tail] = pid;
+            self.queue_tail += 1;
+        }
+    }
+
+    /// Dequeue next ready process
+    pub fn dequeue_ready(&mut self) -> Option<u32> {
+        if self.queue_head < self.queue_tail {
+            let pid = self.ready_queue[self.queue_head];
+            self.queue_head += 1;
+            return Some(pid);
+        }
+
+        // Wrap around if queue was emptied
+        if self.queue_head >= self.queue_tail && self.queue_tail > 0 {
+            self.queue_head = 0;
+            self.queue_tail = 0;
+        }
+
+        None
+    }
+
+    /// Get current process
+    pub fn current_process(&mut self) -> Option<&mut ProcessControlBlock> {
+        self.processes[self.current_pid as usize].as_mut()
+    }
+
+    /// Schedule next process
+    pub fn schedule_next(&mut self) -> Option<u32> {
+        // Mark current as ready if still running
+        if let Some(pcb) = self.processes[self.current_pid as usize].as_mut() {
+            if pcb.state == ProcessState::Running {
+                pcb.state = ProcessState::Ready;
+                pcb.reset_time_slice();
+                self.enqueue_ready(self.current_pid);
+            }
+        }
+
+        // Get next from ready queue
+        if let Some(next_pid) = self.dequeue_ready() {
+            if let Some(pcb) = self.processes[next_pid as usize].as_mut() {
+                pcb.state = ProcessState::Running;
+                self.current_pid = next_pid;
+                return Some(next_pid);
+            }
+        }
+
+        None
+    }
+
+    /// Terminate process
+    pub fn terminate_process(&mut self, pid: u32) {
+        if let Some(pcb) = self.processes[pid as usize].as_mut() {
+            pcb.state = ProcessState::Terminated;
+        }
+    }
+}
+
+// Global process manager (initialized once)
+static mut PROCESS_MANAGER: Option<ProcessManager> = None;
+
+/// Initialize the process manager
+pub fn init_process_manager() {
+    unsafe {
+        PROCESS_MANAGER = Some(ProcessManager::new());
+    }
+}
+
+/// Get the process manager (if initialized)
+pub fn get_process_manager() -> Option<&'static mut ProcessManager> {
+    unsafe { PROCESS_MANAGER.as_mut() }
+}
+
+// ============================================================================
+// System Call Interface & Dispatcher
+// ============================================================================
+
+/// System call numbers
+pub mod syscall {
+    pub const SYS_EXIT: u64 = 0;
+    pub const SYS_WRITE: u64 = 1;
+    pub const SYS_READ: u64 = 2;
+    pub const SYS_OPEN: u64 = 3;
+    pub const SYS_CLOSE: u64 = 4;
+    pub const SYS_FORK: u64 = 5;
+    pub const SYS_WAITPID: u64 = 6;
+    pub const SYS_EXEC: u64 = 7;
+    pub const SYS_GETPID: u64 = 8;
+    pub const SYS_GETPPID: u64 = 9;
+    pub const SYS_KILL: u64 = 10;
+}
+
+/// System call argument structure
+pub struct SyscallArgs {
+    pub arg0: u64,
+    pub arg1: u64,
+    pub arg2: u64,
+    pub arg3: u64,
+    pub arg4: u64,
+    pub arg5: u64,
+}
+
+impl SyscallArgs {
+    /// Create from registers (would be called from ISR)
+    pub fn from_registers(rdi: u64, rsi: u64, rdx: u64, rcx: u64, r8: u64, r9: u64) -> Self {
+        SyscallArgs {
+            arg0: rdi,
+            arg1: rsi,
+            arg2: rdx,
+            arg3: rcx,
+            arg4: r8,
+            arg5: r9,
+        }
+    }
+}
+
+/// System call return value
+pub struct SyscallResult {
+    pub value: i64,
+    pub error: u32,
+}
+
+impl SyscallResult {
+    /// Create a successful result
+    pub fn ok(value: u64) -> Self {
+        SyscallResult {
+            value: value as i64,
+            error: 0,
+        }
+    }
+
+    /// Create an error result
+    pub fn error(code: u32) -> Self {
+        SyscallResult {
+            value: -1,
+            error: code,
+        }
+    }
+}
+
+/// System call handler type
+type SyscallHandler = fn(&SyscallArgs) -> SyscallResult;
+
+/// System call dispatcher
+pub struct SyscallDispatcher {
+    handlers: [Option<SyscallHandler>; 64],
+}
+
+impl SyscallDispatcher {
+    /// Create a new syscall dispatcher
+    pub fn new() -> Self {
+        let mut dispatcher = SyscallDispatcher {
+            handlers: [None; 64],
+        };
+
+        // Register built-in syscalls
+        dispatcher.handlers[syscall::SYS_EXIT as usize] = Some(sys_exit);
+        dispatcher.handlers[syscall::SYS_WRITE as usize] = Some(sys_write);
+        dispatcher.handlers[syscall::SYS_READ as usize] = Some(sys_read);
+        dispatcher.handlers[syscall::SYS_GETPID as usize] = Some(sys_getpid);
+        dispatcher.handlers[syscall::SYS_GETPPID as usize] = Some(sys_getppid);
+
+        dispatcher
+    }
+
+    /// Register a syscall handler
+    pub fn register(&mut self, number: u64, handler: SyscallHandler) {
+        if number < 64 {
+            self.handlers[number as usize] = Some(handler);
+        }
+    }
+
+    /// Dispatch a syscall
+    pub fn dispatch(&self, number: u64, args: &SyscallArgs) -> SyscallResult {
+        if number < 64 {
+            if let Some(handler) = self.handlers[number as usize] {
+                return handler(args);
+            }
+        }
+        SyscallResult::error(38)  // ENOSYS - No such syscall
+    }
+}
+
+// Global syscall dispatcher
+static mut SYSCALL_DISPATCHER: Option<SyscallDispatcher> = None;
+
+/// Initialize the syscall dispatcher
+pub fn init_syscall_dispatcher() {
+    unsafe {
+        SYSCALL_DISPATCHER = Some(SyscallDispatcher::new());
+    }
+}
+
+/// Get the syscall dispatcher
+pub fn get_syscall_dispatcher() -> Option<&'static mut SyscallDispatcher> {
+    unsafe { SYSCALL_DISPATCHER.as_mut() }
+}
+
+// ============================================================================
+// Built-in System Call Implementations
+// ============================================================================
+
+/// SYS_EXIT - Terminate current process
+fn sys_exit(args: &SyscallArgs) -> SyscallResult {
+    let exit_code = args.arg0;
+
+    if let Some(pm) = get_process_manager() {
+        let current_pid = pm.current_pid;
+        pm.terminate_process(current_pid);
+    }
+
+    // Trigger context switch
+    if let Some(pm) = get_process_manager() {
+        pm.schedule_next();
+    }
+
+    SyscallResult::ok(exit_code)
+}
+
+/// SYS_WRITE - Write to output (console)
+fn sys_write(args: &SyscallArgs) -> SyscallResult {
+    let _fd = args.arg0;  // File descriptor (0=stdout, 1=stderr)
+    let buf_addr = args.arg1;  // Buffer address (kernel pointer)
+    let count = args.arg2;     // Number of bytes to write
+
+    // In a real implementation, would validate buf_addr and copy from user space
+    // For now, write is a stub
+    let _ = (buf_addr, count);
+
+    // Return number of bytes written
+    SyscallResult::ok(count)
+}
+
+/// SYS_READ - Read from input
+fn sys_read(args: &SyscallArgs) -> SyscallResult {
+    let _fd = args.arg0;  // File descriptor (0=stdin)
+    let _buf_addr = args.arg1;  // Buffer address
+    let _count = args.arg2;      // Number of bytes to read
+
+    // In a real implementation, would read from input device
+    // For now, return 0 (EOF)
+    SyscallResult::ok(0)
+}
+
+/// SYS_GETPID - Get current process ID
+fn sys_getpid(_args: &SyscallArgs) -> SyscallResult {
+    if let Some(pm) = get_process_manager() {
+        return SyscallResult::ok(pm.current_pid as u64);
+    }
+    SyscallResult::error(1)  // EPERM
+}
+
+/// SYS_GETPPID - Get parent process ID
+fn sys_getppid(_args: &SyscallArgs) -> SyscallResult {
+    if let Some(pm) = get_process_manager() {
+        if let Some(pcb) = pm.processes[pm.current_pid as usize].as_ref() {
+            return SyscallResult::ok(pcb.ppid as u64);
+        }
+    }
+    SyscallResult::error(1)  // EPERM
 }
 
 fn serial_init() {
@@ -11484,16 +12138,16 @@ fn get_glyph(ch: char) -> [u8; 8] {
 
 fn init_pci(bi: &BootInfo) {
     serial_write_str("\n[PCI SUBSYSTEM]\n");
-    
+
     // First, enumerate PCI devices directly via configuration space
     serial_write_str("Direct PCI enumeration:\n");
     let devices = PciDevice::enumerate();
-    
+
     let mut device_count = 0;
     for device_opt in devices.iter() {
         if let Some(device) = device_opt {
             device_count += 1;
-            
+
             // Log first 16 devices in detail
             if device_count <= 16 {
                 serial_write_str("  [");
@@ -11510,11 +12164,11 @@ fn init_pci(bi: &BootInfo) {
             }
         }
     }
-    
+
     serial_write_str("  Total devices found: ");
     serial_write_hex_u64(device_count as u64);
     serial_write_str("\n");
-    
+
     // Also try ACPI-based enumeration if available
     if bi.rsdp_addr != 0 {
         serial_write_str("\nACPI PCI enumeration:\n");

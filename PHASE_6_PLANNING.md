@@ -1,7 +1,7 @@
 # Phase 6: Device Driver Framework & Storage Subsystem - PLANNING
 
-**Target Start**: January 7, 2026  
-**Estimated Duration**: 2-3 sessions  
+**Target Start**: January 7, 2026
+**Estimated Duration**: 2-3 sessions
 **Priority**: HIGH - Foundation for storage, networking, and device management
 
 ---
