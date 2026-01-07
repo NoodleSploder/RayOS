@@ -9271,19 +9271,19 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
 
     // Phase 8 initialization (User Mode & IPC)
     serial_write_str("  [PHASE8] Initializing virtual memory & user mode support...\n");
-    
+
     init_page_allocator();
     serial_write_str("    ✓ Page allocator initialized\n");
-    
+
     init_ring3_support();
     serial_write_str("    ✓ Ring 3 support initialized\n");
-    
+
     init_process_manager();
     serial_write_str("    ✓ Process manager initialized\n");
-    
+
     init_syscall_dispatcher();
     serial_write_str("    ✓ Syscall dispatcher initialized\n");
-    
+
     setup_syscall_instruction(0xFFFF_8000_0000_8000);
     serial_write_str("    ✓ SYSCALL instruction ready\n");
 
@@ -12453,7 +12453,7 @@ impl UserModeContext {
 
     /// Validate user buffer
     pub fn is_valid_buffer(&self, addr: u64, size: u64) -> bool {
-        self.is_valid_pointer(addr) && 
+        self.is_valid_pointer(addr) &&
         self.is_valid_pointer(addr.saturating_add(size - 1))
     }
 }
@@ -12518,7 +12518,7 @@ pub fn setup_syscall_instruction(entry_point: u64) {
     //
     // For now, this is a placeholder for the framework
     let _ = entry_point;
-    
+
     serial_write_str("    [SYSCALL] Fast syscall entry configured\n");
 }
 
@@ -12541,7 +12541,7 @@ pub extern "C" fn syscall_entry() {
 pub fn enter_user_mode(context: &UserModeContext, rsp: u64) -> u64 {
     // Framework ready for actual implementation
     // Would use SWAPGS and SYSRET in real implementation
-    
+
     serial_write_str("    [RING3] Entering user mode at 0x");
     serial_write_hex_u64(context.rip);
     serial_write_str(" with stack 0x");
@@ -12556,7 +12556,7 @@ pub fn enter_user_mode(context: &UserModeContext, rsp: u64) -> u64 {
 pub fn return_from_user_mode(return_value: u64, rsp: u64) {
     // Framework ready for actual implementation
     let _ = (return_value, rsp);
-    
+
     serial_write_str("    [RING3] Returning from user mode with value 0x");
     serial_write_hex_u64(return_value);
     serial_write_str("\n");
@@ -12577,7 +12577,7 @@ pub fn create_user_process(entry_point: u64) -> Option<u32> {
         if let Some(pcb) = pm.processes[pid as usize].as_mut() {
             // User code will start at entry_point
             pcb.context.rip = entry_point;
-            
+
             // User stack at top of allocated stack region
             pcb.context.rsp = pcb.stack_base + pcb.stack_size;
         }
@@ -12828,7 +12828,7 @@ pub fn test_user_mode() {
 
     // Create a simple test user process
     let entry = 0x00001000u64;  // Simple test entry point
-    
+
     match create_user_process(entry) {
         Some(pid) => {
             serial_write_str("    ✓ User process created (PID ");
@@ -12928,7 +12928,7 @@ impl ProcessGroup {
     pub fn new(pgid: u32, leader_pid: u32, session_id: u32) -> Self {
         let mut processes = [None; 256];
         processes[0] = Some(leader_pid);
-        
+
         ProcessGroup {
             pgid,
             processes,
