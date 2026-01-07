@@ -53,24 +53,24 @@ fn init_idt() {
         // Exception handlers
         idt_set_gate(UD_VECTOR, isr_invalid_opcode as *const () as u64);
         serial_write_str("    ✓ Invalid Opcode (#UD, vector 6) handler registered\n");
-        
+
         idt_set_gate(PF_VECTOR, isr_page_fault as *const () as u64);
         serial_write_str("    ✓ Page Fault (#PF, vector 14) handler registered\n");
-        
+
         idt_set_gate(GP_VECTOR, isr_general_protection as *const () as u64);
         serial_write_str("    ✓ General Protection (#GP, vector 13) handler registered\n");
-        
+
         idt_set_gate_ist(
             DF_VECTOR,
             isr_double_fault as *const () as u64,
             DF_IST_INDEX,
         );
         serial_write_str("    ✓ Double Fault (#DF, vector 8) handler registered (IST stack)\n");
-        
+
         // Interrupt handlers
         idt_set_gate(TIMER_VECTOR, isr_timer as *const () as u64);
         serial_write_str("    ✓ Timer Interrupt (IRQ0, vector 32) handler registered\n");
-        
+
         idt_set_gate(KEYBOARD_VECTOR, isr_keyboard as *const () as u64);
         serial_write_str("    ✓ Keyboard Interrupt (IRQ1, vector 33) handler registered\n");
 
@@ -98,17 +98,17 @@ fn init_interrupts() {
             serial_write_str(" detected\n");
         }
     }
-    
+
     serial_write_str("  [I/O] Configuring PIC...\n");
     pic_remap_and_unmask_irq0();
     serial_write_str("    ✓ PIC remapped (IRQ0 at vector 32)\n");
-    
+
     pic_unmask_irq1();
     serial_write_str("    ✓ Keyboard IRQ1 unmasked\n");
-    
+
     pit_init_hz(100);
     serial_write_str("    ✓ PIT timer initialized (100 Hz)\n");
-    
+
     sti();
     serial_write_str("  [I/O] Interrupts enabled\n");
 }
@@ -245,7 +245,7 @@ impl PortSize for u8 {
     unsafe fn read_from_port(port: u16) -> Self {
         inb(port)
     }
-    
+
     #[inline(always)]
     unsafe fn write_to_port(value: Self, port: u16) {
         outb(port, value)
@@ -257,7 +257,7 @@ impl PortSize for u16 {
     unsafe fn read_from_port(port: u16) -> Self {
         inw(port)
     }
-    
+
     #[inline(always)]
     unsafe fn write_to_port(value: Self, port: u16) {
         outw(port, value)
@@ -269,7 +269,7 @@ impl PortSize for u32 {
     unsafe fn read_from_port(port: u16) -> Self {
         inl(port)
     }
-    
+
     #[inline(always)]
     unsafe fn write_to_port(value: Self, port: u16) {
         outl(port, value)
@@ -285,14 +285,14 @@ impl<T: PortSize> IoPort<T> {
             _phantom: core::marker::PhantomData,
         }
     }
-    
+
     /// Read from the I/O port
     /// Safety: Caller must ensure port is valid and thread-safe access is managed
     #[inline]
     pub unsafe fn read(&self) -> T {
         T::read_from_port(self.port)
     }
-    
+
     /// Write to the I/O port
     /// Safety: Caller must ensure port is valid and thread-safe access is managed
     #[inline]
@@ -304,13 +304,13 @@ impl<T: PortSize> IoPort<T> {
 // Common I/O port addresses and functions for hardware access
 pub mod ports {
     use super::IoPort;
-    
+
     // PIC (Programmable Interrupt Controller) ports
     pub const PIC_MASTER_COMMAND: u16 = 0x20;
     pub const PIC_MASTER_DATA: u16 = 0x21;
     pub const PIC_SLAVE_COMMAND: u16 = 0xA0;
     pub const PIC_SLAVE_DATA: u16 = 0xA1;
-    
+
     // Serial port (COM1) registers
     pub const COM1_PORT: u16 = 0x3F8;
     pub const COM1_DATA: u16 = 0x3F8;
@@ -319,16 +319,16 @@ pub mod ports {
     pub const COM1_LINE_CONTROL: u16 = 0x3FB;
     pub const COM1_MODEM_CONTROL: u16 = 0x3FC;
     pub const COM1_LINE_STATUS: u16 = 0x3FD;
-    
+
     // KBD port
     pub const PS2_KEYBOARD_DATA: u16 = 0x60;
     pub const PS2_KEYBOARD_STATUS: u16 = 0x64;
-    
+
     /// Enumerate available COM ports by checking status
     pub fn detect_com_ports() -> [bool; 4] {
         let mut ports = [false; 4];
         let com_ports = [0x3F8, 0x2F8, 0x3E8, 0x2E8]; // COM1-4 port addresses
-        
+
         for (i, &port) in com_ports.iter().enumerate() {
             unsafe {
                 let line_status = IoPort::<u8>::new(port + 5).read();
@@ -4548,7 +4548,7 @@ fn ioapic_set_redir(gsi: u32, vector: u8, dest_apic_id: u8, flags: u16) {
 #[no_mangle]
 extern "C" fn page_fault_handler(error_code: u64, rip: u64, cr2: u64) -> ! {
     // Page Fault exception (#PF, vector 14)
-    // Error code bits: P=0x1 (present), W=0x2 (write), U=0x4 (user-mode), 
+    // Error code bits: P=0x1 (present), W=0x2 (write), U=0x4 (user-mode),
     //                  R=0x8 (reserved), I=0x10 (instruction fetch)
     serial_write_str("\n=== PAGE FAULT EXCEPTION ===\n");
     serial_write_str("Error Code: 0x");
@@ -4560,15 +4560,15 @@ extern "C" fn page_fault_handler(error_code: u64, rip: u64, cr2: u64) -> ! {
     if error_code & 0x8 != 0 { serial_write_str("R "); }  // Reserved bit
     if error_code & 0x10 != 0 { serial_write_str("I "); } // Instr. fetch
     serial_write_str(")\n");
-    
+
     serial_write_str("Instruction Pointer (RIP): 0x");
     serial_write_hex_u64(rip);
     serial_write_str("\n");
-    
+
     serial_write_str("Faulting Address (CR2):   0x");
     serial_write_hex_u64(cr2);
     serial_write_str("\n");
-    
+
     serial_write_str("Status: Halting system\n");
     serial_write_str("===========================\n\n");
     halt_forever();
@@ -4581,7 +4581,7 @@ extern "C" fn general_protection_handler(error_code: u64, rip: u64) -> ! {
     let selector = (error_code >> 3) & 0x1FFF;
     let ti_bit = error_code & 0x4;
     let ext_bit = error_code & 0x1;
-    
+
     serial_write_str("\n=== GENERAL PROTECTION FAULT ===\n");
     serial_write_str("Error Code: 0x");
     serial_write_hex_u64(error_code);
@@ -4590,11 +4590,11 @@ extern "C" fn general_protection_handler(error_code: u64, rip: u64) -> ! {
     if ti_bit != 0 { serial_write_str(", LDT"); } else { serial_write_str(", GDT"); }
     if ext_bit != 0 { serial_write_str(", External"); }
     serial_write_str(")\n");
-    
+
     serial_write_str("Instruction Pointer (RIP): 0x");
     serial_write_hex_u64(rip);
     serial_write_str("\n");
-    
+
     serial_write_str("Status: Halting system\n");
     serial_write_str("==================================\n\n");
     halt_forever();
@@ -4608,11 +4608,11 @@ extern "C" fn double_fault_handler(error_code: u64, rip: u64) -> ! {
     serial_write_str("Error Code: 0x");
     serial_write_hex_u64(error_code);
     serial_write_str(" (always 0)\n");
-    
+
     serial_write_str("Instruction Pointer (RIP): 0x");
     serial_write_hex_u64(rip);
     serial_write_str("\n");
-    
+
     serial_write_str("Status: System is in unrecoverable state, halting immediately\n");
     serial_write_str("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n");
     halt_forever();
@@ -4626,7 +4626,7 @@ extern "C" fn invalid_opcode_handler(rip: u64) -> ! {
     serial_write_str("Instruction Pointer (RIP): 0x");
     serial_write_hex_u64(rip);
     serial_write_str("\n");
-    
+
     serial_write_str("Reason: CPU encountered undefined or reserved instruction\n");
     serial_write_str("Status: Halting system\n");
     serial_write_str("=================================\n\n");
@@ -7355,13 +7355,13 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
     sti();
 
     init_memory();
-    
+
     // Optional: Test exception handlers (disabled by default)
     // Uncomment to test specific exception:
     // test_page_fault();       // #PF - Page Fault
     // test_general_protection(); // #GP - General Protection Fault
     // test_invalid_opcode();    // #UD - Invalid Opcode
-    
+
     kernel_main()
 }
 
@@ -7369,7 +7369,7 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
 fn enumerate_hardware() {
     serial_write_str("\n[HARDWARE DETECTION]\n");
     serial_write_str("Scanning available hardware devices...\n\n");
-    
+
     // Detect serial ports
     serial_write_str("Serial Ports (COM1-4):\n");
     let com_ports = ports::detect_com_ports();
@@ -7388,7 +7388,7 @@ fn enumerate_hardware() {
     if com_count == 0 {
         serial_write_str("  (none detected)\n");
     }
-    
+
     // Detect PS/2 keyboard
     serial_write_str("\nPS/2 Devices:\n");
     unsafe {
@@ -7399,17 +7399,17 @@ fn enumerate_hardware() {
             serial_write_str("  (PS/2 controller not responding)\n");
         }
     }
-    
+
     // Detect PIC
     serial_write_str("\nInterrupt Controllers:\n");
     serial_write_str("  ✓ PIC (Programmable Interrupt Controller) - Master/Slave\n");
     serial_write_str("    - Master @ 0x20-0x21 (vectors 32-39)\n");
     serial_write_str("    - Slave @ 0xA0-0xA1 (vectors 40-47)\n");
-    
+
     serial_write_str("\nTimer:\n");
     serial_write_str("  ✓ PIT (Programmable Interval Timer) @ 0x40-0x43\n");
     serial_write_str("    - Currently configured: 100 Hz\n");
-    
+
     serial_write_str("\n[END HARDWARE DETECTION]\n\n");
 }
 
