@@ -546,14 +546,41 @@ fn copy_system_image(dev_path: &str) -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("Failed to mount System partition"));
     }
 
-    // Copy RayOS kernel and runtime to system partition
-    eprintln!("  Copying RayOS kernel and runtime...");
-    // For now, just mark the system partition with a marker file
-    let marker = system_mount.join("RAYOS_INSTALLED");
-    fs::write(&marker, format!("RayOS installed at {}\n", std::time::SystemTime::now()
+    // Copy RayOS system image
+    eprintln!("  Copying RayOS system files...");
+    
+    // Try to find system image in common locations
+    let system_image_paths = vec![
+        PathBuf::from("/rayos-system-image"),  // In running system
+        PathBuf::from("./build/rayos-system-image"),  // Dev build
+        PathBuf::from("/tmp/rayos-system-image"),  // Temporary location
+    ];
+    
+    let mut image_found = false;
+    for source_dir in &system_image_paths {
+        if source_dir.exists() {
+            eprintln!("    Found system image at: {}", source_dir.display());
+            copy_directory_recursive(source_dir, &system_mount)?;
+            image_found = true;
+            break;
+        }
+    }
+    
+    if !image_found {
+        eprintln!("    WARNING: System image not found, creating marker only");
+    }
+
+    // Write installation marker
+    let marker = system_mount.join("RAYOS_INSTALLATION_MARKER");
+    let timestamp = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs()))?;
+        .as_secs();
+    fs::write(&marker, format!("RayOS installed at {}\n", timestamp))?;
+
+    // Write installation metadata
+    let metadata = system_mount.join(".rayos-install");
+    fs::write(&metadata, format!("Installed: {}\nPartition: {}\n", timestamp, dev_path))?;
 
     // Sync to ensure writes complete
     let mut cmd = Command::new("sync");
@@ -563,6 +590,29 @@ fn copy_system_image(dev_path: &str) -> anyhow::Result<()> {
     eprintln!("  Unmounting partitions...");
     let _ = Command::new("umount").arg(&system_mount).status();
     let _ = Command::new("umount").arg(&esp_mount).status();
+
+    Ok(())
+}
+
+/// Recursively copy a directory and its contents.
+fn copy_directory_recursive(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    if !dst.exists() {
+        fs::create_dir_all(dst)?;
+    }
+
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = entry.file_name();
+        let dst_path = dst.join(&file_name);
+
+        if path.is_dir() {
+            copy_directory_recursive(&path, &dst_path)?;
+        } else {
+            eprintln!("      Copying: {}", file_name.to_string_lossy());
+            fs::copy(&path, &dst_path)?;
+        }
+    }
 
     Ok(())
 }
