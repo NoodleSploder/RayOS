@@ -1,7 +1,7 @@
 # Phase 4: System Initialization & Kernel Development - Planning
 
-**Status:** Planning  
-**Date:** January 7, 2026  
+**Status:** Planning
+**Date:** January 7, 2026
 **Previous Phase:** Phase 3 (Boot Testing) - ✅ COMPLETE
 
 ---
@@ -53,22 +53,22 @@ Get the kernel executing beyond bootloader and performing basic system initializ
 ## 📋 Phase 4 Tasks (Proposed Order)
 
 ### Task 1: Kernel Entry Point & CPU Initialization
-**Duration:** 1-2 hours  
+**Duration:** 1-2 hours
 **What:** Get kernel executing, set up CPU environment
 
 **Subtasks:**
 - [ ] Verify kernel entry point is reached
   - Add serial output from kernel startup
   - Print "Kernel entry point" message
-  
+
 - [ ] Set up GDT (Global Descriptor Table)
   - Configure segment descriptors
   - Load GDT register
-  
+
 - [ ] Set up IDT (Interrupt Descriptor Table)
   - Prepare for interrupt handling
   - Install exception handlers (basic)
-  
+
 - [ ] Enable paging if not already enabled
   - Verify page tables from bootloader
   - Set up kernel page directory
@@ -86,18 +86,18 @@ Get the kernel executing beyond bootloader and performing basic system initializ
 ---
 
 ### Task 2: Serial Console Output (Early Logging)
-**Duration:** 30 minutes - 1 hour  
+**Duration:** 30 minutes - 1 hour
 **What:** Get kernel printing to serial console for debugging
 
 **Subtasks:**
 - [ ] Set up UART serial port (COM1: 0x3F8)
   - Initialize UART with correct baud rate (115200)
   - Configure data/stop/parity bits
-  
+
 - [ ] Implement early serial write function
   - Simple character output
   - String output helper
-  
+
 - [ ] Add kernel logging macros
   - `println!` equivalent for kernel
   - Different log levels (debug, info, warn)
@@ -114,18 +114,18 @@ Get the kernel executing beyond bootloader and performing basic system initializ
 ---
 
 ### Task 3: Memory Management Setup
-**Duration:** 1-2 hours  
+**Duration:** 1-2 hours
 **What:** Implement basic memory allocation and heap
 
 **Subtasks:**
 - [ ] Set up heap allocator
   - Choose allocator (linked-list, buddy, simple bump)
   - Initialize heap region
-  
+
 - [ ] Implement `alloc` support
   - Enable `alloc` crate for Rust collections
   - Use global allocator
-  
+
 - [ ] Add memory mapping utilities
   - Virtual to physical address conversion
   - Page allocation functions
@@ -142,7 +142,7 @@ Get the kernel executing beyond bootloader and performing basic system initializ
 ---
 
 ### Task 4: Interrupt & Exception Handling
-**Duration:** 1-2 hours  
+**Duration:** 1-2 hours
 **What:** Handle CPU exceptions and interrupts safely
 
 **Subtasks:**
@@ -150,11 +150,11 @@ Get the kernel executing beyond bootloader and performing basic system initializ
   - Double fault handler
   - Page fault handler
   - General protection fault handler
-  
+
 - [ ] Set up timer interrupt
   - Configure PIT (Programmable Interval Timer)
   - Handle periodic interrupts
-  
+
 - [ ] Add exception diagnostics
   - Print fault information
   - Register dump on crash
@@ -171,14 +171,14 @@ Get the kernel executing beyond bootloader and performing basic system initializ
 ---
 
 ### Task 5: Basic I/O Port Access
-**Duration:** 30 minutes  
+**Duration:** 30 minutes
 **What:** Safely access hardware I/O ports
 
 **Subtasks:**
 - [ ] Create I/O port abstraction
   - Read from I/O port
   - Write to I/O port
-  
+
 - [ ] Add device enumeration
   - Detect available hardware
   - Create device list
@@ -194,7 +194,7 @@ Get the kernel executing beyond bootloader and performing basic system initializ
 ---
 
 ### Task 6: Testing & Validation
-**Duration:** 1 hour  
+**Duration:** 1 hour
 **What:** Verify kernel initialization works
 
 **Subtasks:**
@@ -202,11 +202,11 @@ Get the kernel executing beyond bootloader and performing basic system initializ
   - Boot kernel in QEMU
   - Capture serial output
   - Verify all steps complete
-  
+
 - [ ] Test both boot paths
   - Kernel-mode direct boot
   - Installer-mode bootloader chainload
-  
+
 - [ ] Document boot sequence
   - Expected output at each stage
   - Troubleshooting guide
@@ -242,7 +242,7 @@ Phase 4 Kernel Initialization Flow:
 
 Bootloader (Phase 2)
     ↓ (Transfers control)
-    
+
 Kernel Entry Point (kernel-bare/src/main.rs)
     ├─ CPU Initialization
     │  ├─ Set up GDT
@@ -268,9 +268,9 @@ Kernel Entry Point (kernel-bare/src/main.rs)
     └─ Device I/O
        ├─ Port access
        └─ Device detection
-       
+
     ↓
-    
+
 Kernel Main Loop
     ├─ Idle loop
     ├─ Handle interrupts
@@ -461,7 +461,7 @@ cat qemu-kernel-boot-output.txt
 
 ---
 
-**Status:** Ready to begin Phase 4  
+**Status:** Ready to begin Phase 4
 **Next Action:** Start Task 1 - Kernel Entry Point & CPU Initialization
 
 For questions, see DOCUMENTATION_INDEX.md or check previous phase documentation.
