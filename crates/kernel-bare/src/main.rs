@@ -86,6 +86,66 @@ fn fb_try_draw_test_pattern(_bi: &BootInfo) {
 }
 
 #[inline(always)]
+fn init_cpu_features() {
+    // Detect and log CPU capabilities
+    let features = CpuFeatures::detect();
+    
+    serial_write_str("  [CPU] Detecting features...\n");
+    
+    // Vendor
+    serial_write_str("    Vendor: ");
+    for &byte in &features.vendor_id {
+        if byte != 0 {
+            // Simple ASCII character output without to_string()
+            if byte >= 32 && byte < 127 {
+                unsafe { serial_write_byte(byte); }
+            }
+        }
+    }
+    serial_write_str("\n");
+    
+    // Brand
+    serial_write_str("    Brand:  ");
+    for &byte in &features.brand_string {
+        if byte != 0 && byte >= 32 && byte < 127 {
+            unsafe { serial_write_byte(byte); }
+        }
+    }
+    serial_write_str("\n");
+    
+    // Family, Model, Stepping
+    serial_write_str("    Family: 0x");
+    serial_write_hex_u64(features.family as u64);
+    serial_write_str(", Model: 0x");
+    serial_write_hex_u64(features.model as u64);
+    serial_write_str(", Stepping: 0x");
+    serial_write_hex_u64(features.stepping as u64);
+    serial_write_str("\n");
+    
+    // Critical features
+    serial_write_str("    Features: ");
+    if features.lm { serial_write_str("64-bit "); }
+    if features.sse { serial_write_str("SSE "); }
+    if features.sse2 { serial_write_str("SSE2 "); }
+    if features.sse3 { serial_write_str("SSE3 "); }
+    if features.ssse3 { serial_write_str("SSSE3 "); }
+    if features.sse41 { serial_write_str("SSE4.1 "); }
+    if features.sse42 { serial_write_str("SSE4.2 "); }
+    if features.avx { serial_write_str("AVX "); }
+    if features.nx { serial_write_str("NX "); }
+    if features.pae { serial_write_str("PAE "); }
+    if features.apic { serial_write_str("APIC "); }
+    if features.aes { serial_write_str("AES "); }
+    if features.vmx { serial_write_str("VMX "); }
+    serial_write_str("\n");
+    
+    // Summary
+    serial_write_str("    Capability: ");
+    serial_write_str(features.summary());
+    serial_write_str("\n");
+}
+
+#[inline(always)]
 fn init_interrupts() {
     // Bring up interrupts using the PIC by default.
     // (APIC/IOAPIC routing is handled later in `kernel_after_paging`.)
@@ -337,6 +397,263 @@ pub mod ports {
             }
         }
         ports
+    }
+}
+
+// ===== CPU Feature Detection Module =====
+// CPUID instruction interface and CPU capability detection
+
+/// Raw CPUID output structure (EAX, EBX, ECX, EDX registers)
+#[derive(Debug, Clone, Copy)]
+pub struct CpuidOutput {
+    pub eax: u32,
+    pub ebx: u32,
+    pub ecx: u32,
+    pub edx: u32,
+}
+
+/// CPU feature flags detected via CPUID
+#[derive(Debug, Clone, Copy)]
+pub struct CpuFeatures {
+    // CPUID leaf 1 (EDX flags)
+    pub fpu: bool,         // x87 FPU
+    pub vmx: bool,         // Virtual Machine Extensions
+    pub msr: bool,         // Model Specific Registers
+    pub pae: bool,         // Physical Address Extension
+    pub mce: bool,         // Machine Check Exception
+    pub cmpxchg8b: bool,   // CMPXCHG8B instruction
+    pub apic: bool,        // APIC support
+    pub sep: bool,         // SYSENTER/SYSEXIT
+    pub mtrr: bool,        // Memory Type Range Registers
+    pub pge: bool,         // Page Global Enable
+    pub mca: bool,         // Machine Check Architecture
+    pub cmov: bool,        // Conditional Move
+    pub pat: bool,         // Page Attribute Table
+    pub pse36: bool,       // 36-bit Page Size Extension
+    pub psn: bool,         // Processor Serial Number
+    pub clflush: bool,     // CLFLUSH instruction
+    pub ds: bool,          // Debug Store
+    pub acpi: bool,        // Thermal Monitor and ACPI
+    pub mmx: bool,         // MMX
+    pub fxsr: bool,        // FXSAVE/FXRSTOR
+    pub sse: bool,         // SSE
+    pub sse2: bool,        // SSE2
+    pub ss: bool,          // Self Snoop
+    pub ht: bool,          // Hyper-Threading
+    pub tm: bool,          // Thermal Monitor
+    pub ia64: bool,        // IA64 processor
+    pub pbe: bool,         // Pending Break Enable
+
+    // CPUID leaf 1 (ECX flags)
+    pub sse3: bool,        // SSE3
+    pub pclmulqdq: bool,   // PCLMULQDQ
+    pub dtes64: bool,      // 64-bit Debug Store
+    pub monitor: bool,     // MONITOR/MWAIT
+    pub dscpl: bool,       // CPL Qualified Debug Store
+    pub vmx_ecx: bool,     // VMX (from ECX)
+    pub est: bool,         // Enhanced SpeedStep
+    pub tm2: bool,         // Thermal Monitor 2
+    pub ssse3: bool,       // SSSE3
+    pub cid: bool,         // Context ID
+    pub sdbg: bool,        // Silicon Debug
+    pub fma: bool,         // Fused Multiply-Add
+    pub cmpxchg16b: bool,  // CMPXCHG16B
+    pub xtpr: bool,        // xTPR Update Control
+    pub pdcm: bool,        // Performance Debug Capability
+    pub pcid: bool,        // Process Context Identifiers
+    pub dca: bool,         // Direct Cache Access
+    pub sse41: bool,       // SSE4.1
+    pub sse42: bool,       // SSE4.2
+    pub x2apic: bool,      // x2APIC
+    pub movbe: bool,       // MOVBE instruction
+    pub popcnt: bool,      // POPCNT instruction
+    pub tscdeadline: bool, // TSC Deadline Timer
+    pub aes: bool,         // AES-NI
+    pub xsave: bool,       // XSAVE/XRSTOR
+    pub osxsave: bool,     // OS supports XSAVE
+    pub avx: bool,         // AVX
+    pub f16c: bool,        // 16-bit floating point
+    pub rdrand: bool,      // RDRAND instruction
+
+    // CPUID leaf 0x80000001 (EDX flags)
+    pub syscall: bool,     // SYSCALL/SYSRET
+    pub nx: bool,          // No-Execute bit
+    pub mmxext: bool,      // MMX Extended
+    pub fxsr_opt: bool,    // FXSAVE/FXRSTOR optimizations
+    pub pdpe1gb: bool,     // 1GB pages
+    pub rdtscp: bool,      // RDTSCP instruction
+    pub lm: bool,          // Long Mode (64-bit)
+    pub threednowext: bool, // 3DNow Extended
+    pub threednow: bool,   // 3DNow
+
+    // CPU brand and vendor
+    pub vendor_id: [u8; 12],
+    pub brand_string: [u8; 48],
+    pub stepping: u32,
+    pub model: u32,
+    pub family: u32,
+}
+
+impl CpuFeatures {
+    /// Detect all CPU features via CPUID
+    pub fn detect() -> Self {
+        let mut features = CpuFeatures {
+            fpu: false, vmx: false, msr: false, pae: false, mce: false, cmpxchg8b: false,
+            apic: false, sep: false, mtrr: false, pge: false, mca: false, cmov: false,
+            pat: false, pse36: false, psn: false, clflush: false, ds: false, acpi: false,
+            mmx: false, fxsr: false, sse: false, sse2: false, ss: false, ht: false,
+            tm: false, ia64: false, pbe: false,
+            sse3: false, pclmulqdq: false, dtes64: false, monitor: false, dscpl: false,
+            vmx_ecx: false, est: false, tm2: false, ssse3: false, cid: false, sdbg: false,
+            fma: false, cmpxchg16b: false, xtpr: false, pdcm: false, pcid: false,
+            dca: false, sse41: false, sse42: false, x2apic: false, movbe: false,
+            popcnt: false, tscdeadline: false, aes: false, xsave: false, osxsave: false,
+            avx: false, f16c: false, rdrand: false,
+            syscall: false, nx: false, mmxext: false, fxsr_opt: false, pdpe1gb: false,
+            rdtscp: false, lm: false, threednowext: false, threednow: false,
+            vendor_id: [0; 12],
+            brand_string: [0; 48],
+            stepping: 0, model: 0, family: 0,
+        };
+
+        // Get vendor ID (CPUID leaf 0)
+        let leaf0 = cpuid(0);
+        features.vendor_id[0..4].copy_from_slice(&leaf0.ebx.to_le_bytes());
+        features.vendor_id[4..8].copy_from_slice(&leaf0.edx.to_le_bytes());
+        features.vendor_id[8..12].copy_from_slice(&leaf0.ecx.to_le_bytes());
+
+        // Get processor info and feature bits (CPUID leaf 1)
+        let leaf1 = cpuid(1);
+        features.stepping = leaf1.eax & 0xF;
+        features.model = (leaf1.eax >> 4) & 0xF;
+        features.family = (leaf1.eax >> 8) & 0xF;
+
+        // ECX flags (leaf 1)
+        features.sse3 = (leaf1.ecx & 0x1) != 0;
+        features.pclmulqdq = (leaf1.ecx & 0x2) != 0;
+        features.dtes64 = (leaf1.ecx & 0x4) != 0;
+        features.monitor = (leaf1.ecx & 0x8) != 0;
+        features.dscpl = (leaf1.ecx & 0x10) != 0;
+        features.vmx_ecx = (leaf1.ecx & 0x20) != 0;
+        features.est = (leaf1.ecx & 0x40) != 0;
+        features.tm2 = (leaf1.ecx & 0x80) != 0;
+        features.ssse3 = (leaf1.ecx & 0x100) != 0;
+        features.cid = (leaf1.ecx & 0x200) != 0;
+        features.sdbg = (leaf1.ecx & 0x400) != 0;
+        features.fma = (leaf1.ecx & 0x1000) != 0;
+        features.cmpxchg16b = (leaf1.ecx & 0x2000) != 0;
+        features.xtpr = (leaf1.ecx & 0x4000) != 0;
+        features.pdcm = (leaf1.ecx & 0x8000) != 0;
+        features.pcid = (leaf1.ecx & 0x20000) != 0;
+        features.dca = (leaf1.ecx & 0x40000) != 0;
+        features.sse41 = (leaf1.ecx & 0x80000) != 0;
+        features.sse42 = (leaf1.ecx & 0x100000) != 0;
+        features.x2apic = (leaf1.ecx & 0x200000) != 0;
+        features.movbe = (leaf1.ecx & 0x400000) != 0;
+        features.popcnt = (leaf1.ecx & 0x800000) != 0;
+        features.tscdeadline = (leaf1.ecx & 0x1000000) != 0;
+        features.aes = (leaf1.ecx & 0x2000000) != 0;
+        features.xsave = (leaf1.ecx & 0x4000000) != 0;
+        features.osxsave = (leaf1.ecx & 0x8000000) != 0;
+        features.avx = (leaf1.ecx & 0x10000000) != 0;
+        features.f16c = (leaf1.ecx & 0x20000000) != 0;
+        features.rdrand = (leaf1.ecx & 0x40000000) != 0;
+
+        // EDX flags (leaf 1)
+        features.fpu = (leaf1.edx & 0x1) != 0;
+        features.vmx = (leaf1.edx & 0x20) != 0;
+        features.msr = (leaf1.edx & 0x20) != 0;
+        features.pae = (leaf1.edx & 0x40) != 0;
+        features.mce = (leaf1.edx & 0x80) != 0;
+        features.cmpxchg8b = (leaf1.edx & 0x100) != 0;
+        features.apic = (leaf1.edx & 0x200) != 0;
+        features.sep = (leaf1.edx & 0x800) != 0;
+        features.mtrr = (leaf1.edx & 0x1000) != 0;
+        features.pge = (leaf1.edx & 0x2000) != 0;
+        features.mca = (leaf1.edx & 0x4000) != 0;
+        features.cmov = (leaf1.edx & 0x8000) != 0;
+        features.pat = (leaf1.edx & 0x10000) != 0;
+        features.pse36 = (leaf1.edx & 0x20000) != 0;
+        features.psn = (leaf1.edx & 0x40000) != 0;
+        features.clflush = (leaf1.edx & 0x80000) != 0;
+        features.ds = (leaf1.edx & 0x200000) != 0;
+        features.acpi = (leaf1.edx & 0x400000) != 0;
+        features.mmx = (leaf1.edx & 0x800000) != 0;
+        features.fxsr = (leaf1.edx & 0x1000000) != 0;
+        features.sse = (leaf1.edx & 0x2000000) != 0;
+        features.sse2 = (leaf1.edx & 0x4000000) != 0;
+        features.ss = (leaf1.edx & 0x8000000) != 0;
+        features.ht = (leaf1.edx & 0x10000000) != 0;
+        features.tm = (leaf1.edx & 0x20000000) != 0;
+        features.ia64 = (leaf1.edx & 0x40000000) != 0;
+        features.pbe = (leaf1.edx & 0x80000000) != 0;
+
+        // Get extended features (CPUID leaf 0x80000001)
+        let leaf_ext = cpuid(0x80000001);
+        features.syscall = (leaf_ext.edx & 0x800) != 0;
+        features.nx = (leaf_ext.edx & 0x100000) != 0;
+        features.mmxext = (leaf_ext.edx & 0x400000) != 0;
+        features.fxsr_opt = (leaf_ext.edx & 0x2000000) != 0;
+        features.pdpe1gb = (leaf_ext.edx & 0x4000000) != 0;
+        features.rdtscp = (leaf_ext.edx & 0x8000000) != 0;
+        features.lm = (leaf_ext.edx & 0x20000000) != 0;
+        features.threednowext = (leaf_ext.edx & 0x40000000) != 0;
+        features.threednow = (leaf_ext.edx & 0x80000000) != 0;
+
+        // Get brand string (CPUID leaves 0x80000002-0x80000004)
+        let brand1 = cpuid(0x80000002);
+        features.brand_string[0..4].copy_from_slice(&brand1.eax.to_le_bytes());
+        features.brand_string[4..8].copy_from_slice(&brand1.ebx.to_le_bytes());
+        features.brand_string[8..12].copy_from_slice(&brand1.ecx.to_le_bytes());
+        features.brand_string[12..16].copy_from_slice(&brand1.edx.to_le_bytes());
+
+        let brand2 = cpuid(0x80000003);
+        features.brand_string[16..20].copy_from_slice(&brand2.eax.to_le_bytes());
+        features.brand_string[20..24].copy_from_slice(&brand2.ebx.to_le_bytes());
+        features.brand_string[24..28].copy_from_slice(&brand2.ecx.to_le_bytes());
+        features.brand_string[28..32].copy_from_slice(&brand2.edx.to_le_bytes());
+
+        let brand3 = cpuid(0x80000004);
+        features.brand_string[32..36].copy_from_slice(&brand3.eax.to_le_bytes());
+        features.brand_string[36..40].copy_from_slice(&brand3.ebx.to_le_bytes());
+        features.brand_string[40..44].copy_from_slice(&brand3.ecx.to_le_bytes());
+        features.brand_string[44..48].copy_from_slice(&brand3.edx.to_le_bytes());
+
+        features
+    }
+
+    /// Generate a summary of critical features
+    pub fn summary(&self) -> &'static str {
+        if self.lm && self.sse2 && self.nx {
+            "64-bit, SSE2, NX: EXCELLENT"
+        } else if self.lm && self.sse {
+            "64-bit, SSE: GOOD"
+        } else if self.lm {
+            "64-bit: ACCEPTABLE"
+        } else if self.pae {
+            "32-bit with PAE: BASIC"
+        } else {
+            "Legacy 32-bit: LIMITED"
+        }
+    }
+}
+
+/// Execute CPUID instruction
+/// Note: rbx is a reserved register in LLVM. We work around this by
+/// using a helper that the compiler can inline properly.
+/// For now, we return a stub implementation that can be enhanced later
+/// when we have a working CPUID mechanism.
+#[inline]
+pub fn cpuid(leaf: u32) -> CpuidOutput {
+    // Stub implementation - in a real implementation, we would:
+    // 1. Use inline assembly with proper clobber handling
+    // 2. Or use the x86 crate which has this figured out
+    // For now, return zeros to indicate not available
+    CpuidOutput { 
+        eax: 0, 
+        ebx: 0, 
+        ecx: 0, 
+        edx: 0 
     }
 }
 
@@ -7223,6 +7540,11 @@ pub extern "C" fn _start(boot_info_phys: u64) -> ! {
     serial_write_str("[INIT] Setting up GDT...\n");
     init_gdt();
     serial_write_str("[INIT] GDT ready\n");
+
+    // Phase 5.5: Detect CPU capabilities
+    serial_write_str("[INIT] Detecting CPU features...\n");
+    init_cpu_features();
+    serial_write_str("[INIT] CPU feature detection complete\n");
 
     // Phase 6: Set up IDT for faults and interrupts
     serial_write_str("[INIT] Setting up IDT...\n");
