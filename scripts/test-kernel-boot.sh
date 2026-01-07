@@ -46,18 +46,18 @@ echo ""
 if [ -f "$LOG" ]; then
     echo "Log file exists: $(ls -lh "$LOG" | awk '{print $5}')"
     echo ""
-    
+
     # Look for RayOS kernel messages
     echo "--- RayOS Kernel Messages ---"
     grep "RayOS\|INIT\|╔" "$LOG" 2>/dev/null | head -20 || echo "No RayOS kernel output detected"
-    
+
     echo ""
     echo "--- Full Serial Output (last 50 lines) ---"
     tail -50 "$LOG"
-    
+
     echo ""
     echo "═══════════════════════════════════════════════════════════════"
-    
+
     # Analyze results
     if grep -q "RayOS kernel\|INIT\|╔════" "$LOG"; then
         echo "✓ SUCCESS: Kernel startup messages detected!"

@@ -9609,6 +9609,31 @@ fn init_memory() {
     // This avoids depending on paging/HHDM/physical allocator state.
     let heap_ptr = unsafe { HEAP.0.as_ptr() as usize };
     HEAP_ALLOCATOR.lock().init(heap_ptr, HEAP_SIZE);
+    
+    // Verify allocator is working
+    serial_write_str("[MEM] Heap allocator initialized at 0x");
+    serial_write_hex_u64(heap_ptr as u64);
+    serial_write_str(" (size: ");
+    serial_write_hex_u64(HEAP_SIZE as u64);
+    serial_write_str(" bytes)\n");
+    
+    // Test allocation
+    if let Some(test_ptr) = kalloc(64, 8) {
+        serial_write_str("[MEM] Test allocation successful: 0x");
+        serial_write_hex_u64(test_ptr as u64);
+        serial_write_str("\n");
+    } else {
+        serial_write_str("[MEM] WARNING: Test allocation failed\n");
+    }
+    
+    let (used, total, pages) = memory_stats();
+    serial_write_str("[MEM] Stats: ");
+    serial_write_hex_u64(used as u64);
+    serial_write_str("/");
+    serial_write_hex_u64(total as u64);
+    serial_write_str(" bytes used, ");
+    serial_write_hex_u64(pages as u64);
+    serial_write_str(" pages allocated\n");
 }
 
 /// Public allocation function for kernel use
