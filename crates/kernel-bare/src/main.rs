@@ -2463,38 +2463,38 @@ impl FAT32FileSystem {
     pub fn find_in_directory(&self, start_cluster: u32, _target_name: &str) -> (Option<[u8; 32]>, u32) {
         // For now, only support root directory (cluster 0)
         // TODO: Full implementation for any directory cluster
-        
+
         if start_cluster != 0 {
             return (None, 0);  // Only root directory for now
         }
-        
+
         // Calculate root directory location for FAT32
         let root_dir_start = self.reserved_sectors + (self.fat_size * self.num_fats);
-        
+
         // Root directory size calculation
         // Each entry is 32 bytes, root_entries tells us how many entries
         let root_dir_bytes = self.root_entries * 32;
         let root_dir_sectors = (root_dir_bytes + self.bytes_per_sector - 1) / self.bytes_per_sector;
-        
+
         let entries_per_sector = self.bytes_per_sector / 32;
-        
+
         // For root directory: check root_dir_sectors starting at root_dir_start
         for sector_offset in 0..root_dir_sectors {
             let _sector = root_dir_start + sector_offset;
-            
+
             // Would read sector here with block device
             // For now, simulate checking directory entries
             for entry_idx in 0..entries_per_sector {
                 // Entry byte offset in root directory
                 let _entry_offset = sector_offset * self.bytes_per_sector + entry_idx * 32;
-                
+
                 // TODO: Read entry from disk and compare
                 // if entry_name_matches && entry_offset < root_dir_bytes {
                 //     return (Some(entry_bytes), entry_offset);
                 // }
             }
         }
-        
+
         (None, 0)  // Not found
     }
 
@@ -2512,32 +2512,32 @@ impl FAT32FileSystem {
         //    d. Make it the current directory
         // 4. Find last component (file or dir)
         // 5. Return its entry bytes
-        
+
         // Normalize path: remove leading/trailing slashes
         let normalized = path.trim_matches('/');
         if normalized.is_empty() {
             // Root directory requested - TODO: return root directory entry
             return (None, 0);
         }
-        
+
         // Count path components
         let component_count = normalized.matches('/').count() + 1;
         if component_count == 0 {
             return (None, 0);
         }
-        
+
         // Start at root directory
         let mut current_cluster = 0u32;
         let mut component_idx = 0;
-        
+
         // Walk through path components
         for component in normalized.split('/') {
             component_idx += 1;
             let is_last = component_idx == component_count;
-            
+
             // Find component in current directory
             let (entry_opt, _offset) = self.find_in_directory(current_cluster, component);
-            
+
             match entry_opt {
                 Some(entry) => {
                     if is_last {
@@ -2557,7 +2557,7 @@ impl FAT32FileSystem {
                 }
             }
         }
-        
+
         (None, 0)  // Should not reach here
     }
 }
@@ -2566,7 +2566,7 @@ impl FAT32FileSystem {
 /// Example: "r--a" for read-only and archive, or "d---" for directory
 pub fn format_file_attributes(entry_bytes: &[u8; 32]) -> [u8; 4] {
     let mut result = [b'-'; 4];  // Default: "----"
-    
+
     if FAT32FileSystem::is_read_only(entry_bytes) {
         result[0] = b'r';
     }
@@ -2579,7 +2579,7 @@ pub fn format_file_attributes(entry_bytes: &[u8; 32]) -> [u8; 4] {
     if FAT32FileSystem::is_archive(entry_bytes) {
         result[3] = b'a';
     }
-    
+
     result
 }
 
@@ -2608,26 +2608,26 @@ pub fn parse_file_path(path: &str) -> (&str, &str) {
 /// Converts "test.txt" -> "TEST    TXT" (8 bytes name, 3 bytes ext)
 pub fn filename_to_8_3(filename: &str) -> [u8; 11] {
     let mut result = [0x20u8; 11];  // Pad with spaces
-    
+
     // Split filename and extension
     let (name, ext) = if let Some(pos) = filename.rfind('.') {
         (&filename[..pos], &filename[pos + 1..])
     } else {
         (filename, "")
     };
-    
+
     // Copy name (max 8 chars, uppercase)
     let name_len = core::cmp::min(name.len(), 8);
     for (i, &byte) in name.as_bytes()[..name_len].iter().enumerate() {
         result[i] = byte.to_ascii_uppercase();
     }
-    
+
     // Copy extension (max 3 chars, uppercase)
     let ext_len = core::cmp::min(ext.len(), 3);
     for (i, &byte) in ext.as_bytes()[..ext_len].iter().enumerate() {
         result[8 + i] = byte.to_ascii_uppercase();
     }
-    
+
     result
 }
 
@@ -2636,7 +2636,7 @@ pub fn filename_to_8_3(filename: &str) -> [u8; 11] {
 pub fn filename_from_8_3(entry_bytes: &[u8; 32]) -> [u8; 256] {
     let mut result = [0u8; 256];
     let mut pos = 0;
-    
+
     // Copy and trim name portion (bytes 0-7)
     for i in 0..8 {
         let byte = entry_bytes[i];
@@ -2649,16 +2649,16 @@ pub fn filename_from_8_3(entry_bytes: &[u8; 32]) -> [u8; 256] {
             break;
         }
     }
-    
+
     // Add dot if extension exists (bytes 8-10)
     let ext_start = 8;
     let has_ext = entry_bytes[ext_start] != 0x20 && entry_bytes[ext_start] != 0;
-    
+
     if has_ext && pos < 256 {
         result[pos] = b'.';
         pos += 1;
     }
-    
+
     // Copy extension (bytes 8-10)
     for i in ext_start..ext_start + 3 {
         let byte = entry_bytes[i];
@@ -2669,7 +2669,7 @@ pub fn filename_from_8_3(entry_bytes: &[u8; 32]) -> [u8; 256] {
             }
         }
     }
-    
+
     result
 }
 
@@ -3245,6 +3245,7 @@ pub fn get_process_manager() -> Option<&'static mut ProcessManager> {
 
 /// System call numbers
 pub mod syscall {
+    // Phase 9A Task 1-3: Basic syscalls
     pub const SYS_EXIT: u64 = 0;
     pub const SYS_WRITE: u64 = 1;
     pub const SYS_READ: u64 = 2;
@@ -3256,6 +3257,47 @@ pub mod syscall {
     pub const SYS_GETPID: u64 = 8;
     pub const SYS_GETPPID: u64 = 9;
     pub const SYS_KILL: u64 = 10;
+
+    // Phase 9A Task 4: Extended syscalls
+    // Process Management
+    pub const SYS_EXECVE: u64 = 11;        // Execute with arguments
+    pub const SYS_WAIT: u64 = 12;          // Wait for child (simplified waitpid)
+    pub const SYS_SETPGID: u64 = 13;       // Set process group
+    pub const SYS_SETSID: u64 = 14;        // Create session
+    pub const SYS_CLONE: u64 = 15;         // Clone with flags
+
+    // File System
+    pub const SYS_LSEEK: u64 = 16;         // Seek in file
+    pub const SYS_STAT: u64 = 17;          // File statistics
+    pub const SYS_FSTAT: u64 = 18;         // File statistics by FD
+    pub const SYS_CHMOD: u64 = 19;         // Change permissions
+    pub const SYS_UNLINK: u64 = 20;        // Delete file
+    pub const SYS_MKDIR: u64 = 21;         // Create directory
+    pub const SYS_RMDIR: u64 = 22;         // Remove directory
+
+    // Memory Management
+    pub const SYS_MMAP: u64 = 23;          // Memory map
+    pub const SYS_MUNMAP: u64 = 24;        // Unmap memory
+    pub const SYS_BRK: u64 = 25;           // Heap management
+    pub const SYS_MPROTECT: u64 = 26;      // Change memory protection
+
+    // Process Control
+    pub const SYS_SIGNAL: u64 = 27;        // Register signal handler
+    pub const SYS_PAUSE: u64 = 28;         // Wait for signal
+    pub const SYS_ALARM: u64 = 29;         // Set alarm timer
+
+    // System Information
+    pub const SYS_UNAME: u64 = 30;         // System information
+    pub const SYS_GETRUSAGE: u64 = 31;     // Resource usage
+    pub const SYS_TIMES: u64 = 32;         // Process times
+    pub const SYS_SYSCONF: u64 = 33;       // System configuration
+    pub const SYS_GETTIMEOFDAY: u64 = 34;  // Get time
+    pub const SYS_GETUID: u64 = 35;        // Get user ID
+    pub const SYS_GETEUID: u64 = 36;       // Get effective user ID
+    pub const SYS_GETGID: u64 = 37;        // Get group ID
+    pub const SYS_GETEGID: u64 = 38;       // Get effective group ID
+    pub const SYS_SETUID: u64 = 39;        // Set user ID
+    pub const SYS_SETGID: u64 = 40;        // Set group ID
 }
 
 /// System call argument structure
@@ -3311,36 +3353,76 @@ type SyscallHandler = fn(&SyscallArgs) -> SyscallResult;
 
 /// System call dispatcher
 pub struct SyscallDispatcher {
-    handlers: [Option<SyscallHandler>; 64],
+    handlers: [Option<SyscallHandler>; 128],  // Extended to support more syscalls
 }
 
 impl SyscallDispatcher {
     /// Create a new syscall dispatcher
     pub fn new() -> Self {
         let mut dispatcher = SyscallDispatcher {
-            handlers: [None; 64],
+            handlers: [None; 128],
         };
 
-        // Register built-in syscalls
+        // Phase 9A Task 1-3: Register built-in syscalls
         dispatcher.handlers[syscall::SYS_EXIT as usize] = Some(sys_exit);
         dispatcher.handlers[syscall::SYS_WRITE as usize] = Some(sys_write);
         dispatcher.handlers[syscall::SYS_READ as usize] = Some(sys_read);
         dispatcher.handlers[syscall::SYS_GETPID as usize] = Some(sys_getpid);
         dispatcher.handlers[syscall::SYS_GETPPID as usize] = Some(sys_getppid);
 
+        // Phase 9A Task 4: Register extended syscalls
+        // Process Management
+        dispatcher.handlers[syscall::SYS_EXECVE as usize] = Some(sys_execve);
+        dispatcher.handlers[syscall::SYS_WAIT as usize] = Some(sys_wait);
+        dispatcher.handlers[syscall::SYS_SETPGID as usize] = Some(sys_setpgid);
+        dispatcher.handlers[syscall::SYS_SETSID as usize] = Some(sys_setsid);
+
+        // File System
+        dispatcher.handlers[syscall::SYS_LSEEK as usize] = Some(sys_lseek);
+        dispatcher.handlers[syscall::SYS_STAT as usize] = Some(sys_stat);
+        dispatcher.handlers[syscall::SYS_FSTAT as usize] = Some(sys_fstat);
+        dispatcher.handlers[syscall::SYS_CHMOD as usize] = Some(sys_chmod);
+        dispatcher.handlers[syscall::SYS_UNLINK as usize] = Some(sys_unlink);
+        dispatcher.handlers[syscall::SYS_MKDIR as usize] = Some(sys_mkdir);
+        dispatcher.handlers[syscall::SYS_RMDIR as usize] = Some(sys_rmdir);
+
+        // Memory Management
+        dispatcher.handlers[syscall::SYS_MMAP as usize] = Some(sys_mmap);
+        dispatcher.handlers[syscall::SYS_MUNMAP as usize] = Some(sys_munmap);
+        dispatcher.handlers[syscall::SYS_BRK as usize] = Some(sys_brk);
+        dispatcher.handlers[syscall::SYS_MPROTECT as usize] = Some(sys_mprotect);
+
+        // Process Control
+        dispatcher.handlers[syscall::SYS_SIGNAL as usize] = Some(sys_signal);
+        dispatcher.handlers[syscall::SYS_PAUSE as usize] = Some(sys_pause);
+        dispatcher.handlers[syscall::SYS_ALARM as usize] = Some(sys_alarm);
+
+        // System Information
+        dispatcher.handlers[syscall::SYS_UNAME as usize] = Some(sys_uname);
+        dispatcher.handlers[syscall::SYS_GETRUSAGE as usize] = Some(sys_getrusage);
+        dispatcher.handlers[syscall::SYS_TIMES as usize] = Some(sys_times);
+        dispatcher.handlers[syscall::SYS_SYSCONF as usize] = Some(sys_sysconf);
+        dispatcher.handlers[syscall::SYS_GETTIMEOFDAY as usize] = Some(sys_gettimeofday);
+        dispatcher.handlers[syscall::SYS_GETUID as usize] = Some(sys_getuid);
+        dispatcher.handlers[syscall::SYS_GETEUID as usize] = Some(sys_geteuid);
+        dispatcher.handlers[syscall::SYS_GETGID as usize] = Some(sys_getgid);
+        dispatcher.handlers[syscall::SYS_GETEGID as usize] = Some(sys_getegid);
+        dispatcher.handlers[syscall::SYS_SETUID as usize] = Some(sys_setuid);
+        dispatcher.handlers[syscall::SYS_SETGID as usize] = Some(sys_setgid);
+
         dispatcher
     }
 
     /// Register a syscall handler
     pub fn register(&mut self, number: u64, handler: SyscallHandler) {
-        if number < 64 {
+        if number < 128 {
             self.handlers[number as usize] = Some(handler);
         }
     }
 
     /// Dispatch a syscall
     pub fn dispatch(&self, number: u64, args: &SyscallArgs) -> SyscallResult {
-        if number < 64 {
+        if number < 128 {
             if let Some(handler) = self.handlers[number as usize] {
                 return handler(args);
             }
@@ -3426,6 +3508,329 @@ fn sys_getppid(_args: &SyscallArgs) -> SyscallResult {
         }
     }
     SyscallResult::error(1)  // EPERM
+}
+
+// ============================================================================
+// Phase 9A Task 4: Extended Syscall Implementations
+// ============================================================================
+
+/// SYS_EXECVE - Execute program with arguments
+fn sys_execve(_args: &SyscallArgs) -> SyscallResult {
+    // Arguments:
+    // arg0: const char *filename - program path
+    // arg1: char *const argv[] - argument array
+    // arg2: char *const envp[] - environment array
+    
+    // Stub implementation - actual implementation would:
+    // 1. Validate and copy arguments from user space
+    // 2. Load ELF binary from filesystem
+    // 3. Set up new process memory space
+    // 4. Jump to entry point
+    // 5. Only return on error
+    
+    SyscallResult::error(38)  // ENOSYS - not implemented
+}
+
+/// SYS_WAIT - Wait for child process
+fn sys_wait(args: &SyscallArgs) -> SyscallResult {
+    // Arguments:
+    // arg0: int *wstatus - exit status location
+    
+    // Simplified wait implementation
+    // Real implementation would:
+    // 1. Find any child process
+    // 2. Wait for it to exit
+    // 3. Return child PID on success
+    
+    let _wstatus_ptr = args.arg0;
+    
+    if let Some(pm) = get_process_manager() {
+        let current_pid = pm.current_pid;
+        // Look for child processes
+        for (pid, pcb_opt) in pm.processes.iter().enumerate() {
+            if let Some(pcb) = pcb_opt {
+                if pcb.ppid == current_pid as u32 && pcb.state == ProcessState::Terminated {
+                    return SyscallResult::ok(pid as u64);
+                }
+            }
+        }
+    }
+    
+    SyscallResult::error(10)  // ECHILD - no child processes
+}
+
+/// SYS_SETPGID - Set process group
+fn sys_setpgid(args: &SyscallArgs) -> SyscallResult {
+    let _pid = args.arg0;
+    let _pgid = args.arg1;
+    
+    // Stub: Process groups not fully implemented
+    // In a real implementation, would:
+    // 1. Find process by PID
+    // 2. Set its process group
+    // 3. Return success
+    
+    SyscallResult::ok(0)
+}
+
+/// SYS_SETSID - Create session
+fn sys_setsid(_args: &SyscallArgs) -> SyscallResult {
+    // Stub: Session management not implemented
+    // In a real implementation, would:
+    // 1. Create new session
+    // 2. Make process session leader
+    // 3. Return session ID
+    
+    if let Some(pm) = get_process_manager() {
+        return SyscallResult::ok(pm.current_pid as u64);
+    }
+    
+    SyscallResult::error(1)  // EPERM
+}
+
+/// SYS_LSEEK - Seek within file
+fn sys_lseek(args: &SyscallArgs) -> SyscallResult {
+    let _fd = args.arg0;        // File descriptor
+    let _offset = args.arg1;    // Offset
+    let _whence = args.arg2;    // SEEK_SET, SEEK_CUR, SEEK_END
+    
+    // Stub: File seeking not implemented
+    // In a real implementation, would:
+    // 1. Look up file descriptor
+    // 2. Update file position
+    // 3. Return new position
+    
+    SyscallResult::error(9)  // EBADF - bad file descriptor
+}
+
+/// SYS_STAT - File statistics
+fn sys_stat(args: &SyscallArgs) -> SyscallResult {
+    let _path = args.arg0;      // const char *path
+    let _stat_buf = args.arg1;  // struct stat *
+    
+    // Stub: File stat not implemented
+    // Real implementation would read file metadata
+    
+    SyscallResult::error(2)  // ENOENT - file not found
+}
+
+/// SYS_FSTAT - File statistics by FD
+fn sys_fstat(args: &SyscallArgs) -> SyscallResult {
+    let _fd = args.arg0;        // File descriptor
+    let _stat_buf = args.arg1;  // struct stat *
+    
+    // Stub: File stat not implemented
+    SyscallResult::error(9)  // EBADF
+}
+
+/// SYS_CHMOD - Change file permissions
+fn sys_chmod(args: &SyscallArgs) -> SyscallResult {
+    let _path = args.arg0;      // const char *path
+    let _mode = args.arg1;      // mode_t mode
+    
+    // Stub: Permission changes not implemented
+    SyscallResult::error(2)  // ENOENT
+}
+
+/// SYS_UNLINK - Delete file
+fn sys_unlink(args: &SyscallArgs) -> SyscallResult {
+    let _path = args.arg0;  // const char *path
+    
+    // Would call fs_delete_file or similar
+    SyscallResult::error(2)  // ENOENT
+}
+
+/// SYS_MKDIR - Create directory
+fn sys_mkdir(args: &SyscallArgs) -> SyscallResult {
+    let _path = args.arg0;  // const char *path
+    let _mode = args.arg1;  // mode_t mode
+    
+    // Would call fs_mkdir
+    SyscallResult::error(2)  // ENOENT
+}
+
+/// SYS_RMDIR - Remove directory
+fn sys_rmdir(args: &SyscallArgs) -> SyscallResult {
+    let _path = args.arg0;  // const char *path
+    
+    // Would call fs_rmdir
+    SyscallResult::error(2)  // ENOENT
+}
+
+/// SYS_MMAP - Memory map
+fn sys_mmap(args: &SyscallArgs) -> SyscallResult {
+    let _addr = args.arg0;      // void *addr - desired address (0 = auto)
+    let _length = args.arg1;    // size_t length
+    let _prot = args.arg2;      // int prot - PROT_READ, PROT_WRITE, PROT_EXEC
+    let _flags = args.arg3;     // int flags - MAP_SHARED, MAP_PRIVATE, MAP_ANON
+    let _fd = args.arg4;        // int fd
+    let _offset = args.arg5;    // off_t offset
+    
+    // Stub: Memory mapping not implemented
+    // Real implementation would:
+    // 1. Allocate virtual memory
+    // 2. Link to file backing if provided
+    // 3. Return mapped address
+    
+    SyscallResult::ok(0x1000)  // Return fake address
+}
+
+/// SYS_MUNMAP - Unmap memory
+fn sys_munmap(args: &SyscallArgs) -> SyscallResult {
+    let _addr = args.arg0;      // void *addr
+    let _length = args.arg1;    // size_t length
+    
+    // Stub: Memory unmapping not implemented
+    SyscallResult::ok(0)
+}
+
+/// SYS_BRK - Heap management
+fn sys_brk(args: &SyscallArgs) -> SyscallResult {
+    let _addr = args.arg0;  // void *addr - new break point (0 = query)
+    
+    // Stub: Heap management not implemented
+    // Real implementation would adjust process heap
+    SyscallResult::ok(0x2000)  // Return fake break point
+}
+
+/// SYS_MPROTECT - Change memory protection
+fn sys_mprotect(args: &SyscallArgs) -> SyscallResult {
+    let _addr = args.arg0;      // void *addr
+    let _length = args.arg1;    // size_t length
+    let _prot = args.arg2;      // int prot - PROT_READ, PROT_WRITE, PROT_EXEC
+    
+    // Stub: Memory protection changes not implemented
+    SyscallResult::ok(0)
+}
+
+/// SYS_SIGNAL - Register signal handler
+fn sys_signal(_args: &SyscallArgs) -> SyscallResult {
+    // Stub: Signal handling not implemented
+    SyscallResult::ok(0)
+}
+
+/// SYS_PAUSE - Wait for signal
+fn sys_pause(_args: &SyscallArgs) -> SyscallResult {
+    // Stub: Signal handling not implemented
+    // Would block process until signal arrives
+    SyscallResult::error(4)  // EINTR
+}
+
+/// SYS_ALARM - Set alarm timer
+fn sys_alarm(args: &SyscallArgs) -> SyscallResult {
+    let _seconds = args.arg0;  // unsigned int seconds
+    
+    // Stub: Timer not implemented
+    // Real implementation would:
+    // 1. Set timer for seconds
+    // 2. Deliver SIGALRM when expired
+    // 3. Return remaining time from previous alarm
+    
+    SyscallResult::ok(0)
+}
+
+/// SYS_UNAME - System information
+fn sys_uname(args: &SyscallArgs) -> SyscallResult {
+    let _utsname_ptr = args.arg0;  // struct utsname *
+    
+    // Stub: System information not filled
+    // Real implementation would fill:
+    // - sysname: "RayOS"
+    // - release: "1.0"
+    // - version: build date
+    // - machine: "x86_64"
+    // - etc.
+    
+    SyscallResult::ok(0)
+}
+
+/// SYS_GETRUSAGE - Resource usage
+fn sys_getrusage(args: &SyscallArgs) -> SyscallResult {
+    let _who = args.arg0;              // int who - RUSAGE_SELF, RUSAGE_CHILDREN
+    let _usage_ptr = args.arg1;        // struct rusage *
+    
+    // Stub: Resource usage tracking not implemented
+    SyscallResult::ok(0)
+}
+
+/// SYS_TIMES - Process times
+fn sys_times(args: &SyscallArgs) -> SyscallResult {
+    let _tms_ptr = args.arg0;  // struct tms *
+    
+    // Stub: Process timing not implemented
+    // Real implementation would return:
+    // - User CPU time
+    // - System CPU time
+    // - Children user time
+    // - Children system time
+    
+    SyscallResult::ok(100)  // Return fake tick count
+}
+
+/// SYS_SYSCONF - System configuration
+fn sys_sysconf(args: &SyscallArgs) -> SyscallResult {
+    let name = args.arg0 as i32;  // int name - _SC_* constants
+    
+    // Return common configuration values
+    match name {
+        1 => SyscallResult::ok(1024),           // _SC_ARG_MAX
+        2 => SyscallResult::ok(256),            // _SC_CHILD_MAX
+        4 => SyscallResult::ok(256),            // _SC_CLK_TCK
+        5 => SyscallResult::ok(256),            // _SC_NGROUPS_MAX
+        6 => SyscallResult::ok(256),            // _SC_OPEN_MAX
+        _ => SyscallResult::error(22),          // EINVAL
+    }
+}
+
+/// SYS_GETTIMEOFDAY - Get time
+fn sys_gettimeofday(args: &SyscallArgs) -> SyscallResult {
+    let _tv_ptr = args.arg0;   // struct timeval *
+    let _tz_ptr = args.arg1;   // struct timezone *
+    
+    // Stub: Time not implemented
+    // Real implementation would get system time
+    SyscallResult::ok(0)
+}
+
+/// SYS_GETUID - Get user ID
+fn sys_getuid(_args: &SyscallArgs) -> SyscallResult {
+    // For now, return root (UID 0)
+    SyscallResult::ok(0)
+}
+
+/// SYS_GETEUID - Get effective user ID
+fn sys_geteuid(_args: &SyscallArgs) -> SyscallResult {
+    // Return effective UID (also 0 for now)
+    SyscallResult::ok(0)
+}
+
+/// SYS_GETGID - Get group ID
+fn sys_getgid(_args: &SyscallArgs) -> SyscallResult {
+    // Return group 0
+    SyscallResult::ok(0)
+}
+
+/// SYS_GETEGID - Get effective group ID
+fn sys_getegid(_args: &SyscallArgs) -> SyscallResult {
+    // Return effective group (0)
+    SyscallResult::ok(0)
+}
+
+/// SYS_SETUID - Set user ID
+fn sys_setuid(args: &SyscallArgs) -> SyscallResult {
+    let _uid = args.arg0;  // uid_t uid
+    
+    // Stub: User management not implemented
+    // Would verify permission and change UID
+    SyscallResult::ok(0)
+}
+
+/// SYS_SETGID - Set group ID
+fn sys_setgid(args: &SyscallArgs) -> SyscallResult {
+    let _gid = args.arg0;  // gid_t gid
+    
+    // Stub: Group management not implemented
+    SyscallResult::ok(0)
 }
 
 fn serial_init() {
