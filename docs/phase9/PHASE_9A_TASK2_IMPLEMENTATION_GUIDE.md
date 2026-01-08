@@ -10,7 +10,7 @@ This guide provides a comprehensive roadmap for implementing file system write o
   - FAT32 cluster management functions
   - Directory entry structures
   - Shell command integration
-  
+
 - ⏳ **Core Implementation**: 45% Complete
   - Helper functions with detailed TODO lists
   - Shell commands wired to filesystem API

@@ -1508,8 +1508,36 @@ impl FileSystem for FAT32FileSystem {
     }
 
     fn file_size(&mut self, _path: &str) -> Result<u64, u32> {
-        // Get file size implementation
         Err(1)
+    }
+}
+
+/// Additional FAT32 methods (not part of trait)
+impl FAT32FileSystem {
+    /// Helper: Find file in root directory by filename
+    /// Returns (cluster, size) or (0, 0) if not found
+    pub fn find_file_in_root(&self, filename: &str) -> (u32, u32) {
+        // FAT32 root directory is located at:
+        // sector = reserved_sectors + (fat_size * num_fats)
+        let _root_start_sector = self.reserved_sectors + (self.fat_size * self.num_fats);
+
+        // Note: This function would need access to block device to actually read
+        // Directory entry parsing logic:
+        // 1. Each entry is 32 bytes
+        // 2. Filename is first 11 bytes (8-byte name + 3-byte extension, space-padded)
+        // 3. Attribute byte at offset 11 (0x10 = directory)
+        // 4. Starting cluster at bytes 20-21 (low) and 26-27 (high)
+        // 5. File size at bytes 28-31 (little-endian)
+
+        // For implementation, need to:
+        // - Read directory sector(s) from block device
+        // - Parse each 32-byte entry
+        // - Compare filename (must handle FAT 8.3 format)
+        // - Extract and return cluster + size if found
+
+        // TODO: Complete implementation with actual disk I/O
+        // This requires passing block device reference or making self mutable
+        (0, 0)  // Not found (will be implemented with block device access)
     }
 }
 
@@ -1865,7 +1893,7 @@ fn find_file_in_root(_fs: &FAT32FileSystem, _filename: &[u8]) -> (u32, u32) {
     //    - Extract size from bytes 28-31
     //    - Return (cluster, size)
     // 6. If no match found, return (0, 0)
-    
+
     (0, 0)  // Placeholder - not yet implemented
 }
 
@@ -1885,7 +1913,7 @@ fn create_file_entry(_fs: &FAT32FileSystem, _filename: &[u8]) -> u32 {
     //    - Timestamps
     // 5. Write directory entry
     // 6. Flush FAT
-    
+
     0  // Failed (placeholder)
 }
 
@@ -1903,22 +1931,31 @@ fn parse_file_path(path: &str) -> (&str, &str) {
 
 /// Create a new file in the filesystem
 /// Returns file size (0 for new files) or error code
-pub fn fs_create_file(_path: &str) -> Result<u32, u32> {
-    // TODO: Implement actual file creation
-    // 1. Parse path into parent directory and filename
-    // 2. Navigate to parent directory
-    // 3. Check if file already exists
-    // 4. Allocate a cluster for the file
-    // 5. Create directory entry with:
-    //    - Filename (padded to 8.3 format)
-    //    - Starting cluster (just allocated)
-    //    - File size (0 for new file)
-    //    - Attributes (archive flag)
-    //    - Creation timestamp
-    // 6. Write directory entry to parent directory
-    // 7. Flush FAT table changes
+pub fn fs_create_file(path: &str) -> Result<u32, u32> {
+    // Parse path into parent directory and filename
+    let (_parent_path, filename) = parse_file_path(path);
     
-    // Placeholder: Just indicate success
+    // Validate filename
+    if filename.is_empty() || filename.len() > 11 {
+        return Err(1);  // Invalid filename
+    }
+    
+    // TODO: Full implementation steps:
+    // 1. Navigate to parent directory (for now assume root)
+    // 2. Check if file already exists (avoid duplicates)
+    // 3. Allocate a new cluster from FAT
+    // 4. Create directory entry:
+    //    - Convert filename to FAT 8.3 format (name.ext)
+    //    - Set attributes to 0x20 (archive)
+    //    - Set starting cluster to allocated cluster
+    //    - Set file size to 0 (new file)
+    //    - Set creation timestamp
+    // 5. Write directory entry to root directory sector
+    // 6. Flush FAT table changes to disk
+    // 7. Flush directory changes to disk
+    
+    // For now: placeholder returning success
+    // Real implementation: write directory entry, return size (0)
     Ok(0)
 }
 
@@ -1936,7 +1973,7 @@ pub fn fs_write_file(_path: &str, data: &[u8]) -> Result<u32, u32> {
     //      - Update FAT entry to point to next cluster
     // 6. Update file size in directory entry
     // 7. Flush FAT and directory changes
-    
+
     let bytes_written = data.len() as u32;
     Ok(bytes_written)
 }
@@ -1950,7 +1987,7 @@ pub fn fs_delete_file(_path: &str) -> Result<(), u32> {
     // 3. Walk FAT chain and free all clusters
     // 4. Mark directory entry as unused (0xE5 in first byte)
     // 5. Flush FAT and directory changes
-    
+
     Ok(())
 }
 
@@ -1965,7 +2002,7 @@ pub fn fs_mkdir(_path: &str) -> Result<(), u32> {
     // 5. Create . and .. entries in new directory
     // 6. Create directory entry in parent
     // 7. Flush changes
-    
+
     Ok(())
 }
 
@@ -1979,7 +2016,7 @@ pub fn fs_rmdir(_path: &str) -> Result<(), u32> {
     // 4. Free the cluster
     // 5. Remove directory entry from parent
     // 6. Flush changes
-    
+
     Ok(())
 }
 
@@ -1992,7 +2029,7 @@ pub fn fs_copy_file(_source: &str, _dest: &str) -> Result<u32, u32> {
     // 3. Read source file in chunks
     // 4. Write chunks to destination
     // 5. Close both files
-    
+
     Ok(0)
 }
 
@@ -2002,7 +2039,7 @@ pub fn fs_file_size(_path: &str) -> Result<u32, u32> {
     // TODO: Implement file size query
     // 1. Find file in filesystem
     // 2. Return file_size field from directory entry
-    
+
     Ok(0)
 }
 
@@ -2010,7 +2047,7 @@ pub fn fs_file_size(_path: &str) -> Result<u32, u32> {
 /// Returns buffer with directory entries or all zeros on error
 pub fn fs_list_dir(_path: &str) -> [u8; 512] {
     let buffer = [0u8; 512];
-    
+
     // TODO: Implement actual directory listing
     // 1. Find directory at path
     // 2. Read directory sector(s)
@@ -2018,7 +2055,7 @@ pub fn fs_list_dir(_path: &str) -> [u8; 512] {
     //    "filename.ext    <size>    <date>    <time>    <dir|file>"
     //    One entry per line
     // 4. Return buffer
-    
+
     buffer
 }
 
