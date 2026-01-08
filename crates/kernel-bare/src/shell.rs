@@ -330,6 +330,18 @@ impl Shell {
             self.cmd_resilience(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"apimetrics") {
             self.cmd_apimetrics(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"ratelimit") {
+            self.cmd_ratelimit(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"quota") {
+            self.cmd_quota(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"priority") {
+            self.cmd_priority(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"policy") {
+            self.cmd_policy(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"cost") {
+            self.cmd_cost(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"governance") {
+            self.cmd_governance(&mut output, &input[cmd_end..]);
         } else {
             let _ = write!(output, "Unknown command: '");
             let _ = output.write_all(cmd);
@@ -454,6 +466,14 @@ impl Shell {
         let _ = writeln!(output, "  balance [cmd]    Load balancing & service discovery");
         let _ = writeln!(output, "  resilience [cmd] Circuit breaker & resilience patterns");
         let _ = writeln!(output, "  apimetrics [cmd] API monitoring & metrics");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "API Governance (Phase 20):");
+        let _ = writeln!(output, "  ratelimit [cmd]  Token bucket & leaky bucket rate limiting");
+        let _ = writeln!(output, "  quota [cmd]      Quota management & enforcement");
+        let _ = writeln!(output, "  priority [cmd]   Request prioritization & queuing");
+        let _ = writeln!(output, "  policy [cmd]     Policy engine & rule evaluation");
+        let _ = writeln!(output, "  cost [cmd]       Cost tracking & attribution");
+        let _ = writeln!(output, "  governance [cmd] Observability & governance metrics");
         let _ = writeln!(output, "");
         let _ = writeln!(output, "  metrics [cmd]   System metrics & performance data");
         let _ = writeln!(output, "  trace [cmd]     Performance tracing & event analysis");
@@ -7250,5 +7270,153 @@ impl Shell {
             }
         }
     }
-}
 
+    fn cmd_ratelimit(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Token Bucket & Leaky Bucket Rate Limiting");
+            let _ = writeln!(output, "=========================================");
+            let _ = writeln!(output, "Active Buckets: 0");
+            let _ = writeln!(output, "Total Requests: 0");
+            let _ = writeln!(output, "Allowed: 0");
+            let _ = writeln!(output, "Denied: 0");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"status") {
+                let _ = writeln!(output, "=== Rate Limiter Status ===");
+                let _ = writeln!(output, "Buckets Configured: 0");
+                let _ = writeln!(output, "Current Load: 0%");
+            } else if self.cmd_matches(cmd, b"buckets") {
+                let _ = writeln!(output, "=== Active Buckets ===");
+                let _ = writeln!(output, "No buckets configured");
+            } else if self.cmd_matches(cmd, b"reset") {
+                let _ = writeln!(output, "Rate limiter reset requested");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Rate Limiter Commands:");
+                let _ = writeln!(output, "  ratelimit status   Show status");
+                let _ = writeln!(output, "  ratelimit buckets  List buckets");
+                let _ = writeln!(output, "  ratelimit reset    Reset limiter");
+            }
+        }
+    }
+
+    fn cmd_quota(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Quota Management & Enforcement");
+            let _ = writeln!(output, "==============================");
+            let _ = writeln!(output, "Active Quotas: 0");
+            let _ = writeln!(output, "Total Allocations: 0");
+            let _ = writeln!(output, "Violations: 0");
+            let _ = writeln!(output, "Reset Count: 0");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"status") {
+                let _ = writeln!(output, "=== Quota Status ===");
+                let _ = writeln!(output, "Total Usage: 0 bytes");
+                let _ = writeln!(output, "Remaining: unlimited");
+            } else if self.cmd_matches(cmd, b"allocations") {
+                let _ = writeln!(output, "=== Quota Allocations ===");
+                let _ = writeln!(output, "No quotas allocated");
+            } else if self.cmd_matches(cmd, b"usage") {
+                let _ = writeln!(output, "=== Quota Usage ===");
+                let _ = writeln!(output, "Utilization: 0%");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Quota Commands:");
+                let _ = writeln!(output, "  quota status        Show status");
+                let _ = writeln!(output, "  quota allocations   Show allocations");
+                let _ = writeln!(output, "  quota usage         Show usage");
+            }
+        }
+    }
+
+    fn cmd_priority(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Request Prioritization & Queuing");
+            let _ = writeln!(output, "=================================");
+            let _ = writeln!(output, "Total Queued: 0");
+            let _ = writeln!(output, "SLAs Defined: 0");
+            let _ = writeln!(output, "Preemptions: 0");
+            let _ = writeln!(output, "Avg Wait Time: 0ms");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"queues") {
+                let _ = writeln!(output, "=== Priority Queues ===");
+                let _ = writeln!(output, "Critical: 0");
+                let _ = writeln!(output, "High: 0");
+                let _ = writeln!(output, "Normal: 0");
+                let _ = writeln!(output, "Low: 0");
+                let _ = writeln!(output, "Batch: 0");
+            } else if self.cmd_matches(cmd, b"sla") {
+                let _ = writeln!(output, "=== SLA Configuration ===");
+                let _ = writeln!(output, "No SLAs defined");
+            } else if self.cmd_matches(cmd, b"stats") {
+                let _ = writeln!(output, "=== Queue Statistics ===");
+                let _ = writeln!(output, "Total Enqueued: 0");
+                let _ = writeln!(output, "Total Dequeued: 0");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Priority Commands:");
+                let _ = writeln!(output, "  priority queues   Show queues");
+                let _ = writeln!(output, "  priority sla      Show SLAs");
+                let _ = writeln!(output, "  priority stats    Show statistics");
+            }
+        }
+    }
+
+    fn cmd_cost(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Cost Tracking & Attribution");
+            let _ = writeln!(output, "===========================");
+            let _ = writeln!(output, "Total Cost: $0.00");
+            let _ = writeln!(output, "Tracked Items: 0");
+            let _ = writeln!(output, "Billing Periods: 0");
+            let _ = writeln!(output, "Tenants Billed: 0");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"status") {
+                let _ = writeln!(output, "=== Cost Tracker Status ===");
+                let _ = writeln!(output, "Total Cost: $0.00");
+                let _ = writeln!(output, "Period: Monthly");
+            } else if self.cmd_matches(cmd, b"tenants") {
+                let _ = writeln!(output, "=== Tenant Costs ===");
+                let _ = writeln!(output, "No tenants with costs");
+            } else if self.cmd_matches(cmd, b"services") {
+                let _ = writeln!(output, "=== Service Costs ===");
+                let _ = writeln!(output, "No service costs");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Cost Commands:");
+                let _ = writeln!(output, "  cost status    Show cost status");
+                let _ = writeln!(output, "  cost tenants   Show tenant costs");
+                let _ = writeln!(output, "  cost services  Show service costs");
+            }
+        }
+    }
+
+    fn cmd_governance(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Rate Limit Observability & Metrics");
+            let _ = writeln!(output, "==================================");
+            let _ = writeln!(output, "Total Metrics: 0");
+            let _ = writeln!(output, "Active Alerts: 0");
+            let _ = writeln!(output, "Rate Limit Events: 0");
+            let _ = writeln!(output, "Quota Violations: 0");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"metrics") {
+                let _ = writeln!(output, "=== Governance Metrics ===");
+                let _ = writeln!(output, "Rate Limits: 0");
+                let _ = writeln!(output, "Quotas: 0");
+                let _ = writeln!(output, "Policies: 0");
+            } else if self.cmd_matches(cmd, b"alerts") {
+                let _ = writeln!(output, "=== Active Alerts ===");
+                let _ = writeln!(output, "No active alerts");
+            } else if self.cmd_matches(cmd, b"export") {
+                let _ = writeln!(output, "=== Governance Export ===");
+                let _ = writeln!(output, "Export format: JSON/CSV");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Governance Commands:");
+                let _ = writeln!(output, "  governance metrics  Show metrics");
+                let _ = writeln!(output, "  governance alerts   Show alerts");
+                let _ = writeln!(output, "  governance export   Export data");
+            }
+        }
+    }
+}

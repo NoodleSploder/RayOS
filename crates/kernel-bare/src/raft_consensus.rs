@@ -3,8 +3,6 @@
 //! Provides fault-tolerant consensus for distributed cluster state management.
 //! Supports 32+ nodes with log replication, leader election, and snapshotting.
 
-#![no_std]
-
 /// Raft node term number (election epoch)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Term(pub u32);
