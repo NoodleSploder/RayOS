@@ -134,12 +134,12 @@ pub struct RoleCapabilities {
 pub struct AccessControlManager {
     contexts: [SecurityContext; 256],
     context_count: u16,
-    
+
     aces: [AccessControlEntry; 512],
     ace_count: u16,
-    
+
     role_caps: RoleCapabilities,
-    
+
     denials: u32,
     grants: u32,
 }
@@ -152,7 +152,7 @@ impl CapabilitySet {
             count: 0,
         }
     }
-    
+
     /// Add capability to set
     pub fn add(&mut self, cap: Capability) -> bool {
         let idx = cap as usize;
@@ -164,13 +164,13 @@ impl CapabilitySet {
             false
         }
     }
-    
+
     /// Check if capability is in set
     pub fn has(&self, cap: Capability) -> bool {
         let idx = cap as usize;
         idx < 64 && self.caps[idx]
     }
-    
+
     /// Remove capability
     pub fn remove(&mut self, cap: Capability) -> bool {
         let idx = cap as usize;
@@ -191,39 +191,39 @@ impl RoleCapabilities {
             role_to_caps: [[false; 64]; 16],
             cap_counts: [0; 16],
         };
-        
+
         // User role - basic capabilities
         rc.set_role_capability(Role::User, Capability::CapFileRead, true);
         rc.set_role_capability(Role::User, Capability::CapFileWrite, true);
         rc.set_role_capability(Role::User, Capability::CapNetConnect, true);
         rc.set_role_capability(Role::User, Capability::CapProcessExec, true);
         rc.set_role_capability(Role::User, Capability::CapMemoryAlloc, true);
-        
+
         // Admin role - extensive capabilities
         rc.set_role_capability(Role::Admin, Capability::CapSysAdmin, true);
         rc.set_role_capability(Role::Admin, Capability::CapNetAdmin, true);
         rc.set_role_capability(Role::Admin, Capability::CapSecAdmin, true);
         rc.set_role_capability(Role::Admin, Capability::CapPrivileged, true);
-        
+
         // Crypto role - cryptographic operations
         rc.set_role_capability(Role::Crypto, Capability::CapCrypto, true);
         rc.set_role_capability(Role::Crypto, Capability::CapCryptoSign, true);
         rc.set_role_capability(Role::Crypto, Capability::CapKeyManage, true);
-        
+
         // Security role - security operations
         rc.set_role_capability(Role::Security, Capability::CapSecurity, true);
         rc.set_role_capability(Role::Security, Capability::CapPolicy, true);
         rc.set_role_capability(Role::Security, Capability::CapAudit, true);
-        
+
         // Root role - all capabilities
         for i in 0..64 {
             rc.role_to_caps[Role::Root as usize][i] = true;
         }
         rc.cap_counts[Role::Root as usize] = 64;
-        
+
         rc
     }
-    
+
     /// Set capability for role
     fn set_role_capability(&mut self, role: Role, cap: Capability, grant: bool) {
         let role_idx = role as usize;
@@ -238,7 +238,7 @@ impl RoleCapabilities {
             }
         }
     }
-    
+
     /// Get capabilities for role
     pub fn get_role_capabilities(&self, role: Role) -> CapabilitySet {
         let mut caps = CapabilitySet::new();
@@ -266,7 +266,7 @@ impl SecurityContext {
             restricted: false,
         }
     }
-    
+
     /// Grant capability to context
     pub fn grant_capability(&mut self, cap: Capability) -> bool {
         let idx = cap as usize;
@@ -278,13 +278,13 @@ impl SecurityContext {
             false
         }
     }
-    
+
     /// Check capability
     pub fn has_capability(&self, cap: Capability) -> bool {
         let idx = cap as usize;
         idx < 64 && self.capabilities[idx] && !self.restricted
     }
-    
+
     /// Restrict all capabilities
     pub fn set_restricted(&mut self, restricted: bool) {
         self.restricted = restricted;
@@ -297,7 +297,7 @@ impl AccessControlManager {
         AccessControlManager {
             contexts: [SecurityContext::new(0, Role::User); 256],
             context_count: 0,
-            
+
             aces: [AccessControlEntry {
                 resource_id: 0,
                 principal_id: 0,
@@ -306,27 +306,27 @@ impl AccessControlManager {
                 conditional: false,
             }; 512],
             ace_count: 0,
-            
+
             role_caps: RoleCapabilities::new(),
-            
+
             denials: 0,
             grants: 0,
         }
     }
-    
+
     /// Create security context for process
     pub fn create_context(&mut self, process_id: u32, role: Role) -> Option<SecurityContext> {
         if (self.context_count as usize) >= 256 {
             return None;
         }
-        
+
         let context = SecurityContext::new(process_id, role);
         self.contexts[self.context_count as usize] = context;
         self.context_count += 1;
-        
+
         Some(context)
     }
-    
+
     /// Check access permission
     pub fn check_access(&mut self, process_id: u32, resource_id: u32, cap: Capability) -> bool {
         // Find process context
@@ -338,11 +338,11 @@ impl AccessControlManager {
                 }
             }
         }
-        
+
         self.denials += 1;
         false
     }
-    
+
     /// Get security context
     pub fn get_context(&self, process_id: u32) -> Option<SecurityContext> {
         for i in 0..self.context_count as usize {
@@ -352,17 +352,17 @@ impl AccessControlManager {
         }
         None
     }
-    
+
     /// Get denial count
     pub fn get_denial_count(&self) -> u32 {
         self.denials
     }
-    
+
     /// Get grant count
     pub fn get_grant_count(&self) -> u32 {
         self.grants
     }
-    
+
     /// Get context count
     pub fn get_context_count(&self) -> u16 {
         self.context_count
@@ -372,21 +372,21 @@ impl AccessControlManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_capability_set() {
         let mut caps = CapabilitySet::new();
         assert!(caps.add(Capability::CapFileRead));
         assert!(caps.has(Capability::CapFileRead));
     }
-    
+
     #[test]
     fn test_security_context() {
         let mut ctx = SecurityContext::new(1001, Role::User);
         assert!(ctx.grant_capability(Capability::CapFileRead));
         assert!(ctx.has_capability(Capability::CapFileRead));
     }
-    
+
     #[test]
     fn test_access_control_manager() {
         let mut acm = AccessControlManager::new();

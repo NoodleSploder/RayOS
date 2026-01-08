@@ -80,17 +80,17 @@ pub struct AnomalyIndicator {
 pub struct ThreatDetector {
     events: [DetectionEvent; 512],
     event_count: u16,
-    
+
     profiles: [BehavioralProfile; 256],
     profile_count: u16,
-    
+
     rules_enabled: [bool; 16],
     rule_thresholds: [u32; 16],
     rule_actions: [ResponseAction; 16],
-    
+
     indicators: [AnomalyIndicator; 128],
     indicator_count: u8,
-    
+
     alerts_generated: u16,
     threats_mitigated: u16,
 }
@@ -107,7 +107,7 @@ impl ThreatDetector {
                 confidence: 0,
             }; 512],
             event_count: 0,
-            
+
             profiles: [BehavioralProfile {
                 process_id: 0,
                 syscall_count: 0,
@@ -118,11 +118,11 @@ impl ThreatDetector {
                 anomaly_score: 0,
             }; 256],
             profile_count: 0,
-            
+
             rules_enabled: [true; 16],
             rule_thresholds: [100; 16],
             rule_actions: [ResponseAction::Log; 16],
-            
+
             indicators: [AnomalyIndicator {
                 indicator_type: 0,
                 process_id: 0,
@@ -130,11 +130,11 @@ impl ThreatDetector {
                 threshold: 0,
             }; 128],
             indicator_count: 0,
-            
+
             alerts_generated: 0,
             threats_mitigated: 0,
         };
-        
+
         // Configure rules
         detector.rule_actions[0] = ResponseAction::Kill;  // Privilege escalation
         detector.rule_actions[1] = ResponseAction::Alert; // Memory exploit
@@ -152,17 +152,17 @@ impl ThreatDetector {
         detector.rule_actions[13] = ResponseAction::Alert; // Format string
         detector.rule_actions[14] = ResponseAction::Kill; // Command injection
         detector.rule_actions[15] = ResponseAction::Alert; // Timing attack
-        
+
         detector
     }
-    
+
     /// Detect threat based on behavior
-    pub fn detect_threat(&mut self, rule: DetectionRule, process_id: u32, 
+    pub fn detect_threat(&mut self, rule: DetectionRule, process_id: u32,
                         confidence: u8) -> Option<ResponseAction> {
         if !self.rules_enabled[rule as usize] {
             return None;
         }
-        
+
         let severity = match rule {
             DetectionRule::PrivilegeEscalation => Severity::Critical,
             DetectionRule::BufferOverflow => Severity::Critical,
@@ -181,7 +181,7 @@ impl ThreatDetector {
             DetectionRule::ResourceExhaustion => Severity::Low,
             DetectionRule::TimingAttack => Severity::Low,
         };
-        
+
         if self.event_count < 512 {
             self.events[self.event_count as usize] = DetectionEvent {
                 rule,
@@ -192,19 +192,19 @@ impl ThreatDetector {
             };
             self.event_count += 1;
         }
-        
+
         if severity >= Severity::High {
             self.alerts_generated += 1;
         }
-        
+
         let action = self.rule_actions[rule as usize];
         if action != ResponseAction::Log {
             self.threats_mitigated += 1;
         }
-        
+
         Some(action)
     }
-    
+
     /// Monitor process behavior
     pub fn monitor_process(&mut self, process_id: u32) -> Option<BehavioralProfile> {
         for i in 0..self.profile_count as usize {
@@ -212,7 +212,7 @@ impl ThreatDetector {
                 return Some(self.profiles[i]);
             }
         }
-        
+
         if (self.profile_count as usize) < 256 {
             let profile = BehavioralProfile {
                 process_id,
@@ -230,14 +230,14 @@ impl ThreatDetector {
             None
         }
     }
-    
+
     /// Record anomaly indicator
-    pub fn record_indicator(&mut self, indicator_type: u32, process_id: u32, 
+    pub fn record_indicator(&mut self, indicator_type: u32, process_id: u32,
                            value: u32, threshold: u32) -> bool {
         if self.indicator_count >= 128 {
             return false;
         }
-        
+
         self.indicators[self.indicator_count as usize] = AnomalyIndicator {
             indicator_type,
             process_id,
@@ -245,7 +245,7 @@ impl ThreatDetector {
             threshold,
         };
         self.indicator_count += 1;
-        
+
         // Check if anomalous
         if value > threshold {
             // Update behavioral profile
@@ -256,10 +256,10 @@ impl ThreatDetector {
                 }
             }
         }
-        
+
         true
     }
-    
+
     /// Check if process is suspicious
     pub fn is_process_suspicious(&self, process_id: u32) -> bool {
         for i in 0..self.profile_count as usize {
@@ -269,7 +269,7 @@ impl ThreatDetector {
         }
         false
     }
-    
+
     /// Update syscall count for process
     pub fn record_syscall(&mut self, process_id: u32) {
         for i in 0..self.profile_count as usize {
@@ -279,7 +279,7 @@ impl ThreatDetector {
             }
         }
     }
-    
+
     /// Update memory operation count
     pub fn record_memory_operation(&mut self, process_id: u32) {
         for i in 0..self.profile_count as usize {
@@ -289,7 +289,7 @@ impl ThreatDetector {
             }
         }
     }
-    
+
     /// Update file operation count
     pub fn record_file_operation(&mut self, process_id: u32) {
         for i in 0..self.profile_count as usize {
@@ -299,7 +299,7 @@ impl ThreatDetector {
             }
         }
     }
-    
+
     /// Update network operation count
     pub fn record_network_operation(&mut self, process_id: u32) {
         for i in 0..self.profile_count as usize {
@@ -309,22 +309,22 @@ impl ThreatDetector {
             }
         }
     }
-    
+
     /// Set rule enabled/disabled
     pub fn set_rule_enabled(&mut self, rule: DetectionRule, enabled: bool) {
         self.rules_enabled[rule as usize] = enabled;
     }
-    
+
     /// Get detection event count
     pub fn get_event_count(&self) -> u16 {
         self.event_count
     }
-    
+
     /// Get alerts generated
     pub fn get_alerts_generated(&self) -> u16 {
         self.alerts_generated
     }
-    
+
     /// Get threats mitigated
     pub fn get_threats_mitigated(&self) -> u16 {
         self.threats_mitigated
@@ -334,20 +334,20 @@ impl ThreatDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_detector_creation() {
         let detector = ThreatDetector::new();
         assert_eq!(detector.get_event_count(), 0);
     }
-    
+
     #[test]
     fn test_detect_threat() {
         let mut detector = ThreatDetector::new();
         let action = detector.detect_threat(DetectionRule::BufferOverflow, 1001, 95);
         assert!(action.is_some());
     }
-    
+
     #[test]
     fn test_monitor_process() {
         let mut detector = ThreatDetector::new();
