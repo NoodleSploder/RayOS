@@ -299,6 +299,7 @@ mod text_to_speech;
 mod a11y_integration;
 mod network_stack;
 mod http_protocol;
+mod content_streaming;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
