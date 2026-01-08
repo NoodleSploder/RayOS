@@ -272,6 +272,7 @@ mod rayapp_clipboard;
 mod rayapp_events;
 mod wayland_core;
 mod wayland_compositor;
+mod wayland_shell;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
