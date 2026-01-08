@@ -1848,6 +1848,39 @@ impl FAT32FileSystem {
 // File System Write Operations - Implementation
 // ============================================================================
 
+/// Find a file in the root directory
+/// Returns (cluster, size) or (0, 0) if not found
+fn find_file_in_root(_fs: &FAT32FileSystem, _filename: &[u8]) -> (u32, u32) {
+    // TODO: Implement file search
+    // 1. Get root directory starting sector
+    // 2. Read directory sectors one by one
+    // 3. Scan directory entries (32 bytes each)
+    // 4. Compare filenames (11-byte FAT format)
+    // 5. Return cluster and size if found
+    
+    (0, 0)  // Not found (placeholder)
+}
+
+/// Create a new file in the root directory
+/// Allocates a cluster and creates a directory entry
+/// Returns cluster number or 0 on failure
+fn create_file_entry(_fs: &FAT32FileSystem, _filename: &[u8]) -> u32 {
+    // TODO: Implement file creation
+    // 1. Find first free cluster in FAT
+    // 2. Allocate it (mark as end-of-chain 0x0FFFFFFF)
+    // 3. Find free directory entry in root
+    // 4. Create directory entry:
+    //    - Filename (11 bytes)
+    //    - Attributes (0x20 = archive)
+    //    - Starting cluster
+    //    - File size (0)
+    //    - Timestamps
+    // 5. Write directory entry
+    // 6. Flush FAT
+    
+    0  // Failed (placeholder)
+}
+
 /// Path parsing helper - split full path into components
 /// Returns (parent_path, filename)
 fn parse_file_path(path: &str) -> (&str, &str) {
@@ -1862,22 +1895,20 @@ fn parse_file_path(path: &str) -> (&str, &str) {
 
 /// Create a new file in the filesystem
 /// Returns file size (0 for new files) or error code
-pub fn fs_create_file(path: &str) -> Result<u32, u32> {
-    // Parse path into parent directory and filename
-    let (parent_path, filename) = parse_file_path(path);
-    
+pub fn fs_create_file(_path: &str) -> Result<u32, u32> {
     // TODO: Implement actual file creation
-    // 1. Navigate to parent directory
-    // 2. Check if file already exists
-    // 3. Allocate a cluster for the file
-    // 4. Create directory entry with:
+    // 1. Parse path into parent directory and filename
+    // 2. Navigate to parent directory
+    // 3. Check if file already exists
+    // 4. Allocate a cluster for the file
+    // 5. Create directory entry with:
     //    - Filename (padded to 8.3 format)
     //    - Starting cluster (just allocated)
     //    - File size (0 for new file)
     //    - Attributes (archive flag)
     //    - Creation timestamp
-    // 5. Write directory entry to parent directory
-    // 6. Flush FAT table changes
+    // 6. Write directory entry to parent directory
+    // 7. Flush FAT table changes
     
     // Placeholder: Just indicate success
     Ok(0)
@@ -1885,7 +1916,7 @@ pub fn fs_create_file(path: &str) -> Result<u32, u32> {
 
 /// Write data to a file
 /// Returns number of bytes written or error code
-pub fn fs_write_file(path: &str, data: &[u8]) -> Result<u32, u32> {
+pub fn fs_write_file(_path: &str, data: &[u8]) -> Result<u32, u32> {
     // TODO: Implement actual file writing
     // 1. Find file in filesystem
     // 2. Get current file size and starting cluster
@@ -1904,7 +1935,7 @@ pub fn fs_write_file(path: &str, data: &[u8]) -> Result<u32, u32> {
 
 /// Delete a file from the filesystem
 /// Returns success or error code
-pub fn fs_delete_file(path: &str) -> Result<(), u32> {
+pub fn fs_delete_file(_path: &str) -> Result<(), u32> {
     // TODO: Implement actual file deletion
     // 1. Find file in filesystem
     // 2. Get starting cluster from directory entry
@@ -1917,7 +1948,7 @@ pub fn fs_delete_file(path: &str) -> Result<(), u32> {
 
 /// Create a directory
 /// Returns success or error code
-pub fn fs_mkdir(path: &str) -> Result<(), u32> {
+pub fn fs_mkdir(_path: &str) -> Result<(), u32> {
     // TODO: Implement actual directory creation
     // 1. Parse path to get parent directory and dir name
     // 2. Navigate to parent
@@ -1932,7 +1963,7 @@ pub fn fs_mkdir(path: &str) -> Result<(), u32> {
 
 /// Remove a directory (must be empty)
 /// Returns success or error code
-pub fn fs_rmdir(path: &str) -> Result<(), u32> {
+pub fn fs_rmdir(_path: &str) -> Result<(), u32> {
     // TODO: Implement actual directory removal
     // 1. Find directory
     // 2. Verify it only contains . and .. entries (is empty)
@@ -1946,7 +1977,7 @@ pub fn fs_rmdir(path: &str) -> Result<(), u32> {
 
 /// Copy file source to destination
 /// Returns bytes copied or error code
-pub fn fs_copy_file(source: &str, dest: &str) -> Result<u32, u32> {
+pub fn fs_copy_file(_source: &str, _dest: &str) -> Result<u32, u32> {
     // TODO: Implement actual file copying
     // 1. Open source file for reading
     // 2. Create destination file
@@ -1959,7 +1990,7 @@ pub fn fs_copy_file(source: &str, dest: &str) -> Result<u32, u32> {
 
 /// Get file size
 /// Returns file size or error code
-pub fn fs_file_size(path: &str) -> Result<u32, u32> {
+pub fn fs_file_size(_path: &str) -> Result<u32, u32> {
     // TODO: Implement file size query
     // 1. Find file in filesystem
     // 2. Return file_size field from directory entry
@@ -1970,7 +2001,7 @@ pub fn fs_file_size(path: &str) -> Result<u32, u32> {
 /// List directory contents into buffer
 /// Returns buffer with directory entries or all zeros on error
 pub fn fs_list_dir(_path: &str) -> [u8; 512] {
-    let mut buffer = [0u8; 512];
+    let buffer = [0u8; 512];
     
     // TODO: Implement actual directory listing
     // 1. Find directory at path
