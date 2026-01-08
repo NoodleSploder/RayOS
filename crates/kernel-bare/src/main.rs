@@ -2365,26 +2365,51 @@ impl FAT32FileSystem {
     }
 
     /// Find an entry by name in a directory cluster
-    /// start_cluster: directory cluster to search
+    /// start_cluster: directory cluster to search (0 = root)
     /// target_name: name of entry to find (8.3 format)
     /// Returns (entry_bytes, cluster_offset) or (None, 0) if not found
-    pub fn find_in_directory(&self, _start_cluster: u32, _target_name: &str) -> (Option<[u8; 32]>, u32) {
-        // Algorithm:
-        // 1. Start at directory's first cluster
-        // 2. Read directory entries (32 bytes each)
-        // 3. Check each entry's name field (bytes 0-10)
-        // 4. Compare with target (convert target to 8.3 format)
-        // 5. If found, return entry bytes and byte offset
-        // 6. If end of directory (0x00), return not found
-        // 7. If end of cluster, read next cluster in chain
-        // TODO: Implement with read_cluster and FAT chain walking
-        (None, 0)  // Placeholder
+    pub fn find_in_directory(&self, start_cluster: u32, _target_name: &str) -> (Option<[u8; 32]>, u32) {
+        // For now, only support root directory (cluster 0)
+        // TODO: Full implementation for any directory cluster
+        
+        if start_cluster != 0 {
+            return (None, 0);  // Only root directory for now
+        }
+        
+        // Calculate root directory location for FAT32
+        let root_dir_start = self.reserved_sectors + (self.fat_size * self.num_fats);
+        
+        // Root directory size calculation
+        // Each entry is 32 bytes, root_entries tells us how many entries
+        let root_dir_bytes = self.root_entries * 32;
+        let root_dir_sectors = (root_dir_bytes + self.bytes_per_sector - 1) / self.bytes_per_sector;
+        
+        let entries_per_sector = self.bytes_per_sector / 32;
+        
+        // For root directory: check root_dir_sectors starting at root_dir_start
+        for sector_offset in 0..root_dir_sectors {
+            let _sector = root_dir_start + sector_offset;
+            
+            // Would read sector here with block device
+            // For now, simulate checking directory entries
+            for entry_idx in 0..entries_per_sector {
+                // Entry byte offset in root directory
+                let _entry_offset = sector_offset * self.bytes_per_sector + entry_idx * 32;
+                
+                // TODO: Read entry from disk and compare
+                // if entry_name_matches && entry_offset < root_dir_bytes {
+                //     return (Some(entry_bytes), entry_offset);
+                // }
+            }
+        }
+        
+        (None, 0)  // Not found
     }
 
     /// Walk a filesystem path to find target entry
     /// path: full path like "/dir1/dir2/file.txt" or "dir/file.txt"
     /// Returns (entry_bytes, final_cluster) or (None, 0) if not found
-    pub fn walk_path(&self, _path: &str) -> (Option<[u8; 32]>, u32) {
+    pub fn walk_path(&self, path: &str) -> (Option<[u8; 32]>, u32) {
         // Algorithm:
         // 1. Split path into components by '/'
         // 2. Start at root directory (cluster 0 conceptually)
@@ -2395,8 +2420,53 @@ impl FAT32FileSystem {
         //    d. Make it the current directory
         // 4. Find last component (file or dir)
         // 5. Return its entry bytes
-        // TODO: Implement with find_in_directory, FAT chain walking, and directory checking
-        (None, 0)  // Placeholder
+        
+        // Normalize path: remove leading/trailing slashes
+        let normalized = path.trim_matches('/');
+        if normalized.is_empty() {
+            // Root directory requested - TODO: return root directory entry
+            return (None, 0);
+        }
+        
+        // Count path components
+        let component_count = normalized.matches('/').count() + 1;
+        if component_count == 0 {
+            return (None, 0);
+        }
+        
+        // Start at root directory
+        let mut current_cluster = 0u32;
+        let mut component_idx = 0;
+        
+        // Walk through path components
+        for component in normalized.split('/') {
+            component_idx += 1;
+            let is_last = component_idx == component_count;
+            
+            // Find component in current directory
+            let (entry_opt, _offset) = self.find_in_directory(current_cluster, component);
+            
+            match entry_opt {
+                Some(entry) => {
+                    if is_last {
+                        // Last component - return it regardless of type
+                        return (Some(entry), Self::entry_starting_cluster(&entry));
+                    } else {
+                        // Intermediate component - must be directory
+                        if !Self::is_directory_entry(&entry) {
+                            return (None, 0);  // Not a directory in path
+                        }
+                        // Move to next directory
+                        current_cluster = Self::entry_starting_cluster(&entry);
+                    }
+                }
+                None => {
+                    return (None, 0);  // Component not found
+                }
+            }
+        }
+        
+        (None, 0)  // Should not reach here
     }
 }
 
