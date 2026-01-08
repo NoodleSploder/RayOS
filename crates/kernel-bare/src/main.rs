@@ -17,6 +17,7 @@ mod tpm2;                  // Phase 11 Task 3: TPM 2.0 Measured Boot Integration
 mod performance;           // Phase 11 Task 4: Performance Optimization
 mod security_advanced;     // Phase 11 Task 5: Advanced Security Features
 mod scalability;           // Phase 11 Task 6: Scalability Layer
+mod vm_lifecycle;          // Phase 12 Task 1: VM Lifecycle Management
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
