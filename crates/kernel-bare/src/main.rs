@@ -59,6 +59,12 @@ mod secure_channel;        // Phase 18 Task 3: Secure Channel Establishment
 mod traffic_encryption;    // Phase 18 Task 4: Traffic Encryption & Integrity
 mod ddos_protection;       // Phase 18 Task 5: DDoS Protection & Rate Limiting
 mod network_telemetry;     // Phase 18 Task 6: Network Monitoring & Telemetry
+mod api_gateway;           // Phase 19 Task 1: API Gateway Core & Request Routing
+mod api_auth;              // Phase 19 Task 2: Authentication & Authorization
+mod api_mediation;         // Phase 19 Task 3: Request/Response Transformation & Mediation
+mod api_load_balancer;     // Phase 19 Task 4: Load Balancing & Service Discovery
+mod api_resilience;        // Phase 19 Task 5: Circuit Breaker & Resilience Patterns
+mod api_monitoring;        // Phase 19 Task 6: API Monitoring & Metrics
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]

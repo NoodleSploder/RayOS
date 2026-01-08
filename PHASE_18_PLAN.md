@@ -2,8 +2,8 @@
 
 **Objective**: Production-grade network security with TLS/DTLS, certificate management, secure channel establishment, traffic encryption, and DDoS protection.
 
-**Target**: 6 tasks, 3,840 lines total  
-**Expected Build Time**: ~1.5s  
+**Target**: 6 tasks, 3,840 lines total
+**Expected Build Time**: ~1.5s
 **Modules**: 6 new files
 
 ---
@@ -16,7 +16,7 @@ Phase 18 establishes end-to-end network security, building on the cryptographic 
 
 ## Task 1: TLS/DTLS Protocol Implementation
 
-**File**: `tls_dtls.rs`  
+**File**: `tls_dtls.rs`
 **Target**: 600 lines
 
 ### Objectives
@@ -55,7 +55,7 @@ pub struct SessionTicket { }
 
 ## Task 2: Certificate Management & PKI
 
-**File**: `certificate_manager.rs`  
+**File**: `certificate_manager.rs`
 **Target**: 600 lines
 
 ### Objectives
@@ -94,7 +94,7 @@ pub struct CertificateRequest { }
 
 ## Task 3: Secure Channel Establishment
 
-**File**: `secure_channel.rs`  
+**File**: `secure_channel.rs`
 **Target**: 630 lines
 
 ### Objectives
@@ -133,7 +133,7 @@ pub struct ChannelMetrics { }
 
 ## Task 4: Traffic Encryption & Integrity
 
-**File**: `traffic_encryption.rs`  
+**File**: `traffic_encryption.rs`
 **Target**: 610 lines
 
 ### Objectives
@@ -172,7 +172,7 @@ pub struct PacketMetadata { }
 
 ## Task 5: DDoS Protection & Rate Limiting
 
-**File**: `ddos_protection.rs`  
+**File**: `ddos_protection.rs`
 **Target**: 650 lines
 
 ### Objectives
@@ -211,7 +211,7 @@ pub struct AnomalyDetector { }
 
 ## Task 6: Network Monitoring & Telemetry
 
-**File**: `network_telemetry.rs`  
+**File**: `network_telemetry.rs`
 **Target**: 620 lines
 
 ### Objectives
@@ -276,7 +276,7 @@ telemetry [stats|flows|export|help]        # Network telemetry
 - Shell integration: 400 lines
 - Documentation: 600 lines (plan + report)
 
-**Expected Build Time**: ~1.5s  
+**Expected Build Time**: ~1.5s
 **Expected Warnings**: ~85 (mostly pre-existing)
 
 ---
@@ -323,6 +323,6 @@ telemetry [stats|flows|export|help]        # Network telemetry
 
 ---
 
-**Status**: Planning Complete  
-**Next**: Implementation begins with Task 1 (TLS/DTLS)  
+**Status**: Planning Complete
+**Next**: Implementation begins with Task 1 (TLS/DTLS)
 **Expected Duration**: ~90 minutes for full delivery

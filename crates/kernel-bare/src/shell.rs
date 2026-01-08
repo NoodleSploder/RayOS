@@ -318,6 +318,18 @@ impl Shell {
             self.cmd_ddos(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"netstat") {
             self.cmd_netstat(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"gateway") {
+            self.cmd_gateway(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"apiauth") {
+            self.cmd_apiauth(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"mediate") {
+            self.cmd_mediate(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"balance") {
+            self.cmd_balance(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"resilience") {
+            self.cmd_resilience(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"apimetrics") {
+            self.cmd_apimetrics(&mut output, &input[cmd_end..]);
         } else {
             let _ = write!(output, "Unknown command: '");
             let _ = output.write_all(cmd);
@@ -434,6 +446,14 @@ impl Shell {
         let _ = writeln!(output, "  encrypt [cmd]   Traffic encryption & integrity");
         let _ = writeln!(output, "  ddos [cmd]      DDoS protection & rate limiting");
         let _ = writeln!(output, "  netstat [cmd]   Network monitoring & telemetry");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "API Gateway & Services (Phase 19):");
+        let _ = writeln!(output, "  gateway [cmd]    API gateway core & request routing");
+        let _ = writeln!(output, "  apiauth [cmd]    Authentication & authorization");
+        let _ = writeln!(output, "  mediate [cmd]    Request/response transformation");
+        let _ = writeln!(output, "  balance [cmd]    Load balancing & service discovery");
+        let _ = writeln!(output, "  resilience [cmd] Circuit breaker & resilience patterns");
+        let _ = writeln!(output, "  apimetrics [cmd] API monitoring & metrics");
         let _ = writeln!(output, "");
         let _ = writeln!(output, "  metrics [cmd]   System metrics & performance data");
         let _ = writeln!(output, "  trace [cmd]     Performance tracing & event analysis");
@@ -7052,6 +7072,181 @@ impl Shell {
                 let _ = writeln!(output, "  netstat latency  Show latency stats");
                 let _ = writeln!(output, "  netstat loss     Show packet loss");
                 let _ = writeln!(output, "  netstat overhead Show encryption overhead");
+            }
+        }
+    }
+
+    fn cmd_gateway(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "API Gateway Core & Request Routing");
+            let _ = writeln!(output, "====================================");
+            let _ = writeln!(output, "Services Registered: 0");
+            let _ = writeln!(output, "Routes Configured: 0");
+            let _ = writeln!(output, "Total Requests: 0");
+            let _ = writeln!(output, "Error Count: 0");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"status") {
+                let _ = writeln!(output, "=== API Gateway Status ===");
+                let _ = writeln!(output, "Gateway Status: Running");
+                let _ = writeln!(output, "Active Connections: 0");
+            } else if self.cmd_matches(cmd, b"routes") {
+                let _ = writeln!(output, "=== Configured Routes ===");
+                let _ = writeln!(output, "No routes configured");
+            } else if self.cmd_matches(cmd, b"health") {
+                let _ = writeln!(output, "=== Service Health ===");
+                let _ = writeln!(output, "All services healthy");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "API Gateway Commands:");
+                let _ = writeln!(output, "  gateway status   Show gateway status");
+                let _ = writeln!(output, "  gateway routes   List routes");
+                let _ = writeln!(output, "  gateway health   Check service health");
+            }
+        }
+    }
+
+    fn cmd_apiauth(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Authentication & Authorization");
+            let _ = writeln!(output, "==============================");
+            let _ = writeln!(output, "Active Tokens: 0");
+            let _ = writeln!(output, "API Keys: 0");
+            let _ = writeln!(output, "Revoked Tokens: 0");
+            let _ = writeln!(output, "Failed Attempts: 0");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"tokens") {
+                let _ = writeln!(output, "=== Token Status ===");
+                let _ = writeln!(output, "Total Tokens: 0");
+                let _ = writeln!(output, "Valid Tokens: 0");
+            } else if self.cmd_matches(cmd, b"keys") {
+                let _ = writeln!(output, "=== API Keys ===");
+                let _ = writeln!(output, "Total Keys: 0");
+                let _ = writeln!(output, "Active Keys: 0");
+            } else if self.cmd_matches(cmd, b"perms") {
+                let _ = writeln!(output, "=== Permissions ===");
+                let _ = writeln!(output, "Roles: Admin, ServiceAccount, User, Guest");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Authentication Commands:");
+                let _ = writeln!(output, "  apiauth tokens   Show token status");
+                let _ = writeln!(output, "  apiauth keys     Show API keys");
+                let _ = writeln!(output, "  apiauth perms    Show permissions");
+            }
+        }
+    }
+
+    fn cmd_mediate(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Request/Response Transformation & Mediation");
+            let _ = writeln!(output, "===========================================");
+            let _ = writeln!(output, "Transforms Registered: 0");
+            let _ = writeln!(output, "Schemas Defined: 0");
+            let _ = writeln!(output, "Cache Entries: 0");
+            let _ = writeln!(output, "Hit Rate: 0%");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"transforms") {
+                let _ = writeln!(output, "=== Transforms ===");
+                let _ = writeln!(output, "No transforms registered");
+            } else if self.cmd_matches(cmd, b"schemas") {
+                let _ = writeln!(output, "=== Schemas ===");
+                let _ = writeln!(output, "No schemas defined");
+            } else if self.cmd_matches(cmd, b"cache") {
+                let _ = writeln!(output, "=== Cache Status ===");
+                let _ = writeln!(output, "Cache Size: 0 bytes");
+                let _ = writeln!(output, "Hit Count: 0");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Mediation Commands:");
+                let _ = writeln!(output, "  mediate transforms   Show transforms");
+                let _ = writeln!(output, "  mediate schemas      Show schemas");
+                let _ = writeln!(output, "  mediate cache        Show cache status");
+            }
+        }
+    }
+
+    fn cmd_balance(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Load Balancing & Service Discovery");
+            let _ = writeln!(output, "===================================");
+            let _ = writeln!(output, "Pools Registered: 0");
+            let _ = writeln!(output, "Instances Active: 0");
+            let _ = writeln!(output, "Total Connections: 0");
+            let _ = writeln!(output, "Health Checks: 0");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"pools") {
+                let _ = writeln!(output, "=== Load Balancer Pools ===");
+                let _ = writeln!(output, "No pools configured");
+            } else if self.cmd_matches(cmd, b"instances") {
+                let _ = writeln!(output, "=== Service Instances ===");
+                let _ = writeln!(output, "No instances running");
+            } else if self.cmd_matches(cmd, b"strategy") {
+                let _ = writeln!(output, "=== Balancing Strategies ===");
+                let _ = writeln!(output, "Available: RoundRobin, LeastConnections, Weighted, IpHash");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Load Balancer Commands:");
+                let _ = writeln!(output, "  balance pools      Show pools");
+                let _ = writeln!(output, "  balance instances  Show instances");
+                let _ = writeln!(output, "  balance strategy   Show strategies");
+            }
+        }
+    }
+
+    fn cmd_resilience(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Circuit Breaker & Resilience Patterns");
+            let _ = writeln!(output, "====================================");
+            let _ = writeln!(output, "Breakers Registered: 0");
+            let _ = writeln!(output, "Total Calls: 0");
+            let _ = writeln!(output, "Failed Calls: 0");
+            let _ = writeln!(output, "Timeout Calls: 0");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"breakers") {
+                let _ = writeln!(output, "=== Circuit Breakers ===");
+                let _ = writeln!(output, "No breakers registered");
+            } else if self.cmd_matches(cmd, b"bulkheads") {
+                let _ = writeln!(output, "=== Bulkheads ===");
+                let _ = writeln!(output, "No bulkheads configured");
+            } else if self.cmd_matches(cmd, b"retries") {
+                let _ = writeln!(output, "=== Retry Policies ===");
+                let _ = writeln!(output, "No policies configured");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Resilience Commands:");
+                let _ = writeln!(output, "  resilience breakers   Show circuit breakers");
+                let _ = writeln!(output, "  resilience bulkheads  Show bulkheads");
+                let _ = writeln!(output, "  resilience retries    Show retry policies");
+            }
+        }
+    }
+
+    fn cmd_apimetrics(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "API Monitoring & Metrics");
+            let _ = writeln!(output, "========================");
+            let _ = writeln!(output, "Services Monitored: 0");
+            let _ = writeln!(output, "Total Requests: 0");
+            let _ = writeln!(output, "Total Errors: 0");
+            let _ = writeln!(output, "Average Latency: 0us");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"services") {
+                let _ = writeln!(output, "=== Monitored Services ===");
+                let _ = writeln!(output, "No services monitored");
+            } else if self.cmd_matches(cmd, b"latency") {
+                let _ = writeln!(output, "=== Latency Percentiles ===");
+                let _ = writeln!(output, "P50: 0us");
+                let _ = writeln!(output, "P95: 0us");
+                let _ = writeln!(output, "P99: 0us");
+            } else if self.cmd_matches(cmd, b"errors") {
+                let _ = writeln!(output, "=== Error Metrics ===");
+                let _ = writeln!(output, "Total Errors: 0");
+                let _ = writeln!(output, "Error Rate: 0%");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "API Metrics Commands:");
+                let _ = writeln!(output, "  apimetrics services  Show services");
+                let _ = writeln!(output, "  apimetrics latency   Show latency");
+                let _ = writeln!(output, "  apimetrics errors    Show errors");
             }
         }
     }

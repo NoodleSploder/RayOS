@@ -116,13 +116,13 @@ impl CertificateRevocationList {
             next_update: 0,
         }
     }
-    
+
     /// Add revoked certificate
     pub fn revoke_certificate(&mut self, serial: u64, reason: u8) -> bool {
         if (self.entry_count as usize) >= 256 {
             return false;
         }
-        
+
         self.entries[self.entry_count as usize] = RevocationEntry {
             serial_number: serial,
             revocation_time: 0,
@@ -131,7 +131,7 @@ impl CertificateRevocationList {
         self.entry_count += 1;
         true
     }
-    
+
     /// Check if certificate is revoked
     pub fn is_revoked(&self, serial: u64) -> bool {
         for i in 0..(self.entry_count as usize) {
@@ -141,7 +141,7 @@ impl CertificateRevocationList {
         }
         false
     }
-    
+
     /// Get revocation entry count
     pub fn get_entry_count(&self) -> u16 {
         self.entry_count
@@ -180,24 +180,24 @@ impl CertificateChain {
             cert_count: 0,
         }
     }
-    
+
     /// Add certificate to chain
     pub fn add_certificate(&mut self, cert: Certificate) -> bool {
         if (self.cert_count as usize) >= 16 {
             return false;
         }
-        
+
         self.certificates[self.cert_count as usize] = cert;
         self.cert_count += 1;
         true
     }
-    
+
     /// Validate chain
     pub fn validate(&self) -> bool {
         if self.cert_count == 0 {
             return false;
         }
-        
+
         // Check chain integrity - issuer of cert[i] matches subject of cert[i+1]
         for i in 0..((self.cert_count as usize) - 1) {
             // Simplified check: compare first bytes of issuer and subject
@@ -207,7 +207,7 @@ impl CertificateChain {
         }
         true
     }
-    
+
     /// Get certificate count
     pub fn get_cert_count(&self) -> u8 {
         self.cert_count
@@ -249,13 +249,13 @@ impl CertificateAuthority {
             crl: CertificateRevocationList::new(),
         }
     }
-    
+
     /// Sign certificate request
     pub fn sign_request(&mut self, req: &CertificateRequest, serial: u64) -> Option<Certificate> {
         if (self.issued_count as usize) >= 256 {
             return None;
         }
-        
+
         let mut cert = Certificate {
             serial_number: serial,
             issuer: self.ca_cert.subject,
@@ -282,29 +282,29 @@ impl CertificateAuthority {
                 fp
             },
         };
-        
+
         self.issued_certs[self.issued_count as usize] = cert;
         self.issued_count += 1;
-        
+
         Some(cert)
     }
-    
+
     /// Revoke certificate
     pub fn revoke_certificate(&mut self, serial: u64, reason: u8) -> bool {
         self.crl.revoke_certificate(serial, reason)
     }
-    
+
     /// Check if certificate is valid
     pub fn is_valid(&self, cert: &Certificate) -> bool {
         // Check not revoked
         if self.crl.is_revoked(cert.serial_number) {
             return false;
         }
-        
+
         // Check validity period (simplified)
         cert.validity.not_before <= 0 && 0 <= cert.validity.not_after
     }
-    
+
     /// Get issued certificate count
     pub fn get_issued_count(&self) -> u16 {
         self.issued_count
@@ -317,13 +317,13 @@ impl Certificate {
         if der_data.is_empty() {
             return None;
         }
-        
+
         // Simplified parsing - just check for valid structure
         if der_data[0] != 0x30 {
             // Not a SEQUENCE
             return None;
         }
-        
+
         Some(Certificate {
             serial_number: 1,
             issuer: DistinguishedName {
@@ -350,25 +350,25 @@ impl Certificate {
             fingerprint: [0u8; 32],
         })
     }
-    
+
     /// Check certificate validity
     pub fn check_validity(&self) -> CertificateStatus {
         if self.validity.not_before > 0 {
             return CertificateStatus::NotYetValid;
         }
-        
+
         if 0 > self.validity.not_after {
             return CertificateStatus::Expired;
         }
-        
+
         CertificateStatus::Valid
     }
-    
+
     /// Get public key from certificate
     pub fn get_public_key(&self) -> [u8; 256] {
         self.public_key
     }
-    
+
     /// Get certificate serial number
     pub fn get_serial(&self) -> u64 {
         self.serial_number
@@ -378,7 +378,7 @@ impl Certificate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_certificate_creation() {
         let cert = Certificate {
@@ -408,7 +408,7 @@ mod tests {
         };
         assert_eq!(cert.get_serial(), 1);
     }
-    
+
     #[test]
     fn test_crl_revocation() {
         let mut crl = CertificateRevocationList::new();
@@ -416,7 +416,7 @@ mod tests {
         assert!(crl.is_revoked(123));
         assert!(!crl.is_revoked(456));
     }
-    
+
     #[test]
     fn test_certificate_chain() {
         let mut chain = CertificateChain::new();

@@ -120,31 +120,31 @@ pub struct HandshakeMessage {
 pub struct TlsContext {
     state: HandshakeState,
     cipher_suite: CipherSuite,
-    
+
     client_random: [u8; 32],
     server_random: [u8; 32],
-    
+
     master_secret: [u8; 48],
     client_write_key: [u8; 32],
     server_write_key: [u8; 32],
     client_write_iv: [u8; 12],
     server_write_iv: [u8; 12],
-    
+
     sequence_write: u64,
     sequence_read: u64,
-    
+
     handshake_messages: [HandshakeMessage; 32],
     handshake_count: u8,
-    
+
     session_tickets: [SessionTicket; 8],
     ticket_count: u8,
-    
+
     supported_ciphers: [CipherSuite; 5],
     cipher_count: u8,
-    
+
     peer_certificate: [u8; 256],
     peer_cert_len: u16,
-    
+
     is_dtls: bool,
     is_client: bool,
 }
@@ -155,19 +155,19 @@ impl TlsContext {
         TlsContext {
             state: HandshakeState::Start,
             cipher_suite: CipherSuite::TLS_AES_128_GCM_SHA256,
-            
+
             client_random: [0u8; 32],
             server_random: [0u8; 32],
-            
+
             master_secret: [0u8; 48],
             client_write_key: [0u8; 32],
             server_write_key: [0u8; 32],
             client_write_iv: [0u8; 12],
             server_write_iv: [0u8; 12],
-            
+
             sequence_write: 0,
             sequence_read: 0,
-            
+
             handshake_messages: [HandshakeMessage {
                 message_type: HandshakeType::ClientHello,
                 message_seq: 0,
@@ -175,7 +175,7 @@ impl TlsContext {
                 data: [0u8; 512],
             }; 32],
             handshake_count: 0,
-            
+
             session_tickets: [SessionTicket {
                 ticket_id: 0,
                 lifetime: 0,
@@ -184,7 +184,7 @@ impl TlsContext {
                 ticket_data: [0u8; 128],
             }; 8],
             ticket_count: 0,
-            
+
             supported_ciphers: [
                 CipherSuite::TLS_AES_128_GCM_SHA256,
                 CipherSuite::TLS_AES_256_GCM_SHA384,
@@ -193,37 +193,37 @@ impl TlsContext {
                 CipherSuite::DTLS_AES_256_GCM_SHA384,
             ],
             cipher_count: 5,
-            
+
             peer_certificate: [0u8; 256],
             peer_cert_len: 0,
-            
+
             is_dtls: false,
             is_client,
         }
     }
-    
+
     /// Create DTLS context instead of TLS
     pub fn new_dtls(is_client: bool) -> Self {
         let mut ctx = Self::new(is_client);
         ctx.is_dtls = true;
         ctx
     }
-    
+
     /// Start TLS handshake
     pub fn start_handshake(&mut self) -> bool {
         if self.state != HandshakeState::Start {
             return false;
         }
-        
+
         // Generate client random
         for i in 0..32 {
             self.client_random[i] = ((i as u32 * 7919) % 256) as u8;
         }
-        
+
         self.state = HandshakeState::WaitServerHello;
         true
     }
-    
+
     /// Process received TLS record
     pub fn process_record(&mut self, record: &TlsRecord) -> bool {
         // Validate record type
@@ -243,13 +243,13 @@ impl TlsContext {
             _ => false,
         }
     }
-    
+
     /// Process handshake message
     fn process_handshake(&mut self, data: &[u8]) -> bool {
         if data.is_empty() {
             return false;
         }
-        
+
         let msg_type = match data[0] {
             0 => HandshakeType::ClientHello,
             2 => HandshakeType::ServerHello,
@@ -261,7 +261,7 @@ impl TlsContext {
             20 => HandshakeType::Finished,
             _ => return false,
         };
-        
+
         // Record handshake message
         if (self.handshake_count as usize) < 32 {
             self.handshake_messages[self.handshake_count as usize] = HandshakeMessage {
@@ -277,7 +277,7 @@ impl TlsContext {
             };
             self.handshake_count += 1;
         }
-        
+
         // Update state based on message
         match msg_type {
             HandshakeType::ServerHello => {
@@ -309,55 +309,55 @@ impl TlsContext {
             _ => true,
         }
     }
-    
+
     /// Encrypt application data
     pub fn send_message(&mut self, plaintext: &[u8]) -> Option<[u8; 256]> {
         if self.state != HandshakeState::Established {
             return None;
         }
-        
+
         let mut ciphertext = [0u8; 256];
-        
+
         if plaintext.len() > 240 {
             return None;
         }
-        
+
         // Simple XOR encryption (would use real AES-GCM in production)
         for i in 0..plaintext.len() {
             ciphertext[i] = plaintext[i] ^ self.client_write_key[i % 32];
         }
-        
+
         self.sequence_write += 1;
         Some(ciphertext)
     }
-    
+
     /// Decrypt received message
     pub fn recv_message(&mut self, ciphertext: &[u8]) -> Option<[u8; 256]> {
         if self.state != HandshakeState::Established {
             return None;
         }
-        
+
         let mut plaintext = [0u8; 256];
-        
+
         if ciphertext.len() > 256 {
             return None;
         }
-        
+
         // Simple XOR decryption
         for i in 0..ciphertext.len() {
             plaintext[i] = ciphertext[i] ^ self.server_write_key[i % 32];
         }
-        
+
         self.sequence_read += 1;
         Some(plaintext)
     }
-    
+
     /// Generate session ticket
     pub fn get_session_ticket(&mut self) -> Option<SessionTicket> {
         if self.ticket_count >= 8 {
             return None;
         }
-        
+
         let ticket = SessionTicket {
             ticket_id: self.ticket_count as u32,
             lifetime: 3600,
@@ -371,28 +371,28 @@ impl TlsContext {
             },
             ticket_data: [0u8; 128],
         };
-        
+
         self.session_tickets[self.ticket_count as usize] = ticket;
         self.ticket_count += 1;
-        
+
         Some(ticket)
     }
-    
+
     /// Validate peer certificate
     pub fn validate_certificate(&self, cert_data: &[u8]) -> bool {
         if cert_data.is_empty() {
             return false;
         }
-        
+
         // Check certificate format (simplified)
         cert_data.len() > 0 && cert_data[0] == 0x30 // SEQUENCE tag in ASN.1
     }
-    
+
     /// Get current handshake state
     pub fn get_state(&self) -> HandshakeState {
         self.state
     }
-    
+
     /// Set cipher suite
     pub fn set_cipher_suite(&mut self, suite: CipherSuite) -> bool {
         for cipher in &self.supported_ciphers[..self.cipher_count as usize] {
@@ -403,17 +403,17 @@ impl TlsContext {
         }
         false
     }
-    
+
     /// Get selected cipher suite
     pub fn get_cipher_suite(&self) -> CipherSuite {
         self.cipher_suite
     }
-    
+
     /// Get handshake message count
     pub fn get_handshake_count(&self) -> u8 {
         self.handshake_count
     }
-    
+
     /// Is DTLS mode
     pub fn is_dtls(&self) -> bool {
         self.is_dtls
@@ -423,21 +423,21 @@ impl TlsContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_tls_context_creation() {
         let ctx = TlsContext::new(true);
         assert_eq!(ctx.get_state(), HandshakeState::Start);
         assert!(!ctx.is_dtls());
     }
-    
+
     #[test]
     fn test_dtls_context_creation() {
         let ctx = TlsContext::new_dtls(false);
         assert!(ctx.is_dtls());
         assert_eq!(ctx.get_state(), HandshakeState::Start);
     }
-    
+
     #[test]
     fn test_start_handshake() {
         let mut ctx = TlsContext::new(true);
