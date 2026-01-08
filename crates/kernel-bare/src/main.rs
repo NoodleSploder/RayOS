@@ -284,6 +284,7 @@ mod perf_profiling;
 mod integration_harness;
 mod graphics_abstraction;
 mod gpu_memory;
+mod hdr_color_management;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
