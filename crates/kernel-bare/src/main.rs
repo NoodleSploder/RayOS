@@ -289,6 +289,7 @@ mod advanced_compositing;
 mod graphics_optimization;
 mod wayland_protocol;
 mod input_events;
+mod window_management;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
