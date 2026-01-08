@@ -270,6 +270,7 @@ mod pci;
 mod rayapp;
 mod rayapp_clipboard;
 mod rayapp_events;
+mod wayland_core;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
