@@ -425,7 +425,7 @@ mod tests {
     #[test]
     fn test_memory_region_management() {
         let mut gpu = VirtualGpu::new(1, 100, 2048, GpuType::Paravirt);
-        
+
         assert!(gpu.add_memory_region(0, 512));
         assert_eq!(gpu.num_memory_regions, 1);
 

@@ -91,7 +91,7 @@ impl ClusterNode {
     }
 
     pub fn can_accept_vm(&self, memory_required_gb: u16) -> bool {
-        self.status == NodeStatus::Ready && 
+        self.status == NodeStatus::Ready &&
         memory_required_gb <= self.memory_available_gb &&
         self.vms_hosted < 128
     }
@@ -153,7 +153,7 @@ impl ResourcePool {
     }
 
     pub fn can_allocate(&self, cpu_cores: u16, memory_gb: u16) -> bool {
-        self.available_cpu_cores >= cpu_cores as u32 && 
+        self.available_cpu_cores >= cpu_cores as u32 &&
         self.available_memory_gb >= memory_gb as u32
     }
 }
@@ -366,7 +366,7 @@ mod tests {
     fn test_cluster_initialization() {
         let mut orchestrator = ClusterOrchestrator::new();
         orchestrator.join_node(1, 0x7F000001, ClusterNodeRole::Controller);
-        
+
         let initialized = orchestrator.complete_node_init(1);
         assert!(initialized);
         assert_eq!(orchestrator.healthy_nodes, 1);
@@ -392,11 +392,11 @@ mod tests {
     #[test]
     fn test_best_fit_scheduling() {
         let mut orchestrator = ClusterOrchestrator::new();
-        
+
         // Create nodes
         orchestrator.join_node(1, 0x7F000001, ClusterNodeRole::Worker);
         orchestrator.complete_node_init(1);
-        
+
         orchestrator.join_node(2, 0x7F000002, ClusterNodeRole::Worker);
         orchestrator.complete_node_init(2);
 

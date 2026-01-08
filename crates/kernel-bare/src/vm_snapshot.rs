@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn test_restore_workflow() {
         let mut manager = SnapshotRestoreManager::new();
-        
+
         // Create and ready a snapshot
         manager.create_snapshot(1, 100);
         for _ in 0..20 {

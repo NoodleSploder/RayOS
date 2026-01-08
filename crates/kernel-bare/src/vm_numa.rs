@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn test_page_migration_decision() {
         let mut affinity = MemoryPageAffinity::new(0, 0);
-        
+
         // Record 10 accesses: 6 remote, 4 local
         for _ in 0..6 {
             affinity.record_access(1); // Remote
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn test_manager_numa_nodes() {
         let mut manager = NumaMemoryManager::new();
-        
+
         for i in 0..4 {
             let added = manager.add_numa_node(i, 4096);
             assert!(added);
@@ -445,7 +445,7 @@ mod tests {
 
         // Record page access
         manager.record_page_access(0, 1, 0);
-        
+
         let migrated = manager.migrate_page(0, 1);
         assert!(migrated);
 
@@ -456,7 +456,7 @@ mod tests {
     #[test]
     fn test_memory_locality_optimization() {
         let mut manager = NumaMemoryManager::new();
-        
+
         for i in 0..8 {
             manager.add_numa_node(i, 4096);
         }
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn test_multiple_vms_numa() {
         let mut manager = NumaMemoryManager::new();
-        
+
         for i in 0..4 {
             manager.add_numa_node(i, 8192);
         }
