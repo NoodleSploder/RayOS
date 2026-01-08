@@ -1539,6 +1539,98 @@ impl FAT32FileSystem {
         // This requires passing block device reference or making self mutable
         (0, 0)  // Not found (will be implemented with block device access)
     }
+
+    /// Convert filename to FAT 8.3 format
+    /// Returns [11]u8 with name (8 bytes) and extension (3 bytes), space-padded
+    pub fn filename_to_fat83(filename: &str) -> [u8; 11] {
+        let mut fat_name = [0x20u8; 11];  // Space-padded array
+        
+        // Find extension by searching for the last dot
+        let mut name_end = filename.len();
+        let mut ext_start = filename.len();
+        
+        for (i, ch) in filename.char_indices().rev() {
+            if ch == '.' {
+                name_end = i;
+                ext_start = i + 1;
+                break;
+            }
+        }
+        
+        // Copy name part (up to 8 bytes, uppercase)
+        let name = &filename[..name_end];
+        let name_len = core::cmp::min(name.len(), 8);
+        for (i, &byte) in name.as_bytes()[..name_len].iter().enumerate() {
+            fat_name[i] = byte.to_ascii_uppercase();
+        }
+        
+        // Copy extension part (up to 3 bytes, uppercase)
+        if ext_start < filename.len() {
+            let ext = &filename[ext_start..];
+            let ext_len = core::cmp::min(ext.len(), 3);
+            for (i, &byte) in ext.as_bytes()[..ext_len].iter().enumerate() {
+                fat_name[8 + i] = byte.to_ascii_uppercase();
+            }
+        }
+        
+        fat_name
+    }
+
+    /// Create a directory entry for a file or directory
+    /// This is a static helper that doesn't require filesystem instance
+    pub fn create_directory_entry(filename: &str, cluster: u32, size: u32, is_dir: bool) -> [u8; 32] {
+        let mut entry = [0u8; 32];
+        
+        // Get FAT 8.3 formatted name
+        let fat_name = Self::filename_to_fat83(filename);
+        
+        // Copy filename
+        for i in 0..11 {
+            entry[i] = fat_name[i];
+        }
+        
+        // Attribute byte (11): 0x10 for directory, 0x20 for file
+        entry[11] = if is_dir { 0x10 } else { 0x20 };
+        
+        // Reserved/creation time tenths (12)
+        entry[12] = 0;
+        
+        // Creation time (13-14) - placeholder
+        entry[13] = 0x00;
+        entry[14] = 0x00;
+        
+        // Creation date (15-16) - placeholder (1/1/1980)
+        entry[15] = 0x21;
+        entry[16] = 0x00;
+        
+        // Last access date (17-18) - placeholder
+        entry[17] = 0x21;
+        entry[18] = 0x00;
+        
+        // High word of cluster (19-20)
+        entry[20] = ((cluster >> 24) & 0xFF) as u8;
+        entry[21] = ((cluster >> 16) & 0xFF) as u8;
+        
+        // Write time (22-23) - placeholder
+        entry[22] = 0x00;
+        entry[23] = 0x00;
+        
+        // Write date (24-25) - placeholder
+        entry[24] = 0x21;
+        entry[25] = 0x00;
+        
+        // Low word of cluster (26-27)
+        entry[26] = (cluster & 0xFF) as u8;
+        entry[27] = ((cluster >> 8) & 0xFF) as u8;
+        
+        // File size (28-31, little-endian)
+        entry[28] = (size & 0xFF) as u8;
+        entry[29] = ((size >> 8) & 0xFF) as u8;
+        entry[30] = ((size >> 16) & 0xFF) as u8;
+        entry[31] = ((size >> 24) & 0xFF) as u8;
+        
+        entry
+    }
 }
 
 /// Boot configuration structure
@@ -1936,26 +2028,25 @@ pub fn fs_create_file(path: &str) -> Result<u32, u32> {
     let (_parent_path, filename) = parse_file_path(path);
     
     // Validate filename
-    if filename.is_empty() || filename.len() > 11 {
+    if filename.is_empty() || filename.len() > 255 {
         return Err(1);  // Invalid filename
     }
     
-    // TODO: Full implementation steps:
+    // Full implementation steps:
     // 1. Navigate to parent directory (for now assume root)
     // 2. Check if file already exists (avoid duplicates)
-    // 3. Allocate a new cluster from FAT
-    // 4. Create directory entry:
-    //    - Convert filename to FAT 8.3 format (name.ext)
-    //    - Set attributes to 0x20 (archive)
-    //    - Set starting cluster to allocated cluster
-    //    - Set file size to 0 (new file)
-    //    - Set creation timestamp
+    // 3. Allocate a new cluster from FAT (placeholder cluster 2)
+    // 4. Create directory entry using FAT32FileSystem helper
     // 5. Write directory entry to root directory sector
     // 6. Flush FAT table changes to disk
     // 7. Flush directory changes to disk
     
-    // For now: placeholder returning success
-    // Real implementation: write directory entry, return size (0)
+    // For now: use helper to create entry structure (still placeholder for disk I/O)
+    // TODO: Implement actual disk I/O to write the entry
+    let _entry = FAT32FileSystem::create_directory_entry(filename, 2, 0, false);
+    
+    // Placeholder returning success
+    // Real implementation: write _entry to root directory, return 0
     Ok(0)
 }
 
@@ -1993,16 +2084,30 @@ pub fn fs_delete_file(_path: &str) -> Result<(), u32> {
 
 /// Create a directory
 /// Returns success or error code
-pub fn fs_mkdir(_path: &str) -> Result<(), u32> {
-    // TODO: Implement actual directory creation
-    // 1. Parse path to get parent directory and dir name
-    // 2. Navigate to parent
-    // 3. Check if directory already exists
-    // 4. Allocate cluster for new directory
-    // 5. Create . and .. entries in new directory
-    // 6. Create directory entry in parent
-    // 7. Flush changes
-
+pub fn fs_mkdir(path: &str) -> Result<(), u32> {
+    // Parse path to get parent directory and dir name
+    let (_parent_path, dirname) = parse_file_path(path);
+    
+    // Validate directory name
+    if dirname.is_empty() || dirname.len() > 255 {
+        return Err(1);  // Invalid directory name
+    }
+    
+    // Full implementation steps:
+    // 1. Navigate to parent (for now assume root)
+    // 2. Check if directory already exists
+    // 3. Allocate cluster for new directory (placeholder: cluster 3)
+    // 4. Create . and .. entries in new directory
+    // 5. Create directory entry in parent using FAT32FileSystem helper
+    // 6. Write entries to disk
+    // 7. Flush FAT and directory changes
+    
+    // For now: use helper to create directory entry
+    // TODO: Implement actual disk I/O to write the entry
+    let _entry = FAT32FileSystem::create_directory_entry(dirname, 3, 0, true);
+    
+    // Placeholder returning success
+    // Real implementation: write _entry to root directory
     Ok(())
 }
 
