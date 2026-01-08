@@ -269,14 +269,14 @@ impl AutoTuner {
 
     pub fn apply_recommendation(&mut self, rec: TuningRecommendation) -> bool {
         self.stats.tuning_attempts = self.stats.tuning_attempts.saturating_add(1);
-        
+
         // Update current configuration
         let idx = self.current_config_idx as usize;
         self.configurations[idx].cpu_frequency_mhz = rec.recommended_value;
 
         self.stats.successful_optimizations = self.stats.successful_optimizations.saturating_add(1);
         if self.stats.successful_optimizations > 0 {
-            self.stats.avg_performance_gain = 
+            self.stats.avg_performance_gain =
                 (self.stats.avg_performance_gain + rec.estimated_impact) / 2;
         }
 

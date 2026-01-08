@@ -66,7 +66,7 @@ impl PState {
     pub fn new(frequency_mhz: u32) -> Self {
         let voltage_mv = (1200 + (frequency_mhz / 100)).min(1500);
         let power_consumption_mw = frequency_mhz / 10;
-        
+
         Self {
             frequency_mhz,
             voltage_mv,

@@ -164,7 +164,7 @@ impl IOOptimizer {
         // Check QoS admission
         let io_size_mb = (op.length / 1024 / 1024).max(1);
         let qos_idx = (op.priority / 32).min(7) as usize;
-        
+
         if self.rate_limiter_enabled && !self.qos_classes[qos_idx].can_admit(io_size_mb) {
             return false;
         }
@@ -173,7 +173,7 @@ impl IOOptimizer {
         self.operations[idx] = op;
         self.op_count += 1;
         self.stats.record_operation(op.length as u64);
-        
+
         true
     }
 
@@ -200,7 +200,7 @@ impl IOOptimizer {
         if batch.op_count > 0 {
             batch.total_bytes = total_bytes;
             batch.vectorized = batch.op_count > 1;
-            
+
             let idx = self.batch_count as usize;
             self.batches[idx] = batch;
             self.batch_count += 1;
