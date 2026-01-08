@@ -2136,6 +2136,127 @@ fn create_file_entry(_fs: &FAT32FileSystem, _filename: &[u8]) -> u32 {
     0  // Failed (placeholder)
 }
 
+/// Additional FAT32 reading helpers
+impl FAT32FileSystem {
+    /// Read a single FAT entry from the FAT table
+    /// cluster: cluster number to read, returns the FAT chain value
+    pub fn read_fat_entry(&self, _cluster: u32) -> u32 {
+        // Calculate which FAT sector contains this entry
+        // FAT sector = entry_number / (bytes_per_sector / 4)
+        // Offset in sector = (entry_number % (bytes_per_sector / 4)) * 4
+        //
+        // Example for 512-byte sectors:
+        // - 128 entries per sector (512 / 4)
+        // - Sector = cluster / 128
+        // - Offset = (cluster % 128) * 4
+        // - First FAT location: reserved_sectors
+        //
+        // TODO: Implement with block device access:
+        // 1. Calculate which FAT sector holds this entry
+        // 2. Read FAT sector from disk (sector = reserved_sectors + entry_sector)
+        // 3. Extract 4-byte entry at calculated offset
+        // 4. Convert from little-endian to u32
+        // 5. Return the FAT chain value
+
+        0x0FFFFFFF  // Placeholder: return EOF marker
+    }
+
+    /// Walk FAT chain and get next cluster
+    /// current_cluster: cluster to start from, returns next cluster in chain
+    pub fn next_cluster_in_chain(&self, _current_cluster: u32) -> u32 {
+        // Follow the FAT chain
+        //
+        // Algorithm:
+        // 1. Call read_fat_entry(current_cluster)
+        // 2. Check returned value:
+        //    - 0x00000000: free cluster (error - shouldn't reach)
+        //    - 0xFFFFFFF7: bad cluster (error)
+        //    - 0x0FFFFFFF: end of file (return 0)
+        //    - Otherwise: next cluster number
+        // 3. Return the next cluster or 0 if EOF
+        //
+        // TODO: Implement with read_fat_entry()
+
+        0  // Placeholder: EOF
+    }
+
+    /// Read cluster data from disk
+    /// cluster: cluster number to read, buffer: destination buffer (usually 4096 bytes)
+    /// Returns bytes read or 0 on error
+    pub fn read_cluster(&self, _cluster: u32, _buffer: &mut [u8]) -> u32 {
+        // Calculate cluster sector location
+        // Data area starts after: reserved_sectors + FATs + root directory
+        // cluster_sector = data_start_sector + (cluster - 2) * sectors_per_cluster
+        //
+        // Algorithm:
+        // 1. Calculate data area starting sector:
+        //    data_start = reserved_sectors + (fat_size * num_fats) + root_sectors
+        // 2. Calculate cluster's starting sector:
+        //    cluster_sector = data_start + (cluster - 2) * sectors_per_cluster
+        // 3. Read sectors_per_cluster sectors starting from cluster_sector
+        // 4. Copy data to buffer
+        // 5. Return bytes read
+        //
+        // TODO: Implement with block device access:
+        // - Call block_device.read_blocks(lba, count, buffer)
+        // - Handle partial reads
+        // - Return actual bytes read
+
+        0  // Placeholder: no bytes read
+    }
+
+    /// Get file size from directory entry bytes
+    /// entry_bytes: 32-byte directory entry
+    /// Returns the file size in bytes
+    pub fn entry_file_size(entry_bytes: &[u8; 32]) -> u32 {
+        // File size is stored at bytes 28-31 in little-endian format
+        if entry_bytes.len() < 32 {
+            return 0;
+        }
+
+        ((entry_bytes[28] as u32) |
+         ((entry_bytes[29] as u32) << 8) |
+         ((entry_bytes[30] as u32) << 16) |
+         ((entry_bytes[31] as u32) << 24))
+    }
+
+    /// Get starting cluster from directory entry bytes
+    /// entry_bytes: 32-byte directory entry
+    /// Returns the cluster number
+    pub fn entry_starting_cluster(entry_bytes: &[u8; 32]) -> u32 {
+        // Cluster is split across two fields:
+        // Bytes 20-21: High word (upper 16 bits)
+        // Bytes 26-27: Low word (lower 16 bits)
+        // Result = (high << 16) | low
+
+        if entry_bytes.len() < 32 {
+            return 0;
+        }
+
+        let high = ((entry_bytes[20] as u32) |
+                   ((entry_bytes[21] as u32) << 8));
+        let low = ((entry_bytes[26] as u32) |
+                  ((entry_bytes[27] as u32) << 8));
+
+        (high << 16) | low
+    }
+
+    /// Check if directory entry is a file (not directory)
+    /// entry_bytes: 32-byte directory entry
+    /// Returns true if it's a regular file
+    pub fn is_file_entry(entry_bytes: &[u8; 32]) -> bool {
+        // Attribute byte at offset 11
+        // 0x10 = directory, 0x20 = file (archive)
+        if entry_bytes.len() < 32 {
+            return false;
+        }
+
+        let attributes = entry_bytes[11];
+        // File if archive bit set and directory bit not set
+        (attributes & 0x20) != 0 && (attributes & 0x10) == 0
+    }
+}
+
 /// Path parsing helper - split full path into components
 /// Returns (parent_path, filename)
 fn parse_file_path(path: &str) -> (&str, &str) {
@@ -2182,6 +2303,48 @@ pub fn fs_create_file(path: &str) -> Result<u32, u32> {
     // For now: return success without persisting to disk
     // The entry structure is created correctly and can be validated
     Ok(0)
+}
+
+/// Read file contents from filesystem
+/// Returns bytes read or error code
+pub fn fs_read_file(path: &str, buffer: &mut [u8]) -> Result<u32, u32> {
+    // Parse path into parent directory and filename
+    let (_parent_path, filename) = parse_file_path(path);
+
+    // Validate filename
+    if filename.is_empty() || filename.len() > 255 {
+        return Err(1);  // Invalid filename
+    }
+
+    // Validate buffer
+    if buffer.is_empty() {
+        return Err(2);  // No buffer provided
+    }
+
+    // Full implementation steps:
+    // 1. Find file in root directory using find_file_in_root()
+    //    - Get starting cluster and file size
+    // 2. If file not found, return error
+    // 3. Calculate clusters needed for file (ceil(file_size / bytes_per_cluster))
+    // 4. Read cluster chain from FAT:
+    //    - Start with starting cluster
+    //    - For each cluster:
+    //      - Read cluster data using read_cluster()
+    //      - Copy to buffer (up to buffer size)
+    //      - Call next_cluster_in_chain() to get next cluster
+    // 5. Stop when:
+    //    - Buffer is full
+    //    - End of file reached (FAT entry = 0x0FFFFFFF)
+    // 6. Return total bytes read
+
+    // TODO: Implement with disk I/O:
+    // - Call FAT32FileSystem helper methods to read FAT and clusters
+    // - Handle partial reads
+    // - Copy data to user buffer
+
+    // For now: placeholder
+    // Real implementation would read file contents and copy to buffer
+    Ok(0)  // 0 bytes read (placeholder)
 }
 
 /// Write data to a file

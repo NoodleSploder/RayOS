@@ -496,10 +496,38 @@ impl Shell {
         }
 
         let filename = &args[start..end];
+
+        // Convert filename to string
+        let filename_str = match core::str::from_utf8(filename) {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = writeln!(output, "Error: Filename contains invalid UTF-8");
+                return;
+            }
+        };
+
         let _ = write!(output, "Contents of ");
         let _ = output.write_all(filename);
         let _ = writeln!(output, ":");
-        let _ = writeln!(output, "(File reading implemented in filesystem layer)");
+
+        // Try to read file
+        let mut file_buffer = [0u8; 4096];
+        match super::fs_read_file(filename_str, &mut file_buffer) {
+            Ok(bytes_read) => {
+                if bytes_read == 0 {
+                    let _ = writeln!(output, "(empty file or file not found)");
+                } else {
+                    // Display file contents
+                    let content = &file_buffer[..bytes_read as usize];
+                    let _ = output.write_all(content);
+                    let _ = writeln!(output, "");
+                    let _ = writeln!(output, "({} bytes)", bytes_read);
+                }
+            }
+            Err(code) => {
+                let _ = writeln!(output, "Error reading file (code: {})", code);
+            }
+        }
     }
 
     fn cmd_cp(&self, output: &mut ShellOutput, args: &[u8]) {
@@ -549,7 +577,7 @@ impl Shell {
 
     fn cmd_test(&self, output: &mut ShellOutput) {
         let _ = writeln!(output, "=== Filesystem Tests ===");
-        
+
         // Test 1: Create a file
         let _ = writeln!(output, "\nTest 1: Creating file 'test.txt'");
         match super::fs_create_file("test.txt") {
@@ -561,7 +589,7 @@ impl Shell {
                 let _ = writeln!(output, "  ✗ File creation failed with code: {}", code);
             }
         }
-        
+
         // Test 2: Create a directory
         let _ = writeln!(output, "\nTest 2: Creating directory 'testdir'");
         match super::fs_mkdir("testdir") {
@@ -572,7 +600,7 @@ impl Shell {
                 let _ = writeln!(output, "  ✗ Directory creation failed with code: {}", code);
             }
         }
-        
+
         // Test 3: List root directory
         let _ = writeln!(output, "\nTest 3: Listing root directory");
         match super::fs_list_dir("/") {
@@ -584,7 +612,7 @@ impl Shell {
                 let _ = writeln!(output, "  ✗ Directory listing failed with code: {}", code);
             }
         }
-        
+
         // Test 4: Delete the test file
         let _ = writeln!(output, "\nTest 4: Deleting file 'test.txt'");
         match super::fs_delete_file("test.txt") {
@@ -595,7 +623,7 @@ impl Shell {
                 let _ = writeln!(output, "  ✗ File deletion failed with code: {}", code);
             }
         }
-        
+
         // Test 5: Remove the test directory
         let _ = writeln!(output, "\nTest 5: Removing directory 'testdir'");
         match super::fs_rmdir("testdir") {
@@ -606,7 +634,20 @@ impl Shell {
                 let _ = writeln!(output, "  ✗ Directory removal failed with code: {}", code);
             }
         }
-        
+
+        // Test 6: Read file contents
+        let _ = writeln!(output, "\nTest 6: Reading file contents");
+        let mut test_buffer = [0u8; 512];
+        match super::fs_read_file("test.txt", &mut test_buffer) {
+            Ok(bytes_read) => {
+                let _ = writeln!(output, "  ✓ File read completed");
+                let _ = writeln!(output, "    Bytes read: {}", bytes_read);
+            }
+            Err(code) => {
+                let _ = writeln!(output, "  ✗ File reading failed with code: {}", code);
+            }
+        }
+
         let _ = writeln!(output, "\n=== Tests Complete ===");
     }
 }
