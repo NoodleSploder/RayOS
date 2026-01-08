@@ -35,6 +35,7 @@ mod predictive_allocation; // Phase 14 Task 3: Predictive Resource Allocation
 mod distributed_txn;       // Phase 14 Task 4: Distributed Transaction Coordination
 mod monitoring_alerting;   // Phase 14 Task 5: Real-time Monitoring & Alerting
 mod performance_profiling; // Phase 14 Task 6: Performance Profiling & Analysis
+mod numa_optimization;     // Phase 15 Task 1: NUMA-Aware Memory Access Optimization
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
