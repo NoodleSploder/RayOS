@@ -300,6 +300,7 @@ mod a11y_integration;
 mod network_stack;
 mod http_protocol;
 mod content_streaming;
+mod dns_discovery;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
