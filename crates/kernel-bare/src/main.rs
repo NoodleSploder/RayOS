@@ -1732,6 +1732,175 @@ impl FAT32FileSystem {
 
         entries
     }
+
+    /// Allocate a free cluster in the FAT
+    /// Returns the cluster number or 0 if no free clusters
+    pub fn allocate_cluster(&mut self) -> u32 {
+        // For now, we'll use a simple allocation strategy
+        // In a real implementation, we'd track the free cluster search pointer
+        // and scan the FAT for free clusters (marked as 0x00000000)
+
+        // This is a stub that returns cluster 2 as a placeholder
+        // Real implementation would scan FAT sectors and find free clusters
+        2
+    }
+
+    /// Free a cluster in the FAT
+    pub fn free_cluster(&mut self, _cluster: u32) {
+        // Mark cluster as free in FAT table (0x00000000)
+        // Update FAT sectors
+    }
+
+    /// Mark cluster as end-of-file in FAT chain
+    pub fn mark_eof_cluster(&mut self, _cluster: u32) {
+        // Write 0x0FFFFFFF to mark end of file
+    }
+
+    /// Link two clusters in FAT chain
+    pub fn link_clusters(&mut self, _cluster1: u32, _cluster2: u32) {
+        // Update cluster1 to point to cluster2
+    }
+
+    /// Create a new file in a directory
+    pub fn create_file_entry(&mut self, name: &str, is_dir: bool) -> DirectoryEntry {
+        let mut entry = DirectoryEntry {
+            name: [0x20u8; 8],      // Pad with spaces
+            ext: [0x20u8; 3],       // Pad with spaces
+            attributes: if is_dir { 0x10 } else { 0x00 },
+            reserved: 0,
+            creation_time_tenths: 0,
+            creation_time: 0,
+            creation_date: 0,
+            last_access_date: 0,
+            high_cluster: 0,
+            write_time: 0,
+            write_date: 0,
+            low_cluster: 0,
+            file_size: 0,
+        };
+
+        // Split name and extension
+        let parts: [&str; 2] = if let Some(pos) = name.rfind('.') {
+            [&name[..pos], &name[pos + 1..]]
+        } else {
+            [name, ""]
+        };
+
+        // Copy filename (max 8 chars)
+        let name_bytes = parts[0].as_bytes();
+        let name_len = if name_bytes.len() > 8 { 8 } else { name_bytes.len() };
+        for i in 0..name_len {
+            entry.name[i] = name_bytes[i].to_ascii_uppercase();
+        }
+
+        // Copy extension (max 3 chars)
+        let ext_bytes = parts[1].as_bytes();
+        let ext_len = if ext_bytes.len() > 3 { 3 } else { ext_bytes.len() };
+        for i in 0..ext_len {
+            entry.ext[i] = ext_bytes[i].to_ascii_uppercase();
+        }
+
+        entry
+    }
+
+    /// Write directory entry bytes
+    pub fn directory_entry_to_bytes(entry: &DirectoryEntry) -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+
+        // Copy name and extension
+        bytes[0..8].copy_from_slice(&entry.name);
+        bytes[8..11].copy_from_slice(&entry.ext);
+
+        // Attributes
+        bytes[11] = entry.attributes;
+        bytes[12] = entry.reserved;
+        bytes[13] = entry.creation_time_tenths;
+
+        // Times/Dates
+        bytes[14] = (entry.creation_time & 0xFF) as u8;
+        bytes[15] = ((entry.creation_time >> 8) & 0xFF) as u8;
+        bytes[16] = (entry.creation_date & 0xFF) as u8;
+        bytes[17] = ((entry.creation_date >> 8) & 0xFF) as u8;
+        bytes[18] = (entry.last_access_date & 0xFF) as u8;
+        bytes[19] = ((entry.last_access_date >> 8) & 0xFF) as u8;
+
+        // Cluster
+        bytes[20] = (entry.high_cluster & 0xFF) as u8;
+        bytes[21] = ((entry.high_cluster >> 8) & 0xFF) as u8;
+        bytes[22] = (entry.write_time & 0xFF) as u8;
+        bytes[23] = ((entry.write_time >> 8) & 0xFF) as u8;
+        bytes[24] = (entry.write_date & 0xFF) as u8;
+        bytes[25] = ((entry.write_date >> 8) & 0xFF) as u8;
+        bytes[26] = (entry.low_cluster & 0xFF) as u8;
+        bytes[27] = ((entry.low_cluster >> 8) & 0xFF) as u8;
+
+        // File size
+        bytes[28] = (entry.file_size & 0xFF) as u8;
+        bytes[29] = ((entry.file_size >> 8) & 0xFF) as u8;
+        bytes[30] = ((entry.file_size >> 16) & 0xFF) as u8;
+        bytes[31] = ((entry.file_size >> 24) & 0xFF) as u8;
+
+        bytes
+    }
+}
+
+// ============================================================================
+// File System Write Operations
+// ============================================================================
+
+/// Create a new file in the filesystem
+pub fn fs_create_file(_path: &str) -> Result<u32, u32> {
+    // Parse path
+    // Find parent directory
+    // Allocate cluster for file
+    // Create directory entry
+    // Return file descriptor
+    Err(1)  // Placeholder
+}
+
+/// Write data to a file
+pub fn fs_write_file(_path: &str, _data: &[u8]) -> Result<u32, u32> {
+    // Find file
+    // Allocate clusters as needed
+    // Write data to clusters
+    // Update FAT chain
+    // Update directory entry
+    // Return bytes written
+    Err(1)  // Placeholder
+}
+
+/// Delete a file from the filesystem
+pub fn fs_delete_file(_path: &str) -> Result<(), u32> {
+    // Find file in directory
+    // Free clusters
+    // Mark directory entry as unused
+    // Update directory on disk
+    Err(1)  // Placeholder
+}
+
+/// Create a directory
+pub fn fs_mkdir(_path: &str) -> Result<(), u32> {
+    // Parse path
+    // Find parent directory
+    // Allocate cluster for directory
+    // Create . and .. entries
+    // Create directory entry in parent
+    // Return success
+    Err(1)  // Placeholder
+}
+
+/// Remove a directory (must be empty)
+pub fn fs_rmdir(_path: &str) -> Result<(), u32> {
+    // Find directory
+    // Verify empty (only . and ..)
+    // Free cluster
+    // Remove directory entry from parent
+    Err(1)  // Placeholder
+}
+
+/// List directory contents (with real filesystem data)
+pub fn fs_list_dir(_path: &str) -> [u8; 512] {
+    [0u8; 512]  // Placeholder
 }
 
 // ============================================================================
@@ -9306,14 +9475,14 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
     serial_write_str("  [PHASE9A] Initializing interactive shell...\n");
     let mut shell = shell::Shell::new();
     serial_write_str("    ✓ Shell ready\n\n");
-    
+
     // Run the shell - this is now the main user interface
     // When user exits shell, will call kernel_main() for background services
     serial_write_str("================================================================================\n");
     serial_write_str("Starting RayOS interactive shell. Type 'help' for available commands.\n");
     serial_write_str("================================================================================\n");
     shell.run();
-    
+
     // After shell exits, continue with background services
     serial_write_str("Shell exited, entering kernel background services...\n");
 

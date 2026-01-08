@@ -1,8 +1,8 @@
 # Phase 9A Task 1: Shell & Basic Utilities
 
-**Status**: Starting Implementation  
-**Date Started**: January 7, 2026  
-**Estimated Duration**: 3-4 days  
+**Status**: Starting Implementation
+**Date Started**: January 7, 2026
+**Estimated Duration**: 3-4 days
 **Estimated Code**: 800-1000 lines
 
 ---
@@ -269,12 +269,12 @@ RayOS Shell Commands:
     }
 
     fn cmd_ls(&self, args: &[&str]) {
-        let path = if args.is_empty() { 
-            &self.current_dir 
-        } else { 
-            args[0] 
+        let path = if args.is_empty() {
+            &self.current_dir
+        } else {
+            args[0]
         };
-        
+
         // Use sys_listdir to get files
         match listdir(path) {
             Ok(entries) => {
@@ -296,7 +296,7 @@ RayOS Shell Commands:
 
         match read_file(args[0]) {
             Ok(contents) => {
-                write!(OUTPUT_WRITER, "{}", 
+                write!(OUTPUT_WRITER, "{}",
                     core::str::from_utf8(&contents).unwrap_or("<binary>"))
                     .expect("write");
             }
@@ -310,7 +310,7 @@ RayOS Shell Commands:
         let processes = get_all_processes();
         write!(OUTPUT_WRITER, "PID\tNAME\tSTATE\n").expect("write");
         for proc in processes {
-            write!(OUTPUT_WRITER, "{}\t{}\t{:?}\n", 
+            write!(OUTPUT_WRITER, "{}\t{}\t{:?}\n",
                 proc.pid, proc.name, proc.state)
                 .expect("write");
         }
@@ -353,11 +353,11 @@ In `main.rs` (after boot):
 // Initialize shell after kernel is ready
 pub fn kernel_main() {
     // ... existing boot code ...
-    
+
     // Start interactive shell
     let mut shell = Shell::new();
     shell.run();
-    
+
     // If shell exits, we can return to kernel or restart
     halt();
 }
@@ -426,7 +426,7 @@ pub fn kernel_main() {
 
 ---
 
-*Task Details: Shell & Utilities*  
-*Duration: 3-4 days*  
-*Code Lines: 800-1000*  
+*Task Details: Shell & Utilities*
+*Duration: 3-4 days*
+*Code Lines: 800-1000*
 *Status: Ready to implement*

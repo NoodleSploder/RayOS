@@ -197,7 +197,7 @@ cargo +nightly build --release --target x86_64-rayos-kernel.json \
 1. **Created:** `crates/kernel-bare/src/shell.rs` (240 lines)
 2. **Modified:** `crates/kernel-bare/src/main.rs`
    - Added module declaration
-   - Added serial_read_byte() function  
+   - Added serial_read_byte() function
    - Added shell initialization and execution
 
 ## Git Commit
