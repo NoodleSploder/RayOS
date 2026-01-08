@@ -67,9 +67,9 @@ pub struct PolicyContext {
 pub struct PolicyEngine {
     rules: [PolicyRule; 128],
     rule_count: u8,
-    
+
     policies: [u32; 256],  // policy_id mapping
-    
+
     total_evaluations: u32,
     allow_decisions: u32,
     deny_decisions: u16,
@@ -98,22 +98,22 @@ impl PolicyEngine {
                 priority: 1,
             }; 128],
             rule_count: 0,
-            
+
             policies: [0; 256],
-            
+
             total_evaluations: 0,
             allow_decisions: 0,
             deny_decisions: 0,
             alerts_triggered: 0,
         }
     }
-    
+
     /// Add a policy rule
     pub fn add_policy(&mut self, policy_type: PolicyType, condition: Condition, action: Action) -> Option<u32> {
         if (self.rule_count as usize) >= 128 {
             return None;
         }
-        
+
         let rule_id = self.rule_count as u32;
         self.rules[self.rule_count as usize] = PolicyRule {
             rule_id,
@@ -122,11 +122,11 @@ impl PolicyEngine {
             action,
             priority: action.priority,
         };
-        
+
         self.rule_count += 1;
         Some(rule_id)
     }
-    
+
     /// Remove a policy
     pub fn remove_policy(&mut self, rule_id: u32) -> bool {
         for i in 0..(self.rule_count as usize) {
@@ -138,23 +138,23 @@ impl PolicyEngine {
         }
         false
     }
-    
+
     /// Evaluate request through policy chain
     pub fn evaluate_request(&mut self, context: PolicyContext) -> PolicyDecision {
         self.total_evaluations += 1;
-        
+
         // Find matching rules in priority order
         let mut matching_rule_id = None;
         let mut matching_action = None;
-        
+
         for i in 0..(self.rule_count as usize) {
             let rule = &self.rules[i];
-            
+
             // Skip if disabled
             if !rule.action.enabled {
                 continue;
             }
-            
+
             // Check if condition matches
             if self.match_condition(&rule.condition, &context) {
                 matching_rule_id = Some(rule.rule_id);
@@ -162,13 +162,13 @@ impl PolicyEngine {
                 break;
             }
         }
-        
+
         if let Some(rule_id) = matching_rule_id {
             if let Some(action) = matching_action {
                 return self.apply_action(&action, rule_id);
             }
         }
-        
+
         // Default allow
         self.allow_decisions += 1;
         PolicyDecision {
@@ -178,22 +178,22 @@ impl PolicyEngine {
             audit_id: 0,
         }
     }
-    
+
     /// Test if condition matches
     fn match_condition(&self, condition: &Condition, context: &PolicyContext) -> bool {
         // Match service ID
         if condition.service_id != 0 && condition.service_id != context.service_id {
             return false;
         }
-        
+
         // Match user role
         if condition.user_role != 0 && condition.user_role != context.user_role {
             return false;
         }
-        
+
         true
     }
-    
+
     /// Apply policy action
     fn apply_action(&mut self, action: &Action, rule_id: u32) -> PolicyDecision {
         match action.action_type {
@@ -234,7 +234,7 @@ impl PolicyEngine {
             }
         }
     }
-    
+
     /// Get policy statistics
     pub fn get_policy_stats(&self) -> (u32, u32, u16, u16) {
         (self.total_evaluations, self.allow_decisions, self.deny_decisions, self.alerts_triggered)
@@ -244,7 +244,7 @@ impl PolicyEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_policy_creation() {
         let mut pe = PolicyEngine::new();
@@ -263,7 +263,7 @@ mod tests {
         let policy_id = pe.add_policy(PolicyType::Authentication, condition, action);
         assert!(policy_id.is_some());
     }
-    
+
     #[test]
     fn test_condition_matching() {
         let mut pe = PolicyEngine::new();
@@ -280,7 +280,7 @@ mod tests {
             audit_log: false,
         };
         pe.add_policy(PolicyType::Authentication, condition, action);
-        
+
         let context = PolicyContext {
             request_id: 1,
             service_id: 1,
@@ -291,7 +291,7 @@ mod tests {
         let decision = pe.evaluate_request(context);
         assert!(decision.allowed);
     }
-    
+
     #[test]
     fn test_action_enforcement() {
         let mut pe = PolicyEngine::new();
@@ -308,7 +308,7 @@ mod tests {
             audit_log: false,
         };
         pe.add_policy(PolicyType::Authorization, condition, action);
-        
+
         let context = PolicyContext {
             request_id: 1,
             service_id: 1,

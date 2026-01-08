@@ -1,4 +1,5 @@
-# Phase 21: RayOS Foundation Completion - Three Critical Milestones
+
+'''''''[[[[# Phase 21: RayOS Foundation Completion - Three Critical Milestones
 
 **Phase**: 21/25+ (High-Impact Infrastructure & Product Readiness)
 **Status**: Planning & Specification
@@ -12,8 +13,8 @@
 Phase 21 focuses on delivering the **three highest-impact loose ends** identified in RAYOS_TODO.md:
 
 ### Milestone 1: RayOS-Native Linux Desktop (Remove VNC Dependency)
-**Goal**: Make `show linux desktop` work out-of-the-box without requiring a host VNC viewer.  
-**Impact**: Enables standalone RayOS GUI without host dependencies.  
+**Goal**: Make `show linux desktop` work out-of-the-box without requiring a host VNC viewer.
+**Impact**: Enables standalone RayOS GUI without host dependencies.
 **Primary Loose Ends** (from RAYOS_TODO.md, section 23e):
 - Presentation bridge: validate in-OS virtio-gpu scanout path is production-ready
 - Remove VNC client detection step (detect `gvncviewer`/`remote-viewer` or provide fallback)
@@ -21,8 +22,8 @@ Phase 21 focuses on delivering the **three highest-impact loose ends** identifie
 - Add automated tests for show→hide→show without host bridge
 
 ### Milestone 2: Installer & Boot Manager Foundation (Standalone OS Readiness)
-**Goal**: Build the minimal installer/boot manager so RayOS can run on physical hardware without QEMU.  
-**Impact**: Transforms RayOS from a research VM into an installable OS; enables product-level deployment.  
+**Goal**: Build the minimal installer/boot manager so RayOS can run on physical hardware without QEMU.
+**Impact**: Transforms RayOS from a research VM into an installable OS; enables product-level deployment.
 **Primary Loose Ends** (from RAYOS_TODO.md, section 11-34 + INSTALLABLE_RAYOS_PLAN.md):
 - Create `crates/installer` with USB boot detection and partition management
 - Implement minimal boot manager that detects and boots installed RayOS copies
@@ -30,8 +31,8 @@ Phase 21 focuses on delivering the **three highest-impact loose ends** identifie
 - Wire installer into the build pipeline
 
 ### Milestone 3: Observability & Crash Recovery (Reliability Loop)
-**Goal**: Add persistent logging, watchdog semantics, and "last known good" recovery.  
-**Impact**: Prevents regressions during VMM/GUI evolution; enables safe experimentation.  
+**Goal**: Add persistent logging, watchdog semantics, and "last known good" recovery.
+**Impact**: Prevents regressions during VMM/GUI evolution; enables safe experimentation.
 **Primary Loose Ends** (from RAYOS_TODO.md, section 3 + OBSERVABILITY_AND_RECOVERY.md):
 - Implement persistent kernel log buffer to SSD/USB
 - Add watchdog timer with automatic reboot on hang
@@ -53,7 +54,7 @@ Phase 21 focuses on delivering the **three highest-impact loose ends** identifie
 ## Task Breakdown
 
 ### Task 1: Native Linux Desktop Presentation Bridge (800 lines)
-**File**: `crates/kernel-bare/src/linux_presentation.rs` (new module)  
+**File**: `crates/kernel-bare/src/linux_presentation.rs` (new module)
 **Goal**: Validate and harden the in-OS virtio-gpu scanout presentation path.
 
 **Components**:

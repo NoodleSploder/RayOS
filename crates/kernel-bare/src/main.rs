@@ -65,6 +65,19 @@ mod api_mediation;         // Phase 19 Task 3: Request/Response Transformation &
 mod api_load_balancer;     // Phase 19 Task 4: Load Balancing & Service Discovery
 mod api_resilience;        // Phase 19 Task 5: Circuit Breaker & Resilience Patterns
 mod api_monitoring;        // Phase 19 Task 6: API Monitoring & Metrics
+mod api_rate_limiter;      // Phase 20 Task 1: Token Bucket & Leaky Bucket Rate Limiting
+mod api_quota;             // Phase 20 Task 2: Quota Management System
+mod api_priority;          // Phase 20 Task 3: Request Prioritization & Queuing
+mod api_policy;            // Phase 20 Task 4: Policy Engine & Rule Evaluation
+mod api_cost;              // Phase 20 Task 5: Cost Tracking & Attribution
+mod api_governance_metrics; // Phase 20 Task 6: Rate Limit Observability & Metrics
+mod linux_presentation;    // Phase 21 Task 1: PresentationBridge for native Linux desktop
+mod installer;             // Phase 21 Task 2: Installer Foundation & Partition Manager
+mod boot_manager;          // Phase 21 Task 3: Boot Manager & Recovery
+mod persistent_log;        // Phase 21 Task 4: Persistent Logging System
+mod watchdog;              // Phase 21 Task 4: Watchdog Timer & Hang Detection
+mod boot_marker;           // Phase 21 Task 5: Boot Markers & Golden State
+mod recovery_policy;       // Phase 21 Task 5: Recovery Policy & Coordinator
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]

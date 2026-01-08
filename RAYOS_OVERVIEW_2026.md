@@ -1,7 +1,7 @@
 # RayOS: What We're Building
 
-**Created**: January 8, 2026  
-**Current Phase**: 21 (Foundation Completion)  
+**Created**: January 8, 2026
+**Current Phase**: 21 (Foundation Completion)
 **Total Phases Planned**: 25+
 
 ---
@@ -156,21 +156,21 @@ bb43169 - Phase 20: Add Rate Limiting & API Governance Shell Commands
 ### Three Critical Milestones
 
 #### Milestone 1: RayOS-Native Linux Desktop
-**Problem**: `show linux desktop` currently requires a host VNC viewer (e.g., `gvncviewer`)  
-**Solution**: Validate + harden in-OS virtio-gpu scanout path; remove host dependencies  
-**Impact**: Standalone RayOS GUI without external tools  
+**Problem**: `show linux desktop` currently requires a host VNC viewer (e.g., `gvncviewer`)
+**Solution**: Validate + harden in-OS virtio-gpu scanout path; remove host dependencies
+**Impact**: Standalone RayOS GUI without external tools
 **Deliverable**: PresentationBridge module (800 lines)
 
 #### Milestone 2: Installer & Boot Manager
-**Problem**: RayOS runs in QEMU but isn't installable on bare hardware  
-**Solution**: Build USB installer + boot menu for standalone deployment  
-**Impact**: RayOS becomes a real installable OS, not a research VM  
+**Problem**: RayOS runs in QEMU but isn't installable on bare hardware
+**Solution**: Build USB installer + boot menu for standalone deployment
+**Impact**: RayOS becomes a real installable OS, not a research VM
 **Deliverable**: InstallerBoot + BootManager modules (1,800 lines)
 
 #### Milestone 3: Observability & Crash Recovery
-**Problem**: No persistent logs, watchdog, or recovery from hangs  
-**Solution**: Add durable logging, auto-reboot watchdog, "last known good" snapshots  
-**Impact**: Prevents regressions; enables safe experimentation  
+**Problem**: No persistent logs, watchdog, or recovery from hangs
+**Solution**: Add durable logging, auto-reboot watchdog, "last known good" snapshots
+**Impact**: Prevents regressions; enables safe experimentation
 **Deliverable**: PersistentLog + Watchdog + BootMarker modules (2,200 lines)
 
 ### Phase 21 Task Breakdown
@@ -511,6 +511,6 @@ This transforms RayOS from a "cool research VM" into a **feasible standalone ope
 
 ---
 
-**Document created**: January 8, 2026  
-**Current status**: Phase 20 complete, Phase 21 planned  
+**Document created**: January 8, 2026
+**Current status**: Phase 20 complete, Phase 21 planned
 **Next session**: Begin Phase 21 implementation

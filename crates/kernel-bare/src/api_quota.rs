@@ -48,12 +48,12 @@ pub struct QuotaBucket {
 pub struct QuotaManager {
     allocations: [QuotaAllocation; 256],
     allocation_count: u8,
-    
+
     quotas: [QuotaBucket; 512],
     quota_count: u16,
-    
+
     tenant_quotas: [[u32; 32]; 128],  // tenant_id -> quota_ids
-    
+
     total_quota_checks: u32,
     quota_violations: u16,
     quota_resets: u16,
@@ -72,7 +72,7 @@ impl QuotaManager {
                 reset_policy: 0,
             }; 256],
             allocation_count: 0,
-            
+
             quotas: [QuotaBucket {
                 allocation: QuotaAllocation {
                     quota_id: 0,
@@ -92,21 +92,21 @@ impl QuotaManager {
                 enforcement_mode: 1,
             }; 512],
             quota_count: 0,
-            
+
             tenant_quotas: [[0; 32]; 128],
-            
+
             total_quota_checks: 0,
             quota_violations: 0,
             quota_resets: 0,
         }
     }
-    
+
     /// Allocate a new quota for a tenant
     pub fn allocate_quota(&mut self, tenant_id: u32, quota_type: QuotaType, limit: u64) -> Option<u32> {
         if (self.quota_count as usize) >= 512 {
             return None;
         }
-        
+
         let quota_id = self.quota_count as u32;
         let allocation = QuotaAllocation {
             quota_id,
@@ -116,7 +116,7 @@ impl QuotaManager {
             window_size_sec: 86400,
             reset_policy: 0,
         };
-        
+
         self.quotas[self.quota_count as usize] = QuotaBucket {
             allocation,
             usage: QuotaUsage {
@@ -128,7 +128,7 @@ impl QuotaManager {
             },
             enforcement_mode: 1,
         };
-        
+
         // Add to tenant's quota list
         if (tenant_id as usize) < 128 {
             for i in 0..32 {
@@ -138,66 +138,66 @@ impl QuotaManager {
                 }
             }
         }
-        
+
         self.quota_count += 1;
         Some(quota_id)
     }
-    
+
     /// Consume quota
     pub fn consume_quota(&mut self, quota_id: u32, amount: u64) -> bool {
         self.total_quota_checks += 1;
-        
+
         if (quota_id as usize) >= (self.quota_count as usize) {
             return false;
         }
-        
+
         let quota = &mut self.quotas[quota_id as usize];
-        
+
         // Check if quota exceeded
         if quota.usage.current_usage + amount > quota.allocation.limit {
             self.quota_violations += 1;
-            
+
             // If soft mode, allow but log
             if quota.enforcement_mode == 0 {
                 quota.usage.current_usage += amount;
                 return true;
             }
-            
+
             return false;
         }
-        
+
         quota.usage.current_usage += amount;
         quota.usage.requests_count += 1;
-        
+
         // Update peak usage
         if quota.usage.current_usage > quota.usage.peak_usage {
             quota.usage.peak_usage = quota.usage.current_usage;
         }
-        
+
         true
     }
-    
+
     /// Check quota without consuming
     pub fn check_quota(&self, quota_id: u32, amount: u64) -> bool {
         if (quota_id as usize) >= (self.quota_count as usize) {
             return false;
         }
-        
+
         let quota = &self.quotas[quota_id as usize];
         quota.usage.current_usage + amount <= quota.allocation.limit
     }
-    
+
     /// Reset quota to initial value
     pub fn reset_quota(&mut self, quota_id: u32) -> bool {
         if (quota_id as usize) >= (self.quota_count as usize) {
             return false;
         }
-        
+
         self.quotas[quota_id as usize].usage.current_usage = 0;
         self.quota_resets += 1;
         true
     }
-    
+
     /// Get quota status
     pub fn get_quota_status(&self, quota_id: u32) -> Option<(u64, u64, u32)> {
         if (quota_id as usize) < (self.quota_count as usize) {
@@ -207,7 +207,7 @@ impl QuotaManager {
             None
         }
     }
-    
+
     /// Set enforcement mode (soft=0 or hard=1)
     pub fn set_enforcement_mode(&mut self, quota_id: u32, mode: u8) -> bool {
         if (quota_id as usize) < (self.quota_count as usize) {
@@ -216,7 +216,7 @@ impl QuotaManager {
         }
         false
     }
-    
+
     /// Update quota limit
     pub fn update_limit(&mut self, quota_id: u32, new_limit: u64) -> bool {
         if (quota_id as usize) < (self.quota_count as usize) {
@@ -225,7 +225,7 @@ impl QuotaManager {
         }
         false
     }
-    
+
     /// Get quota utilization percentage
     pub fn get_quota_utilization(&self, quota_id: u32) -> u8 {
         if (quota_id as usize) < (self.quota_count as usize) {
@@ -236,7 +236,7 @@ impl QuotaManager {
             0
         }
     }
-    
+
     /// Get quota statistics
     pub fn get_quota_stats(&self) -> (u32, u16, u16) {
         (self.total_quota_checks, self.quota_violations, self.quota_resets)
@@ -246,14 +246,14 @@ impl QuotaManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_quota_allocation() {
         let mut qm = QuotaManager::new();
         let quota_id = qm.allocate_quota(1, QuotaType::RequestCount, 1000);
         assert!(quota_id.is_some());
     }
-    
+
     #[test]
     fn test_quota_consumption() {
         let mut qm = QuotaManager::new();
@@ -261,7 +261,7 @@ mod tests {
         let allowed = qm.consume_quota(quota_id, 500);
         assert!(allowed);
     }
-    
+
     #[test]
     fn test_quota_reset() {
         let mut qm = QuotaManager::new();
