@@ -3,11 +3,12 @@
 #![allow(static_mut_refs)]
 #![allow(dead_code)]
 
-mod shell;    // Phase 9A Task 1: Shell & Utilities
-mod init;     // Phase 9B Task 2: System Services & Init
-mod logging;  // Phase 9B Task 3: Observability & Logging
-mod recovery; // Phase 9B Task 5: Update & Recovery
-mod security; // Phase 10 Task 2: Security Hardening & Measured Boot
+mod shell;                 // Phase 9A Task 1: Shell & Utilities
+mod init;                  // Phase 9B Task 2: System Services & Init
+mod logging;               // Phase 9B Task 3: Observability & Logging
+mod recovery;              // Phase 9B Task 5: Update & Recovery
+mod security;              // Phase 10 Task 2: Security Hardening & Measured Boot
+mod policy_enforcement;    // Phase 10 Task 3: Process Sandboxing & Capability Enforcement
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]

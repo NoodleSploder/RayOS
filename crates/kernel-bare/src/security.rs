@@ -203,7 +203,7 @@ impl AuditLog {
             }
             self.count = MAX_AUDIT_ENTRIES - 1;
         }
-        
+
         self.entries[self.count] = AuditEntry {
             timestamp,
             event_type,
@@ -257,12 +257,12 @@ impl SecurityContext {
         if !self.integrity_monitor.is_secure() {
             return false;
         }
-        
+
         if !policy.has_capability(capability) {
             self.audit_log.log_event(0, AUDIT_CAPABILITY_DENIAL, policy.vm_id, capability as u32, 0);
             return false;
         }
-        
+
         self.audit_log.log_event(0, capability as u32, policy.vm_id, 0, 1);
         true
     }
@@ -284,19 +284,19 @@ pub fn test_boot_attestation() {
 #[cfg(test)]
 pub fn test_capability_system() {
     let mut policy = SecurityPolicy::new(1);
-    
+
     // Initially no capabilities
     assert!(!policy.has_capability(Capability::CAP_NETWORK));
     assert!(!policy.has_capability(Capability::CAP_DISK_READ));
-    
+
     // Grant capabilities
     policy.grant_capability(Capability::CAP_NETWORK);
     policy.grant_capability(Capability::CAP_DISK_READ);
-    
+
     assert!(policy.has_capability(Capability::CAP_NETWORK));
     assert!(policy.has_capability(Capability::CAP_DISK_READ));
     assert!(!policy.has_capability(Capability::CAP_DISK_WRITE));
-    
+
     // Revoke capabilities
     policy.revoke_capability(Capability::CAP_NETWORK);
     assert!(!policy.has_capability(Capability::CAP_NETWORK));
@@ -306,10 +306,10 @@ pub fn test_capability_system() {
 pub fn test_measured_boot() {
     let mut pcr = MeasuredBootPCRs::new();
     assert!(pcr.is_valid());
-    
+
     pcr.record_kernel_measurement(0xABCD_EF01);
     assert_eq!(pcr.pcr8, 0xABCD_EF01);
-    
+
     pcr.record_app_measurement(0x1234_5678);
     assert_eq!(pcr.pcr9, 0x1234_5678);
 }
@@ -318,14 +318,14 @@ pub fn test_measured_boot() {
 pub fn test_integrity_monitor() {
     let mut monitor = IntegrityMonitor::new();
     assert!(monitor.is_secure());
-    
+
     // Record violations
     for _ in 0..5 {
         monitor.record_violation();
     }
     assert_eq!(monitor.violations, 5);
     assert!(monitor.is_secure()); // Still secure under threshold
-    
+
     // Record more violations to exceed threshold
     for _ in 0..6 {
         monitor.record_violation();
@@ -337,12 +337,12 @@ pub fn test_integrity_monitor() {
 pub fn test_audit_log() {
     let mut log = AuditLog::new();
     assert_eq!(log.count, 0);
-    
+
     // Log some events
     log.log_event(1000, AUDIT_NETWORK_ACCESS, 1, 0, 1);
     log.log_event(1001, AUDIT_DISK_ACCESS, 2, 0, 0);
     log.log_event(1002, AUDIT_CAPABILITY_DENIAL, 1, 4, 0);
-    
+
     assert_eq!(log.count, 3);
     assert_eq!(log.entries[0].event_type, AUDIT_NETWORK_ACCESS);
     assert_eq!(log.entries[1].result, 0); // Denied
@@ -352,15 +352,15 @@ pub fn test_audit_log() {
 pub fn test_security_context() {
     let mut ctx = SecurityContext::new();
     assert!(ctx.verify_boot_chain());
-    
+
     let mut policy = SecurityPolicy::new(1);
     policy.grant_capability(Capability::CAP_NETWORK);
-    
+
     // Enforce access
     let result = ctx.enforce_policy(&policy, Capability::CAP_NETWORK);
     assert!(result);
     assert_eq!(ctx.audit_log.count, 1);
-    
+
     // Try to access denied capability
     let result = ctx.enforce_policy(&policy, Capability::CAP_DISK_WRITE);
     assert!(!result);
