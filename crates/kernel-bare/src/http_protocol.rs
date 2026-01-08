@@ -444,11 +444,12 @@ impl HTTPClient {
 
     pub fn connect(&mut self) -> bool {
         self.is_connected = true;
-        self.client_id = (core::time::SystemTime::now()
-            .duration_since(core::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as u32)
-            ^ 0xDEADBEEF;
+        // Use a simple counter-based ID generation for no-std compatibility
+        static mut NEXT_CLIENT_ID: u32 = 0x12345678;
+        unsafe {
+            NEXT_CLIENT_ID = NEXT_CLIENT_ID.wrapping_add(1);
+            self.client_id = NEXT_CLIENT_ID ^ 0xDEADBEEF;
+        }
         true
     }
 
