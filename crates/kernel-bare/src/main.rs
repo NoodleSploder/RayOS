@@ -47,6 +47,12 @@ mod service_mesh;          // Phase 16 Task 3: Service Mesh Control Plane
 mod tracing;               // Phase 16 Task 4: Distributed Tracing & Observability
 mod container_scheduler;   // Phase 16 Task 5: Advanced Container Scheduling
 mod zero_copy_net;         // Phase 16 Task 6: Zero-Copy Networking Stack
+mod crypto_primitives;     // Phase 17 Task 1: Cryptographic Primitives
+mod key_management;        // Phase 17 Task 2: Key Management System
+mod secure_boot;           // Phase 17 Task 3: Secure Boot & Attestation
+mod threat_detection;      // Phase 17 Task 4: Threat Detection & Prevention
+mod access_control;        // Phase 17 Task 5: Access Control & Capabilities
+mod audit_logging;         // Phase 17 Task 6: Audit Logging & Forensics
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
