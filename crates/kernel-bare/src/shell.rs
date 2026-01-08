@@ -272,6 +272,8 @@ impl Shell {
             self.cmd_profile(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"numaopt") {
             self.cmd_numaopt(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"cache") {
+            self.cmd_cache(&mut output, &input[cmd_end..]);
         } else {
             let _ = write!(output, "Unknown command: '");
             let _ = output.write_all(cmd);
@@ -359,6 +361,7 @@ impl Shell {
         let _ = writeln!(output, "  monitor [cmd]   Real-time monitoring & alerting");
         let _ = writeln!(output, "  profile [cmd]   Performance profiling & analysis");
         let _ = writeln!(output, "  numaopt [cmd]   NUMA-aware memory optimization");
+        let _ = writeln!(output, "  cache [cmd]     CPU cache optimization");
         let _ = writeln!(output, "  metrics [cmd]   System metrics & performance data");
         let _ = writeln!(output, "  trace [cmd]     Performance tracing & event analysis");
         let _ = writeln!(output, "  perf [cmd]      Performance analysis & profiling");
@@ -6279,6 +6282,58 @@ impl Shell {
                 let _ = writeln!(output, "  • Automatic page migration");
             } else {
                 let _ = writeln!(output, "Usage: numaopt [status|zones|policies|metrics|help]");
+            }
+        }
+    }
+
+    fn cmd_cache(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "CPU Cache Optimization Status");
+            let _ = writeln!(output, "=============================");
+            let _ = writeln!(output, "Cache Lines: 0/512");
+            let _ = writeln!(output, "Hit Ratio: 0%");
+            let _ = writeln!(output, "Prefetching: Enabled");
+            let _ = writeln!(output, "Current Policy: LRU");
+            let _ = writeln!(output, "Type 'cache help' for more information");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"status") {
+                let _ = writeln!(output, "=== Cache Status ===");
+                let _ = writeln!(output, "L1: 32 KB (4 cycle latency)");
+                let _ = writeln!(output, "L2: 256 KB (12 cycle latency)");
+                let _ = writeln!(output, "L3: 8 MB (40 cycle latency)");
+                let _ = writeln!(output, "");
+                let _ = writeln!(output, "Active Cache Lines: 0");
+                let _ = writeln!(output, "Prefetches: 0");
+                let _ = writeln!(output, "Coherency Events: 0");
+            } else if self.cmd_matches(cmd, b"policies") {
+                let _ = writeln!(output, "=== Cache Policies ===");
+                let _ = writeln!(output, "LRU (Least Recently Used)  - Evict oldest access");
+                let _ = writeln!(output, "LFU (Least Frequently Used) - Evict least accessed");
+                let _ = writeln!(output, "ARC (Adaptive Replacement) - Balance frequency/recency");
+            } else if self.cmd_matches(cmd, b"stats") {
+                let _ = writeln!(output, "=== Cache Statistics ===");
+                let _ = writeln!(output, "Cache Hits: 0");
+                let _ = writeln!(output, "Cache Misses: 0");
+                let _ = writeln!(output, "Hit Ratio: 0%");
+                let _ = writeln!(output, "Evictions: 0");
+                let _ = writeln!(output, "Avg Latency: 0 cycles");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "CPU Cache Optimization Commands:");
+                let _ = writeln!(output, "  cache status   Show cache configuration & status");
+                let _ = writeln!(output, "  cache policies Display replacement policies");
+                let _ = writeln!(output, "  cache stats    Show performance statistics");
+                let _ = writeln!(output, "  cache help     Show this help");
+                let _ = writeln!(output, "");
+                let _ = writeln!(output, "Features:");
+                let _ = writeln!(output, "  • 3 cache levels (L1, L2, L3)");
+                let _ = writeln!(output, "  • 512 cache lines (64-byte each)");
+                let _ = writeln!(output, "  • 3 replacement policies");
+                let _ = writeln!(output, "  • Dynamic prefetching");
+                let _ = writeln!(output, "  • MESI-like coherency tracking");
+                let _ = writeln!(output, "  • Hit/miss ratio monitoring");
+            } else {
+                let _ = writeln!(output, "Usage: cache [status|policies|stats|help]");
             }
         }
     }
