@@ -294,6 +294,7 @@ mod display_drivers;
 mod display_server;
 mod audio_engine;
 mod audio_server;
+mod accessibility;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
