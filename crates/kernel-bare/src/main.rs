@@ -282,6 +282,7 @@ mod stress_testing;
 mod failure_injection;
 mod perf_profiling;
 mod integration_harness;
+mod graphics_abstraction;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
