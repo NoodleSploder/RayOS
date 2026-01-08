@@ -1544,11 +1544,11 @@ impl FAT32FileSystem {
     /// Returns [11]u8 with name (8 bytes) and extension (3 bytes), space-padded
     pub fn filename_to_fat83(filename: &str) -> [u8; 11] {
         let mut fat_name = [0x20u8; 11];  // Space-padded array
-        
+
         // Find extension by searching for the last dot
         let mut name_end = filename.len();
         let mut ext_start = filename.len();
-        
+
         for (i, ch) in filename.char_indices().rev() {
             if ch == '.' {
                 name_end = i;
@@ -1556,14 +1556,14 @@ impl FAT32FileSystem {
                 break;
             }
         }
-        
+
         // Copy name part (up to 8 bytes, uppercase)
         let name = &filename[..name_end];
         let name_len = core::cmp::min(name.len(), 8);
         for (i, &byte) in name.as_bytes()[..name_len].iter().enumerate() {
             fat_name[i] = byte.to_ascii_uppercase();
         }
-        
+
         // Copy extension part (up to 3 bytes, uppercase)
         if ext_start < filename.len() {
             let ext = &filename[ext_start..];
@@ -1572,7 +1572,7 @@ impl FAT32FileSystem {
                 fat_name[8 + i] = byte.to_ascii_uppercase();
             }
         }
-        
+
         fat_name
     }
 
@@ -1580,55 +1580,55 @@ impl FAT32FileSystem {
     /// This is a static helper that doesn't require filesystem instance
     pub fn create_directory_entry(filename: &str, cluster: u32, size: u32, is_dir: bool) -> [u8; 32] {
         let mut entry = [0u8; 32];
-        
+
         // Get FAT 8.3 formatted name
         let fat_name = Self::filename_to_fat83(filename);
-        
+
         // Copy filename
         for i in 0..11 {
             entry[i] = fat_name[i];
         }
-        
+
         // Attribute byte (11): 0x10 for directory, 0x20 for file
         entry[11] = if is_dir { 0x10 } else { 0x20 };
-        
+
         // Reserved/creation time tenths (12)
         entry[12] = 0;
-        
+
         // Creation time (13-14) - placeholder
         entry[13] = 0x00;
         entry[14] = 0x00;
-        
+
         // Creation date (15-16) - placeholder (1/1/1980)
         entry[15] = 0x21;
         entry[16] = 0x00;
-        
+
         // Last access date (17-18) - placeholder
         entry[17] = 0x21;
         entry[18] = 0x00;
-        
+
         // High word of cluster (19-20)
         entry[20] = ((cluster >> 24) & 0xFF) as u8;
         entry[21] = ((cluster >> 16) & 0xFF) as u8;
-        
+
         // Write time (22-23) - placeholder
         entry[22] = 0x00;
         entry[23] = 0x00;
-        
+
         // Write date (24-25) - placeholder
         entry[24] = 0x21;
         entry[25] = 0x00;
-        
+
         // Low word of cluster (26-27)
         entry[26] = (cluster & 0xFF) as u8;
         entry[27] = ((cluster >> 8) & 0xFF) as u8;
-        
+
         // File size (28-31, little-endian)
         entry[28] = (size & 0xFF) as u8;
         entry[29] = ((size >> 8) & 0xFF) as u8;
         entry[30] = ((size >> 16) & 0xFF) as u8;
         entry[31] = ((size >> 24) & 0xFF) as u8;
-        
+
         entry
     }
 }
@@ -1900,7 +1900,7 @@ impl FAT32FileSystem {
         // 3. Update the 4-byte entry at the calculated offset
         // 4. Write sector back to disk
         // 5. Update all FAT copies (usually 2)
-        
+
         true  // Placeholder
     }
 
@@ -1924,7 +1924,7 @@ impl FAT32FileSystem {
         //    - If found, write entry and flush sector
         //    - Return entry number (sector_number * entries_per_sector + offset)
         // 3. Return error code if directory full
-        
+
         0  // Placeholder
     }
 
@@ -1941,7 +1941,7 @@ impl FAT32FileSystem {
         // 3. Create .. directory entry (cluster = parent)
         // 4. Pad remaining entries with 0x00
         // 5. Write cluster to disk
-        
+
         true  // Placeholder
     }
 
@@ -1961,7 +1961,7 @@ impl FAT32FileSystem {
         // 4. Return total count
         //
         // TODO: Implement with block device access
-        
+
         0  // Placeholder
     }
 
@@ -1978,7 +1978,7 @@ impl FAT32FileSystem {
         // 3. If no free slots found, return (0, 0)
         //
         // TODO: Implement with block device access
-        
+
         (0, 0)  // Placeholder
     }
 
@@ -2004,7 +2004,7 @@ impl FAT32FileSystem {
         // TODO: Implement with block device access
         // Current limitation: no Vec support in no_std
         // Workaround: Store entries in a fixed-size array or return count only
-        
+
         0  // Placeholder: 0 entries found
     }
 
@@ -2153,12 +2153,12 @@ fn parse_file_path(path: &str) -> (&str, &str) {
 pub fn fs_create_file(path: &str) -> Result<u32, u32> {
     // Parse path into parent directory and filename
     let (_parent_path, filename) = parse_file_path(path);
-    
+
     // Validate filename
     if filename.is_empty() || filename.len() > 255 {
         return Err(1);  // Invalid filename
     }
-    
+
     // Full implementation steps:
     // 1. Navigate to parent directory (for now assume root)
     // 2. Check if file already exists (avoid duplicates)
@@ -2167,18 +2167,18 @@ pub fn fs_create_file(path: &str) -> Result<u32, u32> {
     // 5. Write directory entry to root directory sector
     // 6. Flush FAT table changes to disk
     // 7. Flush directory changes to disk
-    
+
     // Create directory entry structure
     let _entry_bytes = FAT32FileSystem::create_directory_entry(filename, 2, 0, false);
-    
+
     // TODO: Implement disk I/O
     // write_root_directory_entry(&entry_bytes)?;
     // flush_fat_table()?;
-    // 
+    //
     // Current limitation: requires mutable block device reference
     // Workaround: entries are created and validated, but not yet persisted
     // The entry_bytes buffer is ready to write once filesystem has block device access
-    
+
     // For now: return success without persisting to disk
     // The entry structure is created correctly and can be validated
     Ok(0)
@@ -2221,12 +2221,12 @@ pub fn fs_delete_file(_path: &str) -> Result<(), u32> {
 pub fn fs_mkdir(path: &str) -> Result<(), u32> {
     // Parse path to get parent directory and dir name
     let (_parent_path, dirname) = parse_file_path(path);
-    
+
     // Validate directory name
     if dirname.is_empty() || dirname.len() > 255 {
         return Err(1);  // Invalid directory name
     }
-    
+
     // Full implementation steps:
     // 1. Navigate to parent (for now assume root)
     // 2. Check if directory already exists
@@ -2235,10 +2235,10 @@ pub fn fs_mkdir(path: &str) -> Result<(), u32> {
     // 5. Create directory entry in parent using FAT32FileSystem helper
     // 6. Write entries to disk
     // 7. Flush FAT and directory changes
-    
+
     // Create directory entry structure
     let _entry_bytes = FAT32FileSystem::create_directory_entry(dirname, 3, 0, true);
-    
+
     // TODO: Implement disk I/O
     // write_root_directory_entry(&entry_bytes)?;
     // create_dot_entries(cluster_3)?;
@@ -2246,7 +2246,7 @@ pub fn fs_mkdir(path: &str) -> Result<(), u32> {
     //
     // Current limitation: requires mutable block device reference
     // The directory entry is created and formatted correctly
-    
+
     // For now: return success without persisting to disk
     // Real implementation would write entry_bytes to root directory
     Ok(())
@@ -2260,7 +2260,7 @@ pub fn fs_list_dir(path: &str) -> Result<u32, u32> {
     if !path.is_empty() && path != "/" {
         return Err(2);  // Not supported (non-root directories)
     }
-    
+
     // Full implementation steps:
     // 1. Get root directory starting sector:
     //    root_sector = reserved_sectors + (fat_size * num_fats)
@@ -2278,7 +2278,7 @@ pub fn fs_list_dir(path: &str) -> Result<u32, u32> {
     // TODO: Implement with block device access
     // This requires shell integration to display the results
     // For now, return placeholder count
-    
+
     Ok(0)  // Placeholder: 0 entries listed
 }
 
@@ -2287,12 +2287,12 @@ pub fn fs_list_dir(path: &str) -> Result<u32, u32> {
 pub fn fs_rmdir(path: &str) -> Result<(), u32> {
     // Parse path to get parent directory and dir name
     let (_parent_path, dirname) = parse_file_path(path);
-    
+
     // Validate directory name
     if dirname.is_empty() {
         return Err(1);  // Invalid directory name
     }
-    
+
     // Full implementation steps:
     // 1. Find directory in parent (root)
     // 2. Verify it only contains . and .. entries (is empty)
@@ -2303,7 +2303,7 @@ pub fn fs_rmdir(path: &str) -> Result<(), u32> {
     //
     // TODO: Implement with block device access
     // Requires scanning directory cluster for . and .. entries only
-    
+
     Ok(())
 }
 
@@ -2314,12 +2314,12 @@ pub fn fs_copy_file(source: &str, dest: &str) -> Result<u32, u32> {
     if source.is_empty() || dest.is_empty() {
         return Err(1);  // Invalid path
     }
-    
+
     // Prevent copying to same location
     if source == dest {
         return Err(2);  // Source and destination are the same
     }
-    
+
     // Full implementation steps:
     // 1. Open source file for reading:
     //    - Find file in root directory
@@ -2339,7 +2339,7 @@ pub fn fs_copy_file(source: &str, dest: &str) -> Result<u32, u32> {
     //
     // TODO: Implement with block device access
     // Requires file reading capability (Phase earlier in implementation)
-    
+
     Ok(0)  // Placeholder: 0 bytes copied
 }
 

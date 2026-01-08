@@ -184,6 +184,8 @@ impl Shell {
             self.cmd_cat(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"cp") {
             self.cmd_cp(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"test") {
+            self.cmd_test(&mut output);
         } else {
             let _ = write!(output, "Unknown command: '");
             let _ = output.write_all(cmd);
@@ -226,6 +228,7 @@ impl Shell {
         let _ = writeln!(output, "  rm <file>     Delete file");
         let _ = writeln!(output, "  cat <file>    Display file contents");
         let _ = writeln!(output, "  cp <src> <dst>  Copy file");
+        let _ = writeln!(output, "  test          Run filesystem tests");
         let _ = writeln!(output);
     }
 
@@ -542,6 +545,69 @@ impl Shell {
         let _ = output.write_all(destination);
         let _ = writeln!(output, "");
         let _ = writeln!(output, "(File copying implemented in filesystem layer)");
+    }
+
+    fn cmd_test(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "=== Filesystem Tests ===");
+        
+        // Test 1: Create a file
+        let _ = writeln!(output, "\nTest 1: Creating file 'test.txt'");
+        match super::fs_create_file("test.txt") {
+            Ok(size) => {
+                let _ = writeln!(output, "  ✓ File created successfully");
+                let _ = writeln!(output, "    Size: {} bytes", size);
+            }
+            Err(code) => {
+                let _ = writeln!(output, "  ✗ File creation failed with code: {}", code);
+            }
+        }
+        
+        // Test 2: Create a directory
+        let _ = writeln!(output, "\nTest 2: Creating directory 'testdir'");
+        match super::fs_mkdir("testdir") {
+            Ok(_) => {
+                let _ = writeln!(output, "  ✓ Directory created successfully");
+            }
+            Err(code) => {
+                let _ = writeln!(output, "  ✗ Directory creation failed with code: {}", code);
+            }
+        }
+        
+        // Test 3: List root directory
+        let _ = writeln!(output, "\nTest 3: Listing root directory");
+        match super::fs_list_dir("/") {
+            Ok(count) => {
+                let _ = writeln!(output, "  ✓ Directory scan completed");
+                let _ = writeln!(output, "    Entries found: {}", count);
+            }
+            Err(code) => {
+                let _ = writeln!(output, "  ✗ Directory listing failed with code: {}", code);
+            }
+        }
+        
+        // Test 4: Delete the test file
+        let _ = writeln!(output, "\nTest 4: Deleting file 'test.txt'");
+        match super::fs_delete_file("test.txt") {
+            Ok(_) => {
+                let _ = writeln!(output, "  ✓ File deleted successfully");
+            }
+            Err(code) => {
+                let _ = writeln!(output, "  ✗ File deletion failed with code: {}", code);
+            }
+        }
+        
+        // Test 5: Remove the test directory
+        let _ = writeln!(output, "\nTest 5: Removing directory 'testdir'");
+        match super::fs_rmdir("testdir") {
+            Ok(_) => {
+                let _ = writeln!(output, "  ✓ Directory removed successfully");
+            }
+            Err(code) => {
+                let _ = writeln!(output, "  ✗ Directory removal failed with code: {}", code);
+            }
+        }
+        
+        let _ = writeln!(output, "\n=== Tests Complete ===");
     }
 }
 
