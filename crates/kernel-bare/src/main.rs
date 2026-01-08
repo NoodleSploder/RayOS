@@ -280,6 +280,7 @@ mod phase_23_integration;
 mod soak_testing;
 mod stress_testing;
 mod failure_injection;
+mod perf_profiling;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
