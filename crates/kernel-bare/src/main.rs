@@ -292,6 +292,7 @@ mod input_events;
 mod window_management;
 mod display_drivers;
 mod display_server;
+mod audio_engine;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
