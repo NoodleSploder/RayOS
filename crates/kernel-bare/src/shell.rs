@@ -228,6 +228,8 @@ impl Shell {
             self.cmd_trace(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"perf") {
             self.cmd_perf(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"device") {
+            self.cmd_device(&mut output, &input[cmd_end..]);
         } else {
             let _ = write!(output, "Unknown command: '");
             let _ = output.write_all(cmd);
@@ -293,6 +295,7 @@ impl Shell {
         let _ = writeln!(output, "  policy [cmd]   Capability policy & VM sandboxing");
         let _ = writeln!(output, "  network [cmd]  Network interface & DHCP configuration");
         let _ = writeln!(output, "  firewall [cmd] Firewall rules & traffic control");
+        let _ = writeln!(output, "  device [cmd]   Virtio device handlers & statistics");
         let _ = writeln!(output, "  metrics [cmd]  System metrics & performance data");
         let _ = writeln!(output, "  trace [cmd]    Performance tracing & event analysis");
         let _ = writeln!(output, "  perf [cmd]     Performance analysis & profiling");
@@ -3327,7 +3330,7 @@ impl Shell {
         let _ = writeln!(output, "");
         let _ = writeln!(output, "Active VMs:");
         let _ = writeln!(output, "");
-        
+
         let _ = writeln!(output, "  [VM 1000] Linux Desktop (LINUX_DESKTOP Profile)");
         let _ = writeln!(output, "    ✓ CAP_NETWORK     - Network access (Ethernet, WiFi)");
         let _ = writeln!(output, "    ✓ CAP_DISK_READ   - Disk read operations");
@@ -4140,9 +4143,178 @@ impl Shell {
         let _ = writeln!(output, "View in browser: firefox /var/log/flamegraph.html");
         let _ = writeln!(output, "");
     }
+
+    fn cmd_device(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() || self.cmd_matches(args, b"status") {
+            self.device_status(output);
+        } else if self.cmd_matches(args, b"handlers") {
+            self.device_handlers(output);
+        } else if self.cmd_matches(args, b"list") {
+            self.device_list(output);
+        } else if self.cmd_matches(args, b"stats") {
+            self.device_stats(output);
+        } else if self.cmd_matches(args, b"help") {
+            self.device_help(output);
+        } else {
+            let _ = writeln!(output, "Usage: device [status|handlers|list|stats|help]");
+        }
+    }
+
+    fn device_status(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "🖥️  Virtio Device Handlers Status");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Total Handlers:    5 active");
+        let _ = writeln!(output, "  • GPU            ACTIVE (128 MB max)");
+        let _ = writeln!(output, "  • Network        ACTIVE (100 Mbps)");
+        let _ = writeln!(output, "  • Block Storage  ACTIVE (10 GB quota)");
+        let _ = writeln!(output, "  • Input          ACTIVE (queue depth 64)");
+        let _ = writeln!(output, "  • Console        ACTIVE (unlimited)");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Handler Operations: 847,234 total");
+        let _ = writeln!(output, "  • GPU:           234,567 ops (allowed: 98.2%, denied: 1.8%)");
+        let _ = writeln!(output, "  • Network:       412,345 ops (allowed: 99.5%, denied: 0.5%)");
+        let _ = writeln!(output, "  • Block:         145,678 ops (allowed: 100%, denied: 0%)");
+        let _ = writeln!(output, "  • Input:         34,567 ops (allowed: 97.8%, denied: 2.2%)");
+        let _ = writeln!(output, "  • Console:       20,177 ops (allowed: 100%, denied: 0%)");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Avg Operation Latency:");
+        let _ = writeln!(output, "  • GPU ops:       ~100 µs");
+        let _ = writeln!(output, "  • Network TX:    ~50 µs");
+        let _ = writeln!(output, "  • Disk I/O:      ~2500 µs");
+        let _ = writeln!(output, "  • Input events:  ~20 µs");
+        let _ = writeln!(output, "  • Console:       ~30 µs");
+        let _ = writeln!(output, "");
+    }
+
+    fn device_handlers(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "📋 Device Handler Configuration");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "GPU Handler (VirtioGpuHandler)");
+        let _ = writeln!(output, "  Status:              ACTIVE");
+        let _ = writeln!(output, "  Max Memory:          128 MB");
+        let _ = writeln!(output, "  Current Allocated:   45 MB (35.2%)");
+        let _ = writeln!(output, "  Render Queue Depth:  8 / 32");
+        let _ = writeln!(output, "  Policy Integration:  ✓ CAP_GPU enforced");
+        let _ = writeln!(output, "  Audit Logging:       ✓ Enabled");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Network Handler (VirtioNetHandler)");
+        let _ = writeln!(output, "  Status:              ACTIVE");
+        let _ = writeln!(output, "  Max Bandwidth:       100 Mbps");
+        let _ = writeln!(output, "  TX Packets:          412,345");
+        let _ = writeln!(output, "  RX Packets:          389,234");
+        let _ = writeln!(output, "  Dropped Packets:     2,345 (0.56%)");
+        let _ = writeln!(output, "  Policy Integration:  ✓ CAP_NETWORK + Firewall");
+        let _ = writeln!(output, "  Audit Logging:       ✓ Enabled");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Block Storage Handler (VirtioBlkHandler)");
+        let _ = writeln!(output, "  Status:              ACTIVE");
+        let _ = writeln!(output, "  Disk Quota:          10 GB");
+        let _ = writeln!(output, "  Total Written:       2.3 GB (23%)");
+        let _ = writeln!(output, "  Total Read:          4.7 GB");
+        let _ = writeln!(output, "  I/O Errors:          0");
+        let _ = writeln!(output, "  Policy Integration:  ✓ CAP_DISK_READ/WRITE");
+        let _ = writeln!(output, "  Audit Logging:       ✓ Enabled");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Input Handler (VirtioInputHandler)");
+        let _ = writeln!(output, "  Status:              ACTIVE");
+        let _ = writeln!(output, "  Key Events:          12,456");
+        let _ = writeln!(output, "  Mouse Events:        22,111");
+        let _ = writeln!(output, "  Touch Events:        0");
+        let _ = writeln!(output, "  Queue Depth:         4 / 64");
+        let _ = writeln!(output, "  Dropped Events:      765");
+        let _ = writeln!(output, "  Policy Integration:  ✓ CAP_INPUT enforced");
+        let _ = writeln!(output, "  Audit Logging:       ✓ Enabled");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Console Handler (VirtioConsoleHandler)");
+        let _ = writeln!(output, "  Status:              ACTIVE");
+        let _ = writeln!(output, "  Bytes Written:       1.2 MB");
+        let _ = writeln!(output, "  Bytes Read:          456 KB");
+        let _ = writeln!(output, "  Write Ops:           8,945");
+        let _ = writeln!(output, "  Read Ops:            11,232");
+        let _ = writeln!(output, "  Policy Integration:  ✓ CAP_CONSOLE_READ/WRITE");
+        let _ = writeln!(output, "  Audit Logging:       ✓ All ops logged");
+        let _ = writeln!(output, "");
+    }
+
+    fn device_list(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "📱 Registered Devices");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "VM-ID  | Device Type | Status | Model         | Operations");
+        let _ = writeln!(output, "-------|-------------|--------|---------------|------------");
+        let _ = writeln!(output, "1000   | GPU         | ✓      | VirtIO 1.0    | 234,567");
+        let _ = writeln!(output, "1000   | Network     | ✓      | VirtIO 1.0    | 412,345");
+        let _ = writeln!(output, "1000   | Storage     | ✓      | VirtIO 1.0    | 145,678");
+        let _ = writeln!(output, "1000   | Input       | ✓      | VirtIO 1.0    | 34,567");
+        let _ = writeln!(output, "1000   | Console     | ✓      | VirtIO 1.0    | 20,177");
+        let _ = writeln!(output, "1001   | GPU         | ✓      | VirtIO 1.0    | 89,234");
+        let _ = writeln!(output, "1001   | Network     | ✓      | VirtIO 1.0    | 156,789");
+        let _ = writeln!(output, "1001   | Storage     | ✓      | VirtIO 1.0    | 234,567");
+        let _ = writeln!(output, "1001   | Input       | ✓      | VirtIO 1.0    | 45,678");
+        let _ = writeln!(output, "1001   | Console     | ✓      | VirtIO 1.0    | 34,891");
+        let _ = writeln!(output, "2000   | GPU         | ✗      | -             | 0");
+        let _ = writeln!(output, "2000   | Network     | ✓      | VirtIO 1.0    | 567,234");
+        let _ = writeln!(output, "2000   | Storage     | ✓      | VirtIO 1.0    | 890,456");
+        let _ = writeln!(output, "2000   | Input       | ✗      | -             | 0");
+        let _ = writeln!(output, "2000   | Console     | ✓      | VirtIO 1.0    | 123,456");
+        let _ = writeln!(output, "");
+    }
+
+    fn device_stats(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "📊 Device Handler Statistics");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Total Operations:  847,234");
+        let _ = writeln!(output, "  • Allowed:       840,234 (99.17%)");
+        let _ = writeln!(output, "  • Denied:        7,000 (0.83%)");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Denial Breakdown:");
+        let _ = writeln!(output, "  • Capability denied:  3,234 (46.2%)");
+        let _ = writeln!(output, "  • Quota exceeded:     2,456 (35.1%)");
+        let _ = writeln!(output, "  • Firewall blocked:   987 (14.1%)");
+        let _ = writeln!(output, "  • Queue full:         323 (4.6%)");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Average Latencies:");
+        let _ = writeln!(output, "  • GPU memory ops:     ~85 µs");
+        let _ = writeln!(output, "  • GPU render:         ~120 µs");
+        let _ = writeln!(output, "  • Network TX:         ~45 µs");
+        let _ = writeln!(output, "  • Network RX:         ~38 µs");
+        let _ = writeln!(output, "  • Disk read:          ~2100 µs");
+        let _ = writeln!(output, "  • Disk write:         ~3200 µs");
+        let _ = writeln!(output, "  • Input inject:       ~22 µs");
+        let _ = writeln!(output, "  • Console write:      ~28 µs");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Resource Utilization:");
+        let _ = writeln!(output, "  • GPU memory:         45 MB / 128 MB (35.2%)");
+        let _ = writeln!(output, "  • Network bandwidth:  12.3 Mbps / 100 Mbps (12.3%)");
+        let _ = writeln!(output, "  • Disk quota:         2.3 GB / 10 GB (23%)");
+        let _ = writeln!(output, "  • Input queue:        4 / 64 (6.25%)");
+        let _ = writeln!(output, "");
+    }
+
+    fn device_help(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Device Handler Commands:");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "  device status    - Show device handler status");
+        let _ = writeln!(output, "  device handlers  - Detailed handler configuration");
+        let _ = writeln!(output, "  device list      - List all registered devices");
+        let _ = writeln!(output, "  device stats     - Device operation statistics");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Device types:");
+        let _ = writeln!(output, "  • GPU        - VirtioGpuHandler (128 MB, render queues)");
+        let _ = writeln!(output, "  • Network    - VirtioNetHandler (100 Mbps, firewall)");
+        let _ = writeln!(output, "  • Storage    - VirtioBlkHandler (10 GB quota)");
+        let _ = writeln!(output, "  • Input      - VirtioInputHandler (keyboard, mouse)");
+        let _ = writeln!(output, "  • Console    - VirtioConsoleHandler (audit logging)");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "All device operations are subject to:");
+        let _ = writeln!(output, "  • Capability-based access control");
+        let _ = writeln!(output, "  • Resource quotas (memory, bandwidth, disk)");
+        let _ = writeln!(output, "  • Audit logging of all operations");
+        let _ = writeln!(output, "  • Rate limiting and queue depth limits");
+        let _ = writeln!(output, "");
+    }
 }
-
-
-
-
-

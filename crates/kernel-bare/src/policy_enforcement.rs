@@ -3,7 +3,7 @@
 // Enforces capability-based security at I/O boundaries
 // Validates device access against per-VM capability grants
 
-use crate::security::{Capability, SecurityPolicy, AUDIT_CAPABILITY_DENIAL, AUDIT_NETWORK_ACCESS, 
+use crate::security::{Capability, SecurityPolicy, AUDIT_CAPABILITY_DENIAL, AUDIT_NETWORK_ACCESS,
                        AUDIT_DISK_ACCESS, AUDIT_GPU_ACCESS, AUDIT_INPUT_ACCESS};
 
 /// Device access request types
@@ -42,12 +42,12 @@ impl PolicyEnforcer {
             vm_policies: [SecurityPolicy::new(0); 8],
             vm_count: 0,
         };
-        
+
         // Initialize VM IDs
         for i in 0..8 {
             enforcer.vm_policies[i] = SecurityPolicy::new(i as u32);
         }
-        
+
         enforcer
     }
 
@@ -56,7 +56,7 @@ impl PolicyEnforcer {
         if self.vm_count >= 8 {
             return false;
         }
-        
+
         let idx = self.vm_count;
         self.vm_policies[idx].vm_id = vm_id;
         self.vm_policies[idx].capabilities = capabilities;
@@ -227,17 +227,17 @@ pub fn check_input_access(vm_id: u32) -> bool {
 #[cfg(test)]
 pub fn test_policy_enforcer() {
     let mut enforcer = PolicyEnforcer::new();
-    
+
     // Register Linux desktop VM
     assert!(enforcer.register_vm(1000, profiles::linux_desktop_capabilities()));
-    
+
     // Register Windows VM
     assert!(enforcer.register_vm(1001, profiles::windows_desktop_capabilities()));
-    
+
     // Test Linux VM can access network
     let decision = enforcer.check_device_access(1000, DeviceAccessType::NetworkTx);
     assert_eq!(decision, AccessDecision::Allow);
-    
+
     // Test Windows VM cannot access network
     let decision = enforcer.check_device_access(1001, DeviceAccessType::NetworkTx);
     assert_eq!(decision, AccessDecision::Deny);
@@ -247,21 +247,21 @@ pub fn test_policy_enforcer() {
 pub fn test_capability_grant_revoke() {
     let mut enforcer = PolicyEnforcer::new();
     enforcer.register_vm(100, 0); // No capabilities initially
-    
+
     // Verify access denied
     let decision = enforcer.check_device_access(100, DeviceAccessType::DiskRead);
     assert_eq!(decision, AccessDecision::Deny);
-    
+
     // Grant capability
     assert!(enforcer.grant_capability(100, Capability::CAP_DISK_READ));
-    
+
     // Verify access allowed
     let decision = enforcer.check_device_access(100, DeviceAccessType::DiskRead);
     assert_eq!(decision, AccessDecision::Allow);
-    
+
     // Revoke capability
     assert!(enforcer.revoke_capability(100, Capability::CAP_DISK_READ));
-    
+
     // Verify access denied again
     let decision = enforcer.check_device_access(100, DeviceAccessType::DiskRead);
     assert_eq!(decision, AccessDecision::Deny);
@@ -273,7 +273,7 @@ pub fn test_default_profiles() {
     let windows_caps = profiles::windows_desktop_capabilities();
     let server_caps = profiles::server_capabilities();
     let restricted_caps = profiles::restricted_capabilities();
-    
+
     // Verify capability bits are set correctly
     assert!(linux_caps & (Capability::CAP_NETWORK as u32) != 0);
     assert!(windows_caps & (Capability::CAP_NETWORK as u32) == 0); // Network denied
