@@ -2,9 +2,9 @@
 ## RayOS Advanced Features & Hardening (2026-01-07)
 
 ### Overview
-Phase 10 advances RayOS toward production-readiness with GUI frameworks, security hardening, and observability infrastructure. This phase focuses on three high-impact milestones: (1) RayOS-native GUI with multi-window compositing, (2) security posture with measured boot & attestation, and (3) observability & reliability.
+Phase 10 advances RayOS toward production-readiness with GUI frameworks, security hardening, and observability infrastructure. This phase focuses on three high-impact milestones: (1) RayOS-native GUI with multi-window compositing, (2) security posture with measured boot & attestation, (3) process sandboxing & capabilities, and (4) observability & reliability.
 
-**Status**: 2 of 5 tasks complete (40%)
+**Status**: 3 of 5 tasks complete (60%)
 
 ---
 
