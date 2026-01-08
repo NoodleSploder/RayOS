@@ -1945,6 +1945,69 @@ impl FAT32FileSystem {
         true  // Placeholder
     }
 
+    /// Count valid entries in root directory
+    /// Returns the count of non-deleted entries
+    pub fn count_root_entries(&self) -> u32 {
+        // Root directory location: reserved_sectors + (fat_size * num_fats)
+        // Entries per sector: bytes_per_sector / 32
+        //
+        // Algorithm:
+        // 1. Calculate root directory starting sector
+        // 2. Scan all root directory sectors
+        // 3. For each 32-byte entry:
+        //    - If first byte == 0x00: end of directory, stop
+        //    - If first byte == 0xE5: deleted entry, skip
+        //    - Otherwise: valid entry, increment count
+        // 4. Return total count
+        //
+        // TODO: Implement with block device access
+        
+        0  // Placeholder
+    }
+
+    /// Find next free entry slot in root directory
+    /// Returns sector number and offset within sector, or (0, 0) if full
+    pub fn find_free_root_entry(&self) -> (u32, u32) {
+        // Similar to count_root_entries but returns first free slot
+        //
+        // Algorithm:
+        // 1. Scan root directory sectors sequentially
+        // 2. For each entry (sector, offset):
+        //    - If first byte == 0x00 or 0xE5: free slot found
+        //    - Return (sector_number, entry_offset_in_sector)
+        // 3. If no free slots found, return (0, 0)
+        //
+        // TODO: Implement with block device access
+        
+        (0, 0)  // Placeholder
+    }
+
+    /// Scan directory and build entry list
+    /// Returns vector of valid directory entries found
+    /// Note: This would need Vec allocator support in actual implementation
+    pub fn scan_directory(&self, _cluster: u32) -> u32 {
+        // Directory cluster points to a cluster (for subdirectories)
+        // Root directory uses special calculation
+        //
+        // Algorithm:
+        // 1. If cluster == 0 (root):
+        //    - Calculate root starting sector
+        //    - Scan root directory sectors
+        // 2. Else:
+        //    - Calculate cluster's starting sector
+        //    - Scan only that cluster
+        // 3. For each valid entry:
+        //    - Extract filename, attributes, size, cluster
+        //    - Store or report
+        // 4. Return total count
+        //
+        // TODO: Implement with block device access
+        // Current limitation: no Vec support in no_std
+        // Workaround: Store entries in a fixed-size array or return count only
+        
+        0  // Placeholder: 0 entries found
+    }
+
     /// Create a new file in a directory
     pub fn create_file_entry(&mut self, name: &str, is_dir: bool) -> DirectoryEntry {
         let mut entry = DirectoryEntry {
@@ -2189,31 +2252,95 @@ pub fn fs_mkdir(path: &str) -> Result<(), u32> {
     Ok(())
 }
 
+/// List directory contents (root directory only for now)
+/// Returns count of files/directories or error code
+/// Note: This function would need shell integration to display results
+pub fn fs_list_dir(path: &str) -> Result<u32, u32> {
+    // For now, only support listing root directory
+    if !path.is_empty() && path != "/" {
+        return Err(2);  // Not supported (non-root directories)
+    }
+    
+    // Full implementation steps:
+    // 1. Get root directory starting sector:
+    //    root_sector = reserved_sectors + (fat_size * num_fats)
+    // 2. Calculate entries per sector: bytes_per_sector / 32
+    // 3. For each root directory sector:
+    //    - Read sector from disk
+    //    - Parse each 32-byte entry
+    //    - For each valid entry (first byte != 0x00 and != 0xE5):
+    //      - Extract filename (8.3 format)
+    //      - Extract attributes (0x10 = directory)
+    //      - Extract size and cluster
+    //      - Format and display
+    // 4. Count total valid entries
+    //
+    // TODO: Implement with block device access
+    // This requires shell integration to display the results
+    // For now, return placeholder count
+    
+    Ok(0)  // Placeholder: 0 entries listed
+}
+
 /// Remove a directory (must be empty)
 /// Returns success or error code
-pub fn fs_rmdir(_path: &str) -> Result<(), u32> {
-    // TODO: Implement actual directory removal
-    // 1. Find directory
+pub fn fs_rmdir(path: &str) -> Result<(), u32> {
+    // Parse path to get parent directory and dir name
+    let (_parent_path, dirname) = parse_file_path(path);
+    
+    // Validate directory name
+    if dirname.is_empty() {
+        return Err(1);  // Invalid directory name
+    }
+    
+    // Full implementation steps:
+    // 1. Find directory in parent (root)
     // 2. Verify it only contains . and .. entries (is empty)
-    // 3. Get cluster number
-    // 4. Free the cluster
+    // 3. Get cluster number from directory entry
+    // 4. Free the cluster in FAT (mark as free: 0x00000000)
     // 5. Remove directory entry from parent
-    // 6. Flush changes
-
+    // 6. Flush FAT and parent directory changes
+    //
+    // TODO: Implement with block device access
+    // Requires scanning directory cluster for . and .. entries only
+    
     Ok(())
 }
 
 /// Copy file source to destination
 /// Returns bytes copied or error code
-pub fn fs_copy_file(_source: &str, _dest: &str) -> Result<u32, u32> {
-    // TODO: Implement actual file copying
-    // 1. Open source file for reading
-    // 2. Create destination file
-    // 3. Read source file in chunks
-    // 4. Write chunks to destination
-    // 5. Close both files
-
-    Ok(0)
+pub fn fs_copy_file(source: &str, dest: &str) -> Result<u32, u32> {
+    // Validate paths
+    if source.is_empty() || dest.is_empty() {
+        return Err(1);  // Invalid path
+    }
+    
+    // Prevent copying to same location
+    if source == dest {
+        return Err(2);  // Source and destination are the same
+    }
+    
+    // Full implementation steps:
+    // 1. Open source file for reading:
+    //    - Find file in root directory
+    //    - Get starting cluster and file size
+    // 2. Create destination file:
+    //    - Create directory entry
+    //    - Allocate initial cluster
+    // 3. Copy data cluster by cluster:
+    //    - Read cluster from source
+    //    - Allocate new cluster for destination
+    //    - Write data to destination cluster
+    //    - Link clusters in FAT chain
+    // 4. Update destination file metadata:
+    //    - Set file size to match source
+    //    - Set creation/modification timestamps
+    // 5. Flush FAT and directory changes
+    //
+    // TODO: Implement with block device access
+    // Requires file reading capability (Phase earlier in implementation)
+    
+    Ok(0)  // Placeholder: 0 bytes copied
 }
 
 /// Get file size
@@ -2224,22 +2351,6 @@ pub fn fs_file_size(_path: &str) -> Result<u32, u32> {
     // 2. Return file_size field from directory entry
 
     Ok(0)
-}
-
-/// List directory contents into buffer
-/// Returns buffer with directory entries or all zeros on error
-pub fn fs_list_dir(_path: &str) -> [u8; 512] {
-    let buffer = [0u8; 512];
-
-    // TODO: Implement actual directory listing
-    // 1. Find directory at path
-    // 2. Read directory sector(s)
-    // 3. Format entries as text into buffer:
-    //    "filename.ext    <size>    <date>    <time>    <dir|file>"
-    //    One entry per line
-    // 4. Return buffer
-
-    buffer
 }
 
 /// Helper: Check if path exists and what type (file, dir, or none)
