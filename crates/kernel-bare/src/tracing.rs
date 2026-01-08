@@ -63,19 +63,19 @@ pub struct DistributedTracer {
     // Span storage
     spans: [Span; 1024],
     span_count: u16,
-    
+
     // Active traces
     traces: [TraceId; 256],
     trace_count: u16,
-    
+
     // Latency histograms
     buckets: [LatencyBucket; 32],
-    
+
     // Sampling configuration
     sample_rate: u32, // 0-100
     sampled_count: u32,
     not_sampled_count: u32,
-    
+
     // Export tracking
     exported_trace_count: u32,
     export_destination: u32,
@@ -95,24 +95,24 @@ impl DistributedTracer {
                 status: SpanStatus::OK,
             }; 1024],
             span_count: 0,
-            
+
             traces: [TraceId(0); 256],
             trace_count: 0,
-            
+
             buckets: [LatencyBucket {
                 min_us: 0,
                 max_us: 0,
                 count: 0,
             }; 32],
-            
+
             sample_rate: sample_rate.min(100),
             sampled_count: 0,
             not_sampled_count: 0,
-            
+
             exported_trace_count: 0,
             export_destination: 0,
         };
-        
+
         // Initialize latency buckets (exponential: 1us, 2us, 4us... 65536us)
         for i in 0..32 {
             tracer.buckets[i] = LatencyBucket {
@@ -121,27 +121,27 @@ impl DistributedTracer {
                 count: 0,
             };
         }
-        
+
         tracer
     }
-    
+
     /// Start new trace
     pub fn start_trace(&mut self, trace_id: TraceId) -> bool {
         if self.trace_count >= 256 {
             return false;
         }
-        
+
         self.traces[self.trace_count as usize] = trace_id;
         self.trace_count += 1;
         true
     }
-    
+
     /// Create new span
     pub fn create_span(&mut self, ctx: &SpanContext, op_name_hash: u32) -> Option<SpanId> {
         if self.span_count >= 1024 {
             return None;
         }
-        
+
         let span_id = SpanId((self.span_count as u64) << 32 | (op_name_hash as u64));
         let span = Span {
             span_id,
@@ -152,27 +152,27 @@ impl DistributedTracer {
             end_time_us: 0,
             status: SpanStatus::OK,
         };
-        
+
         self.spans[self.span_count as usize] = span;
         self.span_count += 1;
-        
+
         Some(span_id)
     }
-    
+
     /// Record span timing
     pub fn record_span_timing(&mut self, span_id: SpanId, start_us: u64, end_us: u64) {
         for i in 0..self.span_count as usize {
             if self.spans[i].span_id == span_id {
                 self.spans[i].start_time_us = start_us;
                 self.spans[i].end_time_us = end_us;
-                
+
                 let duration_us = (end_us - start_us) as u32;
                 self.record_latency(duration_us);
                 break;
             }
         }
     }
-    
+
     /// Record latency in histogram
     fn record_latency(&mut self, duration_us: u32) {
         for i in 0..32 {
@@ -182,7 +182,7 @@ impl DistributedTracer {
             }
         }
     }
-    
+
     /// Set span status
     pub fn set_span_status(&mut self, span_id: SpanId, status: SpanStatus) {
         for i in 0..self.span_count as usize {
@@ -192,7 +192,7 @@ impl DistributedTracer {
             }
         }
     }
-    
+
     /// Make sampling decision
     pub fn should_sample(&mut self, trace_id: TraceId) -> SamplingDecision {
         let hash = trace_id.0 as u32;
@@ -204,7 +204,7 @@ impl DistributedTracer {
             SamplingDecision::NotSampled
         }
     }
-    
+
     /// Adjust sample rate based on metrics
     pub fn adaptive_sampling(&mut self, error_rate: u32) {
         // Increase sample rate if error rate is high
@@ -214,46 +214,46 @@ impl DistributedTracer {
             self.sample_rate -= 5;
         }
     }
-    
+
     /// Get P50 latency (median)
     pub fn get_p50_latency(&self) -> u32 {
         self.get_percentile(50)
     }
-    
+
     /// Get P99 latency
     pub fn get_p99_latency(&self) -> u32 {
         self.get_percentile(99)
     }
-    
+
     /// Get P99.9 latency
     pub fn get_p999_latency(&self) -> u32 {
         self.get_percentile(999)
     }
-    
+
     /// Get percentile latency
     fn get_percentile(&self, percentile: u32) -> u32 {
         let mut total_count = 0u32;
         for i in 0..32 {
             total_count += self.buckets[i].count;
         }
-        
+
         if total_count == 0 {
             return 0;
         }
-        
+
         let target_count = (total_count * percentile) / 100;
         let mut cumulative = 0u32;
-        
+
         for i in 0..32 {
             cumulative += self.buckets[i].count;
             if cumulative >= target_count {
                 return self.buckets[i].min_us;
             }
         }
-        
+
         0
     }
-    
+
     /// Export traces
     pub fn export_traces(&mut self, destination: u32) -> u32 {
         let count = self.trace_count as u32;
@@ -261,27 +261,27 @@ impl DistributedTracer {
         self.export_destination = destination;
         count
     }
-    
+
     /// Get active span count
     pub fn get_active_span_count(&self) -> u16 {
         self.span_count
     }
-    
+
     /// Get trace count
     pub fn get_trace_count(&self) -> u16 {
         self.trace_count
     }
-    
+
     /// Get current sample rate
     pub fn get_sample_rate(&self) -> u32 {
         self.sample_rate
     }
-    
+
     /// Get sampling statistics
     pub fn get_sampling_stats(&self) -> (u32, u32) {
         (self.sampled_count, self.not_sampled_count)
     }
-    
+
     /// Reset latency histogram
     pub fn reset_histogram(&mut self) {
         for i in 0..32 {
@@ -293,20 +293,20 @@ impl DistributedTracer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_tracer_creation() {
         let tracer = DistributedTracer::new(50);
         assert_eq!(tracer.get_sample_rate(), 50);
     }
-    
+
     #[test]
     fn test_sampling_decision() {
         let mut tracer = DistributedTracer::new(50);
         let decision = tracer.should_sample(TraceId(12345));
         assert!(decision == SamplingDecision::Sampled || decision == SamplingDecision::NotSampled);
     }
-    
+
     #[test]
     fn test_span_creation() {
         let mut tracer = DistributedTracer::new(100);
@@ -316,7 +316,7 @@ mod tests {
             parent_span_id: None,
             sampling_decision: SamplingDecision::Sampled,
         };
-        
+
         let span_id = tracer.create_span(&ctx, 12345);
         assert!(span_id.is_some());
     }

@@ -62,18 +62,18 @@ pub struct ZeroCopyNetStack {
     packet_pool: [PacketBuffer; 512],
     pool_size: u16,
     pool_available: u16,
-    
+
     // Active flows
     flows: [FlowMetadata; 1024],
     flow_count: u16,
-    
+
     // Traffic classes (0-7)
     traffic_classes: [TrafficClassConfig; 8],
-    
+
     // Offload engine
     offloads: OffloadCapability,
     path: ZeroCopyPath,
-    
+
     // Statistics
     packets_processed: u64,
     bytes_processed: u64,
@@ -103,7 +103,7 @@ impl ZeroCopyNetStack {
             }; 512],
             pool_size: 512,
             pool_available: 512,
-            
+
             flows: [FlowMetadata {
                 flow_id: FlowId(0),
                 packet_count: 0,
@@ -114,14 +114,14 @@ impl ZeroCopyNetStack {
                 priority_class: TrafficClass(0),
             }; 1024],
             flow_count: 0,
-            
+
             traffic_classes: [TrafficClassConfig {
                 max_bandwidth_mbps: 100,
                 current_bandwidth_used: 0,
                 queue_depth: 0,
                 priority_weight: 1,
             }; 8],
-            
+
             offloads: OffloadCapability {
                 tso_enabled: true,
                 gso_enabled: true,
@@ -129,28 +129,28 @@ impl ZeroCopyNetStack {
                 rfs_enabled: true,
             },
             path,
-            
+
             packets_processed: 0,
             bytes_processed: 0,
             packets_dropped: 0,
             buffer_exhaustion_count: 0,
         };
-        
+
         // Initialize traffic classes with graduated bandwidth
         for i in 0..8 {
             stack.traffic_classes[i].max_bandwidth_mbps = 100 + (50 * i as u32);
         }
-        
+
         stack
     }
-    
+
     /// Allocate packet buffer
     pub fn allocate_buffer(&mut self) -> Option<PacketId> {
         if self.pool_available == 0 {
             self.buffer_exhaustion_count += 1;
             return None;
         }
-        
+
         // Find available buffer
         for i in 0..self.pool_size as usize {
             if self.packet_pool[i].data_len == 0 {
@@ -159,28 +159,28 @@ impl ZeroCopyNetStack {
                 return Some(pid);
             }
         }
-        
+
         None
     }
-    
+
     /// Free packet buffer
     pub fn free_buffer(&mut self, packet_id: PacketId) -> bool {
         if packet_id.0 as usize >= self.pool_size as usize {
             return false;
         }
-        
+
         self.packet_pool[packet_id.0 as usize].data_len = 0;
         self.pool_available += 1;
         true
     }
-    
+
     /// Submit packet for processing
-    pub fn submit_packet(&mut self, packet_id: PacketId, data_len: u16, 
+    pub fn submit_packet(&mut self, packet_id: PacketId, data_len: u16,
                         flow_id: FlowId, traffic_class: TrafficClass) -> bool {
         if packet_id.0 as usize >= self.pool_size as usize {
             return false;
         }
-        
+
         // Register or update flow
         let mut flow_found = false;
         for i in 0..self.flow_count as usize {
@@ -191,7 +191,7 @@ impl ZeroCopyNetStack {
                 break;
             }
         }
-        
+
         if !flow_found && self.flow_count < 1024 {
             self.flows[self.flow_count as usize] = FlowMetadata {
                 flow_id,
@@ -204,24 +204,24 @@ impl ZeroCopyNetStack {
             };
             self.flow_count += 1;
         }
-        
+
         self.packet_pool[packet_id.0 as usize].data_len = data_len;
         self.packets_processed += 1;
         self.bytes_processed += data_len as u64;
-        
+
         true
     }
-    
+
     /// Get packet throughput in packets per second
     pub fn get_pps(&self) -> u64 {
         self.packets_processed
     }
-    
+
     /// Get throughput in megabits per second
     pub fn get_throughput_mbps(&self) -> u64 {
         (self.bytes_processed * 8) / 1_000_000
     }
-    
+
     /// Record flow latency
     pub fn record_flow_latency(&mut self, flow_id: FlowId, latency_ns: u64) {
         for i in 0..self.flow_count as usize {
@@ -231,23 +231,23 @@ impl ZeroCopyNetStack {
             }
         }
     }
-    
+
     /// Check traffic class bandwidth
     pub fn check_traffic_class_limit(&mut self, tc: TrafficClass) -> bool {
         if tc.0 >= 8 {
             return false;
         }
-        
+
         let config = &self.traffic_classes[tc.0 as usize];
         config.current_bandwidth_used < config.max_bandwidth_mbps
     }
-    
+
     /// Update traffic class bandwidth usage
     pub fn update_bandwidth(&mut self, tc: TrafficClass, mbps: u32) -> bool {
         if tc.0 >= 8 {
             return false;
         }
-        
+
         let config = &mut self.traffic_classes[tc.0 as usize];
         if config.current_bandwidth_used + mbps <= config.max_bandwidth_mbps {
             config.current_bandwidth_used += mbps;
@@ -256,27 +256,27 @@ impl ZeroCopyNetStack {
             false
         }
     }
-    
+
     /// Get buffer pool utilization
     pub fn get_buffer_utilization(&self) -> u32 {
         ((self.pool_size - self.pool_available) as u32 * 100) / self.pool_size as u32
     }
-    
+
     /// Get active flow count
     pub fn get_active_flows(&self) -> u16 {
         self.flow_count
     }
-    
+
     /// Get packet drop count
     pub fn get_dropped_packets(&self) -> u32 {
         self.packets_dropped
     }
-    
+
     /// Batch packet processing
-    pub fn batch_process(&mut self, packet_ids: &[PacketId], data_lens: &[u16], 
+    pub fn batch_process(&mut self, packet_ids: &[PacketId], data_lens: &[u16],
                         flow_id: FlowId, tc: TrafficClass) -> u32 {
         let mut processed = 0u32;
-        
+
         for i in 0..packet_ids.len().min(128) {
             if self.submit_packet(packet_ids[i], data_lens[i], flow_id, tc) {
                 processed += 1;
@@ -284,10 +284,10 @@ impl ZeroCopyNetStack {
                 self.packets_dropped += 1;
             }
         }
-        
+
         processed
     }
-    
+
     /// Enable NIC offload
     pub fn enable_offload(&mut self, offload_type: &str) -> bool {
         match offload_type {
@@ -299,7 +299,7 @@ impl ZeroCopyNetStack {
         }
         true
     }
-    
+
     /// Get statistics snapshot
     pub fn get_stats(&self) -> (u64, u64, u32, u32) {
         (self.packets_processed, self.bytes_processed, self.packets_dropped, self.buffer_exhaustion_count)
@@ -309,20 +309,20 @@ impl ZeroCopyNetStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_netstack_creation() {
         let stack = ZeroCopyNetStack::new(ZeroCopyPath::DPDK);
         assert_eq!(stack.get_active_flows(), 0);
     }
-    
+
     #[test]
     fn test_buffer_allocation() {
         let mut stack = ZeroCopyNetStack::new(ZeroCopyPath::DPDK);
         let buf = stack.allocate_buffer();
         assert!(buf.is_some());
     }
-    
+
     #[test]
     fn test_packet_submission() {
         let mut stack = ZeroCopyNetStack::new(ZeroCopyPath::DPDK);
