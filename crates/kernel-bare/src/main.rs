@@ -18,6 +18,7 @@ mod performance;           // Phase 11 Task 4: Performance Optimization
 mod security_advanced;     // Phase 11 Task 5: Advanced Security Features
 mod scalability;           // Phase 11 Task 6: Scalability Layer
 mod vm_lifecycle;          // Phase 12 Task 1: VM Lifecycle Management
+mod vm_migration;          // Phase 12 Task 2: Live VM Migration
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
