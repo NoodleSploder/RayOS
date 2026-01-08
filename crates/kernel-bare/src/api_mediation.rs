@@ -77,16 +77,16 @@ pub struct CacheEntry {
 pub struct RequestMediator {
     transforms: [RequestTransform; 256],
     transform_count: u16,
-    
+
     schemas: [SchemaEntry; 128],
     schema_count: u8,
-    
+
     cache: [CacheEntry; 128],
     cache_count: u8,
-    
+
     policies: [MediationPolicy; 16],
     policy_count: u8,
-    
+
     total_validations: u32,
     validation_failures: u16,
 }
@@ -102,7 +102,7 @@ impl RequestMediator {
                 schema_id: 0,
             }; 256],
             transform_count: 0,
-            
+
             schemas: [SchemaEntry {
                 schema_id: 0,
                 name: [0; 32],
@@ -112,7 +112,7 @@ impl RequestMediator {
                 rejected_requests: 0,
             }; 128],
             schema_count: 0,
-            
+
             cache: [CacheEntry {
                 cache_key: 0,
                 response_hash: 0,
@@ -120,7 +120,7 @@ impl RequestMediator {
                 hit_count: 0,
             }; 128],
             cache_count: 0,
-            
+
             policies: [MediationPolicy {
                 timeout_ms: 5000,
                 retry_count: 3,
@@ -128,19 +128,19 @@ impl RequestMediator {
                 max_body_size: 8192,
             }; 16],
             policy_count: 1,
-            
+
             total_validations: 0,
             validation_failures: 0,
         }
     }
-    
+
     /// Register a transformation rule
-    pub fn register_transform(&mut self, input_format: ContentType, output_format: ContentType, 
+    pub fn register_transform(&mut self, input_format: ContentType, output_format: ContentType,
                              schema_id: u16) -> Option<u32> {
         if (self.transform_count as usize) >= 256 {
             return None;
         }
-        
+
         let transform_id = self.transform_count as u32;
         self.transforms[self.transform_count as usize] = RequestTransform {
             transform_id,
@@ -151,18 +151,18 @@ impl RequestMediator {
         self.transform_count += 1;
         Some(transform_id)
     }
-    
+
     /// Register a schema
     pub fn register_schema(&mut self, name: &[u8], required_fields: u16) -> Option<u16> {
         if (self.schema_count as usize) >= 128 {
             return None;
         }
-        
+
         let schema_id = self.schema_count as u16;
         let name_len = cmp::min(name.len(), 32);
         let mut schema_name = [0u8; 32];
         schema_name[..name_len].copy_from_slice(&name[..name_len]);
-        
+
         self.schemas[self.schema_count as usize] = SchemaEntry {
             schema_id,
             name: schema_name,
@@ -174,11 +174,11 @@ impl RequestMediator {
         self.schema_count += 1;
         Some(schema_id)
     }
-    
+
     /// Parse and validate a request
     pub fn parse_request(&mut self, body: &[u8], schema_id: u16) -> bool {
         self.total_validations += 1;
-        
+
         // Find schema
         for i in 0..(self.schema_count as usize) {
             if self.schemas[i].schema_id == schema_id {
@@ -188,32 +188,32 @@ impl RequestMediator {
                     self.schemas[i].rejected_requests += 1;
                     return false;
                 }
-                
+
                 // Count JSON-like braces as a simple validation heuristic
                 let open_braces = body.iter().filter(|&&b| b == b'{').count();
                 let close_braces = body.iter().filter(|&&b| b == b'}').count();
-                
+
                 if open_braces > 0 && open_braces != close_braces {
                     self.validation_failures += 1;
                     self.schemas[i].rejected_requests += 1;
                     return false;
                 }
-                
+
                 self.schemas[i].validated_requests += 1;
                 return true;
             }
         }
-        
+
         self.validation_failures += 1;
         false
     }
-    
+
     /// Transform request from one format to another
     pub fn transform_request(&self, input_body: &[u8], transform_id: u32) -> Option<u16> {
         for i in 0..(self.transform_count as usize) {
             if self.transforms[i].transform_id == transform_id {
                 let transform = &self.transforms[i];
-                
+
                 // Simple transformation: just return the length as a marker
                 // Real implementation would convert between formats
                 return Some(cmp::min(input_body.len(), 8192) as u16);
@@ -221,7 +221,7 @@ impl RequestMediator {
         }
         None
     }
-    
+
     /// Validate a response
     pub fn validate_response(&self, body: &[u8], schema_id: u16) -> bool {
         for i in 0..(self.schema_count as usize) {
@@ -230,17 +230,17 @@ impl RequestMediator {
                 if body.len() > 8192 {
                     return false;
                 }
-                
+
                 // Check for matching braces
                 let open = body.iter().filter(|&&b| b == b'{').count();
                 let close = body.iter().filter(|&&b| b == b'}').count();
-                
+
                 return open == close;
             }
         }
         false
     }
-    
+
     /// Transform a response
     pub fn transform_response(&self, input_body: &[u8], status: u16) -> Option<ResponseTransform> {
         // Simple transformation: select format based on status code
@@ -251,20 +251,20 @@ impl RequestMediator {
             500..=599 => ContentType::Json,
             _ => ContentType::Binary,
         };
-        
+
         Some(ResponseTransform {
             status_code: status,
             output_format: format,
             schema_id: 0,
         })
     }
-    
+
     /// Set caching policy
     pub fn set_caching_policy(&mut self, timeout_ms: u32, retry_count: u8, cache_ttl: u32) -> bool {
         if (self.policy_count as usize) >= 16 {
             return false;
         }
-        
+
         self.policies[self.policy_count as usize] = MediationPolicy {
             timeout_ms,
             retry_count,
@@ -274,7 +274,7 @@ impl RequestMediator {
         self.policy_count += 1;
         true
     }
-    
+
     /// Get cached response
     pub fn cache_get(&mut self, cache_key: u32, current_time: u64) -> Option<u32> {
         for i in 0..(self.cache_count as usize) {
@@ -285,13 +285,13 @@ impl RequestMediator {
         }
         None
     }
-    
+
     /// Cache a response
     pub fn cache_set(&mut self, cache_key: u32, response_hash: u32, expires_at: u64) -> bool {
         if (self.cache_count as usize) >= 128 {
             return false;
         }
-        
+
         self.cache[self.cache_count as usize] = CacheEntry {
             cache_key,
             response_hash,
@@ -301,7 +301,7 @@ impl RequestMediator {
         self.cache_count += 1;
         true
     }
-    
+
     /// Get error response
     pub fn get_error_response(&self, status: u16) -> ContentType {
         match status {
@@ -310,12 +310,12 @@ impl RequestMediator {
             _ => ContentType::Binary,
         }
     }
-    
+
     /// Get validation stats
     pub fn get_validation_stats(&self) -> (u32, u16) {
         (self.total_validations, self.validation_failures)
     }
-    
+
     /// Get cache hit rate
     pub fn get_cache_hit_count(&self) -> u32 {
         let mut total = 0u32;
@@ -329,7 +329,7 @@ impl RequestMediator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_mediator_creation() {
         let mediator = RequestMediator::new();
@@ -337,14 +337,14 @@ mod tests {
         assert_eq!(validations, 0);
         assert_eq!(failures, 0);
     }
-    
+
     #[test]
     fn test_schema_registration() {
         let mut mediator = RequestMediator::new();
         let schema_id = mediator.register_schema(b"User", 0x0F);
         assert!(schema_id.is_some());
     }
-    
+
     #[test]
     fn test_request_validation() {
         let mut mediator = RequestMediator::new();

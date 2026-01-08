@@ -51,12 +51,12 @@ pub struct ServicePool {
 pub struct LoadBalancer {
     pools: [ServicePool; 128],
     pool_count: u8,
-    
+
     instances: [ServiceInstance; 256],
     instance_count: u16,
-    
+
     pool_instances: [[u32; 16]; 128],  // instance IDs per pool
-    
+
     health_checks_performed: u32,
     health_checks_failed: u16,
 }
@@ -73,7 +73,7 @@ impl LoadBalancer {
                 total_connections: 0,
             }; 128],
             pool_count: 0,
-            
+
             instances: [ServiceInstance {
                 instance_id: 0,
                 address: 0,
@@ -85,20 +85,20 @@ impl LoadBalancer {
                 failed_requests: 0,
             }; 256],
             instance_count: 0,
-            
+
             pool_instances: [[0; 16]; 128],
-            
+
             health_checks_performed: 0,
             health_checks_failed: 0,
         }
     }
-    
+
     /// Register a new pool
     pub fn register_pool(&mut self, strategy: BalancingStrategy) -> Option<u32> {
         if (self.pool_count as usize) >= 128 {
             return None;
         }
-        
+
         let pool_id = self.pool_count as u32;
         self.pools[self.pool_count as usize] = ServicePool {
             pool_id,
@@ -110,7 +110,7 @@ impl LoadBalancer {
         self.pool_count += 1;
         Some(pool_id)
     }
-    
+
     /// Register an instance in a pool
     pub fn register_instance(&mut self, pool_id: u32, address: u32, port: u16) -> Option<u32> {
         // Find pool
@@ -121,23 +121,23 @@ impl LoadBalancer {
                 break;
             }
         }
-        
+
         if pool_idx.is_none() {
             return None;
         }
-        
+
         let pool_idx = pool_idx.unwrap();
-        
+
         // Check if pool is full
         if self.pools[pool_idx].instance_count >= 16 {
             return None;
         }
-        
+
         // Add instance
         if (self.instance_count as usize) >= 256 {
             return None;
         }
-        
+
         let instance_id = self.instance_count as u32;
         self.instances[self.instance_count as usize] = ServiceInstance {
             instance_id,
@@ -149,16 +149,16 @@ impl LoadBalancer {
             total_requests: 0,
             failed_requests: 0,
         };
-        
+
         // Add to pool
         let inst_idx = self.pools[pool_idx].instance_count as usize;
         self.pool_instances[pool_idx][inst_idx] = instance_id;
         self.pools[pool_idx].instance_count += 1;
         self.instance_count += 1;
-        
+
         Some(instance_id)
     }
-    
+
     /// Select next instance from pool
     pub fn select_instance(&mut self, pool_id: u32) -> Option<ServiceInstance> {
         // Find pool
@@ -169,22 +169,22 @@ impl LoadBalancer {
                 break;
             }
         }
-        
+
         if pool_idx.is_none() {
             return None;
         }
-        
+
         let pool_idx = pool_idx.unwrap();
         let pool = &mut self.pools[pool_idx];
-        
+
         if pool.instance_count == 0 {
             return None;
         }
-        
+
         // Select based on strategy
         let strategy = pool.strategy;
         let mut selected_idx = pool.current_index as usize % (pool.instance_count as usize);
-        
+
         match strategy {
             BalancingStrategy::RoundRobin => {
                 selected_idx = pool.current_index as usize % (pool.instance_count as usize);
@@ -213,9 +213,9 @@ impl LoadBalancer {
                 selected_idx = (pool_id as usize) % (pool.instance_count as usize);
             },
         }
-        
+
         let inst_id = self.pool_instances[pool_idx][selected_idx];
-        
+
         // Find instance
         for i in 0..(self.instance_count as usize) {
             if self.instances[i].instance_id == inst_id {
@@ -224,10 +224,10 @@ impl LoadBalancer {
                 return Some(self.instances[i]);
             }
         }
-        
+
         None
     }
-    
+
     /// Mark instance as healthy
     pub fn mark_healthy(&mut self, instance_id: u32) -> bool {
         for i in 0..(self.instance_count as usize) {
@@ -238,7 +238,7 @@ impl LoadBalancer {
         }
         false
     }
-    
+
     /// Mark instance as unhealthy
     pub fn mark_unhealthy(&mut self, instance_id: u32) -> bool {
         for i in 0..(self.instance_count as usize) {
@@ -250,7 +250,7 @@ impl LoadBalancer {
         }
         false
     }
-    
+
     /// Get a pool
     pub fn get_pool(&self, pool_id: u32) -> Option<ServicePool> {
         for i in 0..(self.pool_count as usize) {
@@ -260,7 +260,7 @@ impl LoadBalancer {
         }
         None
     }
-    
+
     /// Get an instance
     pub fn get_instance(&self, instance_id: u32) -> Option<ServiceInstance> {
         for i in 0..(self.instance_count as usize) {
@@ -270,7 +270,7 @@ impl LoadBalancer {
         }
         None
     }
-    
+
     /// Decrement connection count
     pub fn decrement_connections(&mut self, instance_id: u32) -> bool {
         for i in 0..(self.instance_count as usize) {
@@ -281,11 +281,11 @@ impl LoadBalancer {
         }
         false
     }
-    
+
     /// Perform health check
     pub fn health_check(&mut self, instance_id: u32) -> bool {
         self.health_checks_performed += 1;
-        
+
         for i in 0..(self.instance_count as usize) {
             if self.instances[i].instance_id == instance_id {
                 // Simple health check: mark as healthy if it was unknown
@@ -297,7 +297,7 @@ impl LoadBalancer {
         }
         false
     }
-    
+
     /// Get health check stats
     pub fn get_health_stats(&self) -> (u32, u16) {
         (self.health_checks_performed, self.health_checks_failed)
@@ -307,26 +307,26 @@ impl LoadBalancer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_load_balancer_creation() {
         let lb = LoadBalancer::new();
         assert_eq!(lb.health_checks_performed, 0);
     }
-    
+
     #[test]
     fn test_pool_registration() {
         let mut lb = LoadBalancer::new();
         let pool_id = lb.register_pool(BalancingStrategy::RoundRobin);
         assert!(pool_id.is_some());
     }
-    
+
     #[test]
     fn test_instance_selection() {
         let mut lb = LoadBalancer::new();
         let pool_id = lb.register_pool(BalancingStrategy::RoundRobin).unwrap();
         lb.register_instance(pool_id, 0x7F000001, 8080);
-        
+
         let instance = lb.select_instance(pool_id);
         assert!(instance.is_some());
     }
