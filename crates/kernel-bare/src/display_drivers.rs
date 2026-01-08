@@ -117,10 +117,10 @@ impl EdidData {
 
     pub fn manufacturer_string(&self) -> u32 {
         // Simplified: return first 3 bytes as hash
-        let byte1 = ((self.manufacturer_id >> 10) & 0x1F) + 0x40;
-        let byte2 = ((self.manufacturer_id >> 5) & 0x1F) + 0x40;
-        let byte3 = (self.manufacturer_id & 0x1F) + 0x40;
-        ((byte1 << 16) | (byte2 << 8) | byte3) as u32
+        let byte1 = (((self.manufacturer_id >> 10) & 0x1F) + 0x40) as u32;
+        let byte2 = (((self.manufacturer_id >> 5) & 0x1F) + 0x40) as u32;
+        let byte3 = ((self.manufacturer_id & 0x1F) + 0x40) as u32;
+        (byte1 << 16) | (byte2 << 8) | byte3
     }
 
     pub fn diagonal_inches(&self) -> f32 {
