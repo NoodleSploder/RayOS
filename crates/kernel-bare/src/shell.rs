@@ -400,11 +400,31 @@ impl Shell {
             end += 1;
         }
 
-        let filename = &args[start..end];
+        let filename_bytes = &args[start..end];
+        
+        // Convert filename to string for filesystem API
+        // Create a fixed-size string buffer
+        let mut filename_str = [0u8; 256];
+        if filename_bytes.len() > 255 {
+            let _ = writeln!(output, "Error: filename too long");
+            return;
+        }
+        
+        for (i, &b) in filename_bytes.iter().enumerate() {
+            filename_str[i] = b;
+        }
+        
+        // Call filesystem create_file function
+        // For now, we'll just report the action since fs_create_file is a placeholder
         let _ = write!(output, "Creating file: ");
-        let _ = output.write_all(filename);
+        let _ = output.write_all(filename_bytes);
         let _ = writeln!(output, "");
-        let _ = writeln!(output, "(File creation implemented in filesystem layer)");
+        
+        // TODO: Uncomment when fs_create_file is fully implemented
+        // match fs_create_file(core::str::from_utf8(filename_bytes).unwrap_or("")) {
+        //     Ok(_) => let _ = writeln!(output, "File created successfully"),
+        //     Err(code) => let _ = writeln!(output, "Error creating file (code: {})", code),
+        // }
     }
 
     fn cmd_mkdir(&self, output: &mut ShellOutput, args: &[u8]) {

@@ -1851,14 +1851,22 @@ impl FAT32FileSystem {
 /// Find a file in the root directory
 /// Returns (cluster, size) or (0, 0) if not found
 fn find_file_in_root(_fs: &FAT32FileSystem, _filename: &[u8]) -> (u32, u32) {
-    // TODO: Implement file search
-    // 1. Get root directory starting sector
-    // 2. Read directory sectors one by one
+    // TODO: Implement file search by:
+    // 1. Calculate root directory starting sector
+    //    = reserved_sectors + (fat_size * num_fats)
+    // 2. Read directory sector(s) using block device
     // 3. Scan directory entries (32 bytes each)
-    // 4. Compare filenames (11-byte FAT format)
-    // 5. Return cluster and size if found
+    // 4. For each entry:
+    //    a. Check if used (first byte != 0xE5 and != 0x00)
+    //    b. Check if not a directory (attribute byte 11 & 0x10 == 0)
+    //    c. Compare filename (first 11 bytes, FAT 8.3 format)
+    // 5. If match found:
+    //    - Extract cluster from bytes 26-27 and 20-21 (FAT32)
+    //    - Extract size from bytes 28-31
+    //    - Return (cluster, size)
+    // 6. If no match found, return (0, 0)
     
-    (0, 0)  // Not found (placeholder)
+    (0, 0)  // Placeholder - not yet implemented
 }
 
 /// Create a new file in the root directory
