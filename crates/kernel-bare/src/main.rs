@@ -3520,14 +3520,14 @@ fn sys_execve(_args: &SyscallArgs) -> SyscallResult {
     // arg0: const char *filename - program path
     // arg1: char *const argv[] - argument array
     // arg2: char *const envp[] - environment array
-    
+
     // Stub implementation - actual implementation would:
     // 1. Validate and copy arguments from user space
     // 2. Load ELF binary from filesystem
     // 3. Set up new process memory space
     // 4. Jump to entry point
     // 5. Only return on error
-    
+
     SyscallResult::error(38)  // ENOSYS - not implemented
 }
 
@@ -3535,15 +3535,15 @@ fn sys_execve(_args: &SyscallArgs) -> SyscallResult {
 fn sys_wait(args: &SyscallArgs) -> SyscallResult {
     // Arguments:
     // arg0: int *wstatus - exit status location
-    
+
     // Simplified wait implementation
     // Real implementation would:
     // 1. Find any child process
     // 2. Wait for it to exit
     // 3. Return child PID on success
-    
+
     let _wstatus_ptr = args.arg0;
-    
+
     if let Some(pm) = get_process_manager() {
         let current_pid = pm.current_pid;
         // Look for child processes
@@ -3555,7 +3555,7 @@ fn sys_wait(args: &SyscallArgs) -> SyscallResult {
             }
         }
     }
-    
+
     SyscallResult::error(10)  // ECHILD - no child processes
 }
 
@@ -3563,13 +3563,13 @@ fn sys_wait(args: &SyscallArgs) -> SyscallResult {
 fn sys_setpgid(args: &SyscallArgs) -> SyscallResult {
     let _pid = args.arg0;
     let _pgid = args.arg1;
-    
+
     // Stub: Process groups not fully implemented
     // In a real implementation, would:
     // 1. Find process by PID
     // 2. Set its process group
     // 3. Return success
-    
+
     SyscallResult::ok(0)
 }
 
@@ -3580,11 +3580,11 @@ fn sys_setsid(_args: &SyscallArgs) -> SyscallResult {
     // 1. Create new session
     // 2. Make process session leader
     // 3. Return session ID
-    
+
     if let Some(pm) = get_process_manager() {
         return SyscallResult::ok(pm.current_pid as u64);
     }
-    
+
     SyscallResult::error(1)  // EPERM
 }
 
@@ -3593,13 +3593,13 @@ fn sys_lseek(args: &SyscallArgs) -> SyscallResult {
     let _fd = args.arg0;        // File descriptor
     let _offset = args.arg1;    // Offset
     let _whence = args.arg2;    // SEEK_SET, SEEK_CUR, SEEK_END
-    
+
     // Stub: File seeking not implemented
     // In a real implementation, would:
     // 1. Look up file descriptor
     // 2. Update file position
     // 3. Return new position
-    
+
     SyscallResult::error(9)  // EBADF - bad file descriptor
 }
 
@@ -3607,10 +3607,10 @@ fn sys_lseek(args: &SyscallArgs) -> SyscallResult {
 fn sys_stat(args: &SyscallArgs) -> SyscallResult {
     let _path = args.arg0;      // const char *path
     let _stat_buf = args.arg1;  // struct stat *
-    
+
     // Stub: File stat not implemented
     // Real implementation would read file metadata
-    
+
     SyscallResult::error(2)  // ENOENT - file not found
 }
 
@@ -3618,7 +3618,7 @@ fn sys_stat(args: &SyscallArgs) -> SyscallResult {
 fn sys_fstat(args: &SyscallArgs) -> SyscallResult {
     let _fd = args.arg0;        // File descriptor
     let _stat_buf = args.arg1;  // struct stat *
-    
+
     // Stub: File stat not implemented
     SyscallResult::error(9)  // EBADF
 }
@@ -3627,7 +3627,7 @@ fn sys_fstat(args: &SyscallArgs) -> SyscallResult {
 fn sys_chmod(args: &SyscallArgs) -> SyscallResult {
     let _path = args.arg0;      // const char *path
     let _mode = args.arg1;      // mode_t mode
-    
+
     // Stub: Permission changes not implemented
     SyscallResult::error(2)  // ENOENT
 }
@@ -3635,7 +3635,7 @@ fn sys_chmod(args: &SyscallArgs) -> SyscallResult {
 /// SYS_UNLINK - Delete file
 fn sys_unlink(args: &SyscallArgs) -> SyscallResult {
     let _path = args.arg0;  // const char *path
-    
+
     // Would call fs_delete_file or similar
     SyscallResult::error(2)  // ENOENT
 }
@@ -3644,7 +3644,7 @@ fn sys_unlink(args: &SyscallArgs) -> SyscallResult {
 fn sys_mkdir(args: &SyscallArgs) -> SyscallResult {
     let _path = args.arg0;  // const char *path
     let _mode = args.arg1;  // mode_t mode
-    
+
     // Would call fs_mkdir
     SyscallResult::error(2)  // ENOENT
 }
@@ -3652,7 +3652,7 @@ fn sys_mkdir(args: &SyscallArgs) -> SyscallResult {
 /// SYS_RMDIR - Remove directory
 fn sys_rmdir(args: &SyscallArgs) -> SyscallResult {
     let _path = args.arg0;  // const char *path
-    
+
     // Would call fs_rmdir
     SyscallResult::error(2)  // ENOENT
 }
@@ -3665,13 +3665,13 @@ fn sys_mmap(args: &SyscallArgs) -> SyscallResult {
     let _flags = args.arg3;     // int flags - MAP_SHARED, MAP_PRIVATE, MAP_ANON
     let _fd = args.arg4;        // int fd
     let _offset = args.arg5;    // off_t offset
-    
+
     // Stub: Memory mapping not implemented
     // Real implementation would:
     // 1. Allocate virtual memory
     // 2. Link to file backing if provided
     // 3. Return mapped address
-    
+
     SyscallResult::ok(0x1000)  // Return fake address
 }
 
@@ -3679,7 +3679,7 @@ fn sys_mmap(args: &SyscallArgs) -> SyscallResult {
 fn sys_munmap(args: &SyscallArgs) -> SyscallResult {
     let _addr = args.arg0;      // void *addr
     let _length = args.arg1;    // size_t length
-    
+
     // Stub: Memory unmapping not implemented
     SyscallResult::ok(0)
 }
@@ -3687,7 +3687,7 @@ fn sys_munmap(args: &SyscallArgs) -> SyscallResult {
 /// SYS_BRK - Heap management
 fn sys_brk(args: &SyscallArgs) -> SyscallResult {
     let _addr = args.arg0;  // void *addr - new break point (0 = query)
-    
+
     // Stub: Heap management not implemented
     // Real implementation would adjust process heap
     SyscallResult::ok(0x2000)  // Return fake break point
@@ -3698,7 +3698,7 @@ fn sys_mprotect(args: &SyscallArgs) -> SyscallResult {
     let _addr = args.arg0;      // void *addr
     let _length = args.arg1;    // size_t length
     let _prot = args.arg2;      // int prot - PROT_READ, PROT_WRITE, PROT_EXEC
-    
+
     // Stub: Memory protection changes not implemented
     SyscallResult::ok(0)
 }
@@ -3719,20 +3719,20 @@ fn sys_pause(_args: &SyscallArgs) -> SyscallResult {
 /// SYS_ALARM - Set alarm timer
 fn sys_alarm(args: &SyscallArgs) -> SyscallResult {
     let _seconds = args.arg0;  // unsigned int seconds
-    
+
     // Stub: Timer not implemented
     // Real implementation would:
     // 1. Set timer for seconds
     // 2. Deliver SIGALRM when expired
     // 3. Return remaining time from previous alarm
-    
+
     SyscallResult::ok(0)
 }
 
 /// SYS_UNAME - System information
 fn sys_uname(args: &SyscallArgs) -> SyscallResult {
     let _utsname_ptr = args.arg0;  // struct utsname *
-    
+
     // Stub: System information not filled
     // Real implementation would fill:
     // - sysname: "RayOS"
@@ -3740,7 +3740,7 @@ fn sys_uname(args: &SyscallArgs) -> SyscallResult {
     // - version: build date
     // - machine: "x86_64"
     // - etc.
-    
+
     SyscallResult::ok(0)
 }
 
@@ -3748,7 +3748,7 @@ fn sys_uname(args: &SyscallArgs) -> SyscallResult {
 fn sys_getrusage(args: &SyscallArgs) -> SyscallResult {
     let _who = args.arg0;              // int who - RUSAGE_SELF, RUSAGE_CHILDREN
     let _usage_ptr = args.arg1;        // struct rusage *
-    
+
     // Stub: Resource usage tracking not implemented
     SyscallResult::ok(0)
 }
@@ -3756,21 +3756,21 @@ fn sys_getrusage(args: &SyscallArgs) -> SyscallResult {
 /// SYS_TIMES - Process times
 fn sys_times(args: &SyscallArgs) -> SyscallResult {
     let _tms_ptr = args.arg0;  // struct tms *
-    
+
     // Stub: Process timing not implemented
     // Real implementation would return:
     // - User CPU time
     // - System CPU time
     // - Children user time
     // - Children system time
-    
+
     SyscallResult::ok(100)  // Return fake tick count
 }
 
 /// SYS_SYSCONF - System configuration
 fn sys_sysconf(args: &SyscallArgs) -> SyscallResult {
     let name = args.arg0 as i32;  // int name - _SC_* constants
-    
+
     // Return common configuration values
     match name {
         1 => SyscallResult::ok(1024),           // _SC_ARG_MAX
@@ -3786,7 +3786,7 @@ fn sys_sysconf(args: &SyscallArgs) -> SyscallResult {
 fn sys_gettimeofday(args: &SyscallArgs) -> SyscallResult {
     let _tv_ptr = args.arg0;   // struct timeval *
     let _tz_ptr = args.arg1;   // struct timezone *
-    
+
     // Stub: Time not implemented
     // Real implementation would get system time
     SyscallResult::ok(0)
@@ -3819,7 +3819,7 @@ fn sys_getegid(_args: &SyscallArgs) -> SyscallResult {
 /// SYS_SETUID - Set user ID
 fn sys_setuid(args: &SyscallArgs) -> SyscallResult {
     let _uid = args.arg0;  // uid_t uid
-    
+
     // Stub: User management not implemented
     // Would verify permission and change UID
     SyscallResult::ok(0)
@@ -3828,7 +3828,7 @@ fn sys_setuid(args: &SyscallArgs) -> SyscallResult {
 /// SYS_SETGID - Set group ID
 fn sys_setgid(args: &SyscallArgs) -> SyscallResult {
     let _gid = args.arg0;  // gid_t gid
-    
+
     // Stub: Group management not implemented
     SyscallResult::ok(0)
 }
