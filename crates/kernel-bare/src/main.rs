@@ -29,6 +29,7 @@ mod container_orchestration; // Phase 13 Task 3: Container Orchestration
 mod security_enforcement;  // Phase 13 Task 4: Security Enforcement
 mod distributed_storage;   // Phase 13 Task 5: Distributed Storage
 mod system_auditing;       // Phase 13 Task 6: System Auditing & Logging
+mod load_balancing;        // Phase 14 Task 1: Load Balancing & Traffic Management
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
