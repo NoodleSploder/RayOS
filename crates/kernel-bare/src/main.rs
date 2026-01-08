@@ -10,6 +10,7 @@ mod recovery;              // Phase 9B Task 5: Update & Recovery
 mod security;              // Phase 10 Task 2: Security Hardening & Measured Boot
 mod policy_enforcement;    // Phase 10 Task 3: Process Sandboxing & Capability Enforcement
 mod firewall;              // Phase 10 Task 4: Network Stack & Firewall
+mod observability;         // Phase 10 Task 5: Observability & Telemetry
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
