@@ -53,7 +53,7 @@ impl MemoryZone {
             2 => (60, 85),     // Far node
             _ => (40, 120),    // Distant node
         };
-        
+
         Self {
             node,
             size_mb,
@@ -205,7 +205,7 @@ impl NUMAManager {
             NUMANode::Node8, NUMANode::Node9, NUMANode::Node10, NUMANode::Node11,
             NUMANode::Node12, NUMANode::Node13, NUMANode::Node14, NUMANode::Node15,
         ];
-        
+
         let zones = [
             MemoryZone::new(nodes[0], 1024),
             MemoryZone::new(nodes[1], 1024),
@@ -293,7 +293,7 @@ impl NUMAManager {
         if page_idx < self.page_count && page_idx < 256 {
             let page = &mut self.pages[page_idx];
             let old_node_idx = page.node.id();
-            
+
             self.zones[old_node_idx].deallocate(page.page_size);
             page.node = target_node;
             let _ = self.zones[target_node.id()].allocate(page.page_size);

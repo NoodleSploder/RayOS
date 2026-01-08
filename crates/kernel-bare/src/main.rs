@@ -37,6 +37,10 @@ mod monitoring_alerting;   // Phase 14 Task 5: Real-time Monitoring & Alerting
 mod performance_profiling; // Phase 14 Task 6: Performance Profiling & Analysis
 mod numa_optimization;     // Phase 15 Task 1: NUMA-Aware Memory Access Optimization
 mod cache_optimization;    // Phase 15 Task 2: CPU Cache Optimization
+mod interrupt_coalescing;  // Phase 15 Task 3: Interrupt Coalescing & Latency Optimization
+mod vectorized_io;         // Phase 15 Task 4: Vectorized I/O Operations
+mod power_management;      // Phase 15 Task 5: Power Management & Dynamic Frequency Scaling
+mod system_tuning;         // Phase 15 Task 6: System Tuning & Auto-configuration
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]

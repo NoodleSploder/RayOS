@@ -236,7 +236,7 @@ impl CacheOptimizer {
         for i in 0..(self.line_count as usize) {
             let recency_score = (self.clock_time.saturating_sub(self.lines[i].last_access_time)) as u32;
             let score = (recency_score / 2) + (self.lines[i].access_count / 2);
-            
+
             if score < min_score {
                 min_score = score;
                 min_idx = i;

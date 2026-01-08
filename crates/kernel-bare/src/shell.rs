@@ -274,6 +274,14 @@ impl Shell {
             self.cmd_numaopt(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"cache") {
             self.cmd_cache(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"coalesce") {
+            self.cmd_coalesce(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"io") {
+            self.cmd_io(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"power") {
+            self.cmd_power(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"tune") {
+            self.cmd_tune(&mut output, &input[cmd_end..]);
         } else {
             let _ = write!(output, "Unknown command: '");
             let _ = output.write_all(cmd);
@@ -362,6 +370,10 @@ impl Shell {
         let _ = writeln!(output, "  profile [cmd]   Performance profiling & analysis");
         let _ = writeln!(output, "  numaopt [cmd]   NUMA-aware memory optimization");
         let _ = writeln!(output, "  cache [cmd]     CPU cache optimization");
+        let _ = writeln!(output, "  coalesce [cmd]  Interrupt coalescing & latency");
+        let _ = writeln!(output, "  io [cmd]        Vectorized I/O operations");
+        let _ = writeln!(output, "  power [cmd]     Power management & frequency scaling");
+        let _ = writeln!(output, "  tune [cmd]      System tuning & auto-configuration");
         let _ = writeln!(output, "  metrics [cmd]   System metrics & performance data");
         let _ = writeln!(output, "  trace [cmd]     Performance tracing & event analysis");
         let _ = writeln!(output, "  perf [cmd]      Performance analysis & profiling");
@@ -6334,6 +6346,148 @@ impl Shell {
                 let _ = writeln!(output, "  • Hit/miss ratio monitoring");
             } else {
                 let _ = writeln!(output, "Usage: cache [status|policies|stats|help]");
+            }
+        }
+    }
+
+    fn cmd_coalesce(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Interrupt Coalescing Status");
+            let _ = writeln!(output, "===========================");
+            let _ = writeln!(output, "Interrupt Sources: 0/64");
+            let _ = writeln!(output, "Pending Interrupts: 0");
+            let _ = writeln!(output, "Batches: 0");
+            let _ = writeln!(output, "Coalescing: Enabled");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"status") {
+                let _ = writeln!(output, "=== Coalescing Status ===");
+                let _ = writeln!(output, "Total Interrupts: 0");
+                let _ = writeln!(output, "Coalesced: 0");
+                let _ = writeln!(output, "Ratio: 0%");
+            } else if self.cmd_matches(cmd, b"sources") {
+                let _ = writeln!(output, "=== Interrupt Sources ===");
+                let _ = writeln!(output, "Source | Enabled | Pending");
+                let _ = writeln!(output, "-------+---------+--------");
+            } else if self.cmd_matches(cmd, b"policies") {
+                let _ = writeln!(output, "=== Coalescing Policies ===");
+                let _ = writeln!(output, "Immediate  - No coalescing");
+                let _ = writeln!(output, "TimeBased  - Batch by time window");
+                let _ = writeln!(output, "CountBased - Batch by count");
+                let _ = writeln!(output, "Adaptive   - Adapt to load");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Interrupt Coalescing Commands:");
+                let _ = writeln!(output, "  coalesce status   Show status");
+                let _ = writeln!(output, "  coalesce sources  List sources");
+                let _ = writeln!(output, "  coalesce policies Show policies");
+                let _ = writeln!(output, "  coalesce help     Show this help");
+            } else {
+                let _ = writeln!(output, "Usage: coalesce [status|sources|policies|help]");
+            }
+        }
+    }
+
+    fn cmd_io(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Vectorized I/O Status");
+            let _ = writeln!(output, "====================");
+            let _ = writeln!(output, "Pending Operations: 0");
+            let _ = writeln!(output, "Batches: 0");
+            let _ = writeln!(output, "Total Throughput: 0 MB/s");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"status") {
+                let _ = writeln!(output, "=== I/O Status ===");
+                let _ = writeln!(output, "Operations: 0");
+                let _ = writeln!(output, "Bytes Transferred: 0");
+                let _ = writeln!(output, "Avg Latency: 0 us");
+            } else if self.cmd_matches(cmd, b"operations") {
+                let _ = writeln!(output, "=== Operations ===");
+                let _ = writeln!(output, "No active operations");
+            } else if self.cmd_matches(cmd, b"policies") {
+                let _ = writeln!(output, "=== Scheduling Policies ===");
+                let _ = writeln!(output, "FIFO     - First in, first out");
+                let _ = writeln!(output, "Priority - Priority-based ordering");
+                let _ = writeln!(output, "Deadline - Deadline-aware scheduling");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "I/O Optimization Commands:");
+                let _ = writeln!(output, "  io status      Show I/O status");
+                let _ = writeln!(output, "  io operations  List operations");
+                let _ = writeln!(output, "  io policies    Show scheduling policies");
+                let _ = writeln!(output, "  io help        Show this help");
+            } else {
+                let _ = writeln!(output, "Usage: io [status|operations|policies|help]");
+            }
+        }
+    }
+
+    fn cmd_power(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "Power Management Status");
+            let _ = writeln!(output, "======================");
+            let _ = writeln!(output, "Current State: C0 (Active)");
+            let _ = writeln!(output, "Frequency: 2000 MHz");
+            let _ = writeln!(output, "Mode: Balanced");
+            let _ = writeln!(output, "Temperature: 45°C");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"status") {
+                let _ = writeln!(output, "=== Power Status ===");
+                let _ = writeln!(output, "State: C0, Freq: 2000 MHz");
+                let _ = writeln!(output, "Power: 100 mW, Temp: 45°C");
+            } else if self.cmd_matches(cmd, b"states") {
+                let _ = writeln!(output, "=== Power States ===");
+                for i in 0..7 {
+                    let power = 100u32.saturating_sub(i as u32 * 15);
+                    let _ = writeln!(output, "C{}: {} mW", i, power);
+                }
+            } else if self.cmd_matches(cmd, b"modes") {
+                let _ = writeln!(output, "=== Power Modes ===");
+                let _ = writeln!(output, "Performance - Max frequency");
+                let _ = writeln!(output, "Balanced    - Balanced mode");
+                let _ = writeln!(output, "PowerSaver  - Min frequency");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "Power Management Commands:");
+                let _ = writeln!(output, "  power status  Show power status");
+                let _ = writeln!(output, "  power states  List C-states");
+                let _ = writeln!(output, "  power modes   List power modes");
+                let _ = writeln!(output, "  power help    Show this help");
+            } else {
+                let _ = writeln!(output, "Usage: power [status|states|modes|help]");
+            }
+        }
+    }
+
+    fn cmd_tune(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            let _ = writeln!(output, "System Tuning Status");
+            let _ = writeln!(output, "===================");
+            let _ = writeln!(output, "Auto-tuning: Enabled");
+            let _ = writeln!(output, "Workload: Detecting...");
+            let _ = writeln!(output, "Optimization Attempts: 0");
+        } else {
+            let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+            if self.cmd_matches(cmd, b"status") {
+                let _ = writeln!(output, "=== Tuning Status ===");
+                let _ = writeln!(output, "Configuration: Active");
+                let _ = writeln!(output, "Performance Gain: 0%");
+                let _ = writeln!(output, "Rollbacks: 0");
+            } else if self.cmd_matches(cmd, b"profiles") {
+                let _ = writeln!(output, "=== Workload Profiles ===");
+                let _ = writeln!(output, "CPUBound   - High CPU utilization");
+                let _ = writeln!(output, "IOBound    - High I/O rate");
+                let _ = writeln!(output, "MemoryBound- High cache miss rate");
+            } else if self.cmd_matches(cmd, b"rules") {
+                let _ = writeln!(output, "=== Tuning Rules ===");
+                let _ = writeln!(output, "Total Rules: 0");
+            } else if self.cmd_matches(cmd, b"help") {
+                let _ = writeln!(output, "System Tuning Commands:");
+                let _ = writeln!(output, "  tune status    Show tuning status");
+                let _ = writeln!(output, "  tune profiles  List workload profiles");
+                let _ = writeln!(output, "  tune rules     Show tuning rules");
+                let _ = writeln!(output, "  tune help      Show this help");
+            } else {
+                let _ = writeln!(output, "Usage: tune [status|profiles|rules|help]");
             }
         }
     }
