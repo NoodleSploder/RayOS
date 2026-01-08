@@ -30,6 +30,11 @@ mod security_enforcement;  // Phase 13 Task 4: Security Enforcement
 mod distributed_storage;   // Phase 13 Task 5: Distributed Storage
 mod system_auditing;       // Phase 13 Task 6: System Auditing & Logging
 mod load_balancing;        // Phase 14 Task 1: Load Balancing & Traffic Management
+mod memory_compression;    // Phase 14 Task 2: Memory Compression & Optimization
+mod predictive_allocation; // Phase 14 Task 3: Predictive Resource Allocation
+mod distributed_txn;       // Phase 14 Task 4: Distributed Transaction Coordination
+mod monitoring_alerting;   // Phase 14 Task 5: Real-time Monitoring & Alerting
+mod performance_profiling; // Phase 14 Task 6: Performance Profiling & Analysis
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
