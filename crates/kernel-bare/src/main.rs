@@ -3,6 +3,8 @@
 #![allow(static_mut_refs)]
 #![allow(dead_code)]
 
+mod shell;  // Phase 9A Task 1: Shell & Utilities
+
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
 fn init_boot_info(boot_info_phys: u64) {
@@ -2230,6 +2232,19 @@ fn serial_write_byte(byte: u8) {
             core::hint::spin_loop();
         }
         outb(COM1_PORT, byte);
+    }
+}
+
+fn serial_read_byte() -> u8 {
+    unsafe {
+        // Check if data is available (bit 0 of line status register)
+        if (inb(COM1_PORT + 5) & 0x01) != 0 {
+            // Read from receive buffer
+            inb(COM1_PORT)
+        } else {
+            // No data available
+            0xFF
+        }
     }
 }
 
@@ -9286,6 +9301,21 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
 
     setup_syscall_instruction(0xFFFF_8000_0000_8000);
     serial_write_str("    ✓ SYSCALL instruction ready\n");
+
+    // Phase 9A Task 1: Shell initialization
+    serial_write_str("  [PHASE9A] Initializing interactive shell...\n");
+    let mut shell = shell::Shell::new();
+    serial_write_str("    ✓ Shell ready\n\n");
+    
+    // Run the shell - this is now the main user interface
+    // When user exits shell, will call kernel_main() for background services
+    serial_write_str("================================================================================\n");
+    serial_write_str("Starting RayOS interactive shell. Type 'help' for available commands.\n");
+    serial_write_str("================================================================================\n");
+    shell.run();
+    
+    // After shell exits, continue with background services
+    serial_write_str("Shell exited, entering kernel background services...\n");
 
     // Optional: Test exception handlers (disabled by default)
     // Uncomment to test specific exception:
