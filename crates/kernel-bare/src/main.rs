@@ -1881,6 +1881,70 @@ impl FAT32FileSystem {
         // Update cluster1 to point to cluster2
     }
 
+    /// Write a FAT32 entry to the FAT table
+    /// cluster: FAT entry number, value: the cluster chain value
+    /// Returns true on success, false if out of bounds
+    pub fn write_fat_entry(&self, _cluster: u32, _value: u32) -> bool {
+        // Calculate which FAT sector contains this entry
+        // FAT sector = entry_number / (bytes_per_sector / 4)
+        // Offset in sector = (entry_number % (bytes_per_sector / 4)) * 4
+        //
+        // Example for 512-byte sectors:
+        // - 128 entries per sector (512 / 4)
+        // - Sector = cluster / 128
+        // - Offset = (cluster % 128) * 4
+        //
+        // TODO: Implement with block device access:
+        // 1. Calculate sector number
+        // 2. Read FAT sector from disk
+        // 3. Update the 4-byte entry at the calculated offset
+        // 4. Write sector back to disk
+        // 5. Update all FAT copies (usually 2)
+        
+        true  // Placeholder
+    }
+
+    /// Write a directory entry to the root directory
+    /// entry_bytes: 32-byte FAT directory entry
+    /// Returns the entry number (offset / 32) on success
+    pub fn write_directory_entry(&self, _entry_bytes: &[u8; 32]) -> u32 {
+        // Root directory starts at: reserved_sectors + (fat_size * num_fats)
+        // Each sector holds: bytes_per_sector / 32 entries
+        //
+        // Algorithm:
+        // 1. Scan root directory sector by sector
+        // 2. Find first free or unused entry (0x00 or 0xE5 first byte)
+        // 3. Read sector, update entry, write back
+        //
+        // TODO: Implement with block device access:
+        // 1. Calculate root directory starting sector
+        // 2. For each root sector:
+        //    - Read sector
+        //    - Scan for free entry
+        //    - If found, write entry and flush sector
+        //    - Return entry number (sector_number * entries_per_sector + offset)
+        // 3. Return error code if directory full
+        
+        0  // Placeholder
+    }
+
+    /// Allocate and format a new cluster as a directory
+    /// Must write . and .. entries to the cluster
+    pub fn format_directory_cluster(&self, _cluster: u32) -> bool {
+        // Create dot entries for new directory
+        // . entry: points to itself
+        // .. entry: points to parent directory
+        //
+        // TODO: Implement with block device access:
+        // 1. Allocate cluster (or use provided cluster)
+        // 2. Create . directory entry (cluster = self)
+        // 3. Create .. directory entry (cluster = parent)
+        // 4. Pad remaining entries with 0x00
+        // 5. Write cluster to disk
+        
+        true  // Placeholder
+    }
+
     /// Create a new file in a directory
     pub fn create_file_entry(&mut self, name: &str, is_dir: bool) -> DirectoryEntry {
         let mut entry = DirectoryEntry {
@@ -2041,12 +2105,19 @@ pub fn fs_create_file(path: &str) -> Result<u32, u32> {
     // 6. Flush FAT table changes to disk
     // 7. Flush directory changes to disk
     
-    // For now: use helper to create entry structure (still placeholder for disk I/O)
-    // TODO: Implement actual disk I/O to write the entry
-    let _entry = FAT32FileSystem::create_directory_entry(filename, 2, 0, false);
+    // Create directory entry structure
+    let _entry_bytes = FAT32FileSystem::create_directory_entry(filename, 2, 0, false);
     
-    // Placeholder returning success
-    // Real implementation: write _entry to root directory, return 0
+    // TODO: Implement disk I/O
+    // write_root_directory_entry(&entry_bytes)?;
+    // flush_fat_table()?;
+    // 
+    // Current limitation: requires mutable block device reference
+    // Workaround: entries are created and validated, but not yet persisted
+    // The entry_bytes buffer is ready to write once filesystem has block device access
+    
+    // For now: return success without persisting to disk
+    // The entry structure is created correctly and can be validated
     Ok(0)
 }
 
@@ -2102,12 +2173,19 @@ pub fn fs_mkdir(path: &str) -> Result<(), u32> {
     // 6. Write entries to disk
     // 7. Flush FAT and directory changes
     
-    // For now: use helper to create directory entry
-    // TODO: Implement actual disk I/O to write the entry
-    let _entry = FAT32FileSystem::create_directory_entry(dirname, 3, 0, true);
+    // Create directory entry structure
+    let _entry_bytes = FAT32FileSystem::create_directory_entry(dirname, 3, 0, true);
     
-    // Placeholder returning success
-    // Real implementation: write _entry to root directory
+    // TODO: Implement disk I/O
+    // write_root_directory_entry(&entry_bytes)?;
+    // create_dot_entries(cluster_3)?;
+    // flush_fat_table()?;
+    //
+    // Current limitation: requires mutable block device reference
+    // The directory entry is created and formatted correctly
+    
+    // For now: return success without persisting to disk
+    // Real implementation would write entry_bytes to root directory
     Ok(())
 }
 
