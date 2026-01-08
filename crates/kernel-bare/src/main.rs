@@ -281,6 +281,7 @@ mod soak_testing;
 mod stress_testing;
 mod failure_injection;
 mod perf_profiling;
+mod integration_harness;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
