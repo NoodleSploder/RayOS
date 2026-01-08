@@ -256,6 +256,8 @@ impl Shell {
             self.cmd_containers(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"security") {
             self.cmd_security_enforce(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"diststore") {
+            self.cmd_diststore(&mut output, &input[cmd_end..]);
         } else {
             let _ = write!(output, "Unknown command: '");
             let _ = output.write_all(cmd);
@@ -335,6 +337,7 @@ impl Shell {
         let _ = writeln!(output, "  storage [cmd]   Storage volume management");
         let _ = writeln!(output, "  containers [cmd] Container orchestration");
         let _ = writeln!(output, "  security [cmd]  Security enforcement");
+        let _ = writeln!(output, "  diststore [cmd] Distributed storage & replication");
         let _ = writeln!(output, "  metrics [cmd]   System metrics & performance data");
         let _ = writeln!(output, "  trace [cmd]     Performance tracing & event analysis");
         let _ = writeln!(output, "  perf [cmd]      Performance analysis & profiling");
@@ -6002,6 +6005,73 @@ impl Shell {
         let _ = writeln!(output, "  • 64-bit capability sets");
         let _ = writeln!(output, "  • Real-time policy enforcement");
         let _ = writeln!(output, "  • Audit trail logging");
+        let _ = writeln!(output, "");
+    }
+
+    fn cmd_diststore(&self, output: &mut ShellOutput, args: &[u8]) {
+        if args.is_empty() {
+            self.diststore_status(output);
+            return;
+        }
+        let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
+        if self.cmd_matches(cmd, b"status") {
+            self.diststore_status(output);
+        } else if self.cmd_matches(cmd, b"nodes") {
+            self.diststore_nodes(output);
+        } else if self.cmd_matches(cmd, b"shards") {
+            self.diststore_shards(output);
+        } else if self.cmd_matches(cmd, b"help") {
+            self.diststore_help(output);
+        } else {
+            let _ = writeln!(output, "Usage: diststore [status|nodes|shards|help]");
+        }
+    }
+
+    fn diststore_status(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "=== Distributed Storage Status ===");
+        let _ = writeln!(output, "Active Nodes: 0");
+        let _ = writeln!(output, "Active Shards: 0");
+        let _ = writeln!(output, "Healthy Nodes: 0");
+        let _ = writeln!(output, "Total Capacity: 0 B");
+        let _ = writeln!(output, "Used Capacity: 0 B");
+        let _ = writeln!(output, "Capacity Utilization: 0%");
+    }
+
+    fn diststore_nodes(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "=== Storage Nodes ===");
+        let _ = writeln!(output, "Node ID  | State     | Reachable | Shards | Capacity");
+        let _ = writeln!(output, "---------+-----------+-----------+--------+---------");
+        let _ = writeln!(output, "No nodes configured");
+    }
+
+    fn diststore_shards(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "=== Distributed Shards ===");
+        let _ = writeln!(output, "Shard ID | Size      | Replicas | Consistency");
+        let _ = writeln!(output, "---------+-----------+----------+------------");
+        let _ = writeln!(output, "No shards configured");
+    }
+
+    fn diststore_help(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "Distributed Storage Commands:");
+        let _ = writeln!(output, "  diststore status    Show cluster status");
+        let _ = writeln!(output, "  diststore nodes     List storage nodes");
+        let _ = writeln!(output, "  diststore shards    List data shards");
+        let _ = writeln!(output, "  diststore help      Display this help");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Architecture:");
+        let _ = writeln!(output, "  • Up to 16 storage nodes");
+        let _ = writeln!(output, "  • Up to 256 distributed shards");
+        let _ = writeln!(output, "  • 3x replication support");
+        let _ = writeln!(output, "  • Multiple consistency levels");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Replica States:");
+        let _ = writeln!(output, "  • Healthy, Syncing, Degraded");
+        let _ = writeln!(output, "  • Failed, Recovering, Rebalancing, Archived");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Consistency Levels:");
+        let _ = writeln!(output, "  • Strong - Write must be acknowledged by all replicas");
+        let _ = writeln!(output, "  • Eventual - Asynchronous replica sync");
+        let _ = writeln!(output, "  • Causal - Causally consistent ordering");
         let _ = writeln!(output, "");
     }
 }

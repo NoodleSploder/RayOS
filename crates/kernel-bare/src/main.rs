@@ -27,6 +27,8 @@ mod storage_volumes;       // Phase 13 Task 1: Storage Volume Management
 mod virtual_networking;    // Phase 13 Task 2: Virtual Networking
 mod container_orchestration; // Phase 13 Task 3: Container Orchestration
 mod security_enforcement;  // Phase 13 Task 4: Security Enforcement
+mod distributed_storage;   // Phase 13 Task 5: Distributed Storage
+mod system_auditing;       // Phase 13 Task 6: System Auditing & Logging
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
