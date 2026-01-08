@@ -283,6 +283,7 @@ mod failure_injection;
 mod perf_profiling;
 mod integration_harness;
 mod graphics_abstraction;
+mod gpu_memory;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
