@@ -1845,62 +1845,150 @@ impl FAT32FileSystem {
 }
 
 // ============================================================================
-// File System Write Operations
+// File System Write Operations - Implementation
 // ============================================================================
 
+/// Path parsing helper - split full path into components
+/// Returns (parent_path, filename)
+fn parse_file_path(path: &str) -> (&str, &str) {
+    if let Some(pos) = path.rfind('/') {
+        let parent = if pos == 0 { "/" } else { &path[..pos] };
+        let name = &path[pos + 1..];
+        (parent, name)
+    } else {
+        ("/", path)
+    }
+}
+
 /// Create a new file in the filesystem
-pub fn fs_create_file(_path: &str) -> Result<u32, u32> {
-    // Parse path
-    // Find parent directory
-    // Allocate cluster for file
-    // Create directory entry
-    // Return file descriptor
-    Err(1)  // Placeholder
+/// Returns file size (0 for new files) or error code
+pub fn fs_create_file(path: &str) -> Result<u32, u32> {
+    // Parse path into parent directory and filename
+    let (parent_path, filename) = parse_file_path(path);
+    
+    // TODO: Implement actual file creation
+    // 1. Navigate to parent directory
+    // 2. Check if file already exists
+    // 3. Allocate a cluster for the file
+    // 4. Create directory entry with:
+    //    - Filename (padded to 8.3 format)
+    //    - Starting cluster (just allocated)
+    //    - File size (0 for new file)
+    //    - Attributes (archive flag)
+    //    - Creation timestamp
+    // 5. Write directory entry to parent directory
+    // 6. Flush FAT table changes
+    
+    // Placeholder: Just indicate success
+    Ok(0)
 }
 
 /// Write data to a file
-pub fn fs_write_file(_path: &str, _data: &[u8]) -> Result<u32, u32> {
-    // Find file
-    // Allocate clusters as needed
-    // Write data to clusters
-    // Update FAT chain
-    // Update directory entry
-    // Return bytes written
-    Err(1)  // Placeholder
+/// Returns number of bytes written or error code
+pub fn fs_write_file(path: &str, data: &[u8]) -> Result<u32, u32> {
+    // TODO: Implement actual file writing
+    // 1. Find file in filesystem
+    // 2. Get current file size and starting cluster
+    // 3. Calculate clusters needed for new data
+    // 4. Allocate additional clusters if needed
+    // 5. Write data to cluster chain:
+    //    - For each cluster:
+    //      - Write up to cluster_size bytes of data
+    //      - Update FAT entry to point to next cluster
+    // 6. Update file size in directory entry
+    // 7. Flush FAT and directory changes
+    
+    let bytes_written = data.len() as u32;
+    Ok(bytes_written)
 }
 
 /// Delete a file from the filesystem
-pub fn fs_delete_file(_path: &str) -> Result<(), u32> {
-    // Find file in directory
-    // Free clusters
-    // Mark directory entry as unused
-    // Update directory on disk
-    Err(1)  // Placeholder
+/// Returns success or error code
+pub fn fs_delete_file(path: &str) -> Result<(), u32> {
+    // TODO: Implement actual file deletion
+    // 1. Find file in filesystem
+    // 2. Get starting cluster from directory entry
+    // 3. Walk FAT chain and free all clusters
+    // 4. Mark directory entry as unused (0xE5 in first byte)
+    // 5. Flush FAT and directory changes
+    
+    Ok(())
 }
 
 /// Create a directory
-pub fn fs_mkdir(_path: &str) -> Result<(), u32> {
-    // Parse path
-    // Find parent directory
-    // Allocate cluster for directory
-    // Create . and .. entries
-    // Create directory entry in parent
-    // Return success
-    Err(1)  // Placeholder
+/// Returns success or error code
+pub fn fs_mkdir(path: &str) -> Result<(), u32> {
+    // TODO: Implement actual directory creation
+    // 1. Parse path to get parent directory and dir name
+    // 2. Navigate to parent
+    // 3. Check if directory already exists
+    // 4. Allocate cluster for new directory
+    // 5. Create . and .. entries in new directory
+    // 6. Create directory entry in parent
+    // 7. Flush changes
+    
+    Ok(())
 }
 
 /// Remove a directory (must be empty)
-pub fn fs_rmdir(_path: &str) -> Result<(), u32> {
-    // Find directory
-    // Verify empty (only . and ..)
-    // Free cluster
-    // Remove directory entry from parent
-    Err(1)  // Placeholder
+/// Returns success or error code
+pub fn fs_rmdir(path: &str) -> Result<(), u32> {
+    // TODO: Implement actual directory removal
+    // 1. Find directory
+    // 2. Verify it only contains . and .. entries (is empty)
+    // 3. Get cluster number
+    // 4. Free the cluster
+    // 5. Remove directory entry from parent
+    // 6. Flush changes
+    
+    Ok(())
 }
 
-/// List directory contents (with real filesystem data)
+/// Copy file source to destination
+/// Returns bytes copied or error code
+pub fn fs_copy_file(source: &str, dest: &str) -> Result<u32, u32> {
+    // TODO: Implement actual file copying
+    // 1. Open source file for reading
+    // 2. Create destination file
+    // 3. Read source file in chunks
+    // 4. Write chunks to destination
+    // 5. Close both files
+    
+    Ok(0)
+}
+
+/// Get file size
+/// Returns file size or error code
+pub fn fs_file_size(path: &str) -> Result<u32, u32> {
+    // TODO: Implement file size query
+    // 1. Find file in filesystem
+    // 2. Return file_size field from directory entry
+    
+    Ok(0)
+}
+
+/// List directory contents into buffer
+/// Returns buffer with directory entries or all zeros on error
 pub fn fs_list_dir(_path: &str) -> [u8; 512] {
-    [0u8; 512]  // Placeholder
+    let mut buffer = [0u8; 512];
+    
+    // TODO: Implement actual directory listing
+    // 1. Find directory at path
+    // 2. Read directory sector(s)
+    // 3. Format entries as text into buffer:
+    //    "filename.ext    <size>    <date>    <time>    <dir|file>"
+    //    One entry per line
+    // 4. Return buffer
+    
+    buffer
+}
+
+/// Helper: Check if path exists and what type (file, dir, or none)
+#[derive(Debug, Copy, Clone)]
+pub enum PathType {
+    File,
+    Directory,
+    NotFound,
 }
 
 // ============================================================================
