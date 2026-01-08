@@ -277,6 +277,7 @@ mod wayland_input;
 mod wayland_dnd;
 mod wayland_scaling;
 mod phase_23_integration;
+mod soak_testing;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
