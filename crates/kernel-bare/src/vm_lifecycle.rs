@@ -1,6 +1,6 @@
 //! VM Lifecycle Management - Phase 12, Task 1
 //! Complete VM state machine with transitions, checkpoints, and lifecycle events
-//! 
+//!
 //! Features:
 //! - 8-state VM lifecycle with comprehensive state machine
 //! - Atomic state transitions with validation
@@ -497,7 +497,7 @@ mod tests {
 
         // Get checkpoint ID
         let (_, _, _, _, _, _) = manager.get_statistics();
-        
+
         // Restore from checkpoint
         assert!(manager.restore_from_checkpoint(1000 ^ (VmState::Running as u32), 1001, 1003));
     }
@@ -522,7 +522,7 @@ mod tests {
         }
 
         assert_eq!(manager.get_vm_count(), 16);
-        
+
         for i in 0..16 {
             assert!(manager.transition(1000 + i, VmState::Running, 1001));
         }

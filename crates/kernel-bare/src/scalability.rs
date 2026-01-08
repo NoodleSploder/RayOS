@@ -1,6 +1,6 @@
 //! Scalability Layer - Phase 11, Task 6
 //! Support for 64+ VMs with hierarchical policies, distributed enforcement, and load balancing
-//! 
+//!
 //! Features:
 //! - HierarchicalPolicyEngine: Parent/child VM relationships
 //! - PolicyDistribution: Broadcast policies to multiple VMs
@@ -278,7 +278,7 @@ impl HierarchicalPolicyEngine {
         let mut broadcast = BroadcastPolicy::new(source_vm, policy_type);
         broadcast.target_vm_count = target_count;
         broadcast.delivered_count = target_count; // Assume success for now
-        
+
         self.broadcast_queue[self.broadcast_index] = Some(broadcast);
         self.broadcast_index = (self.broadcast_index + 1) % MAX_POLICY_BROADCAST;
         self.broadcast_count += 1;
@@ -361,7 +361,7 @@ impl LoadBalancedFirewall {
         if vm_id as usize >= MAX_VMS {
             return false;
         }
-        
+
         self.vm_partition[port as usize] = vm_id;
         if vm_id < MAX_VMS as u32 {
             self.rules_per_vm[vm_id as usize] += 1;
@@ -516,7 +516,7 @@ mod tests {
     #[test]
     fn test_firewall_load_rebalancing() {
         let mut firewall = LoadBalancedFirewall::new();
-        
+
         // Assign ports to different VMs
         for port in 8000..8064 {
             let vm_id = (port - 8000) % 8;  // Distribute across 8 VMs
@@ -538,16 +538,16 @@ mod tests {
         engine.register_vm(1000);
         engine.register_vm(1001);
         engine.register_vm(1002);
-        
+
         engine.set_vm_parent(1001, 1000);
-        
+
         assert_eq!(engine.get_policy_depth(), 1);
     }
 
     #[test]
     fn test_full_scalability_scenario() {
         let mut engine = HierarchicalPolicyEngine::new();
-        
+
         // Register 64 VMs
         for vm_id in 1000..1064 {
             assert!(engine.register_vm(vm_id));

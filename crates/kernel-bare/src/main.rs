@@ -22,6 +22,7 @@ mod vm_migration;          // Phase 12 Task 2: Live VM Migration
 mod vm_snapshot;           // Phase 12 Task 3: Snapshot & Restore
 mod vm_gpu;                // Phase 12 Task 4: GPU Virtualization
 mod vm_numa;               // Phase 12 Task 5: NUMA & Memory Optimization
+mod vm_cluster;            // Phase 12 Task 6: VM Clustering & Orchestration
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
