@@ -285,6 +285,7 @@ mod integration_harness;
 mod graphics_abstraction;
 mod gpu_memory;
 mod hdr_color_management;
+mod advanced_compositing;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
