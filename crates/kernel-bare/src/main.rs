@@ -296,6 +296,7 @@ mod audio_engine;
 mod audio_server;
 mod accessibility;
 mod text_to_speech;
+mod a11y_integration;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
