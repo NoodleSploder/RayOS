@@ -269,6 +269,7 @@ mod guest_surface;
 mod pci;
 mod rayapp;
 mod rayapp_clipboard;
+mod rayapp_events;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
