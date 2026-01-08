@@ -53,6 +53,12 @@ mod secure_boot;           // Phase 17 Task 3: Secure Boot & Attestation
 mod threat_detection;      // Phase 17 Task 4: Threat Detection & Prevention
 mod access_control;        // Phase 17 Task 5: Access Control & Capabilities
 mod audit_logging;         // Phase 17 Task 6: Audit Logging & Forensics
+mod tls_dtls;              // Phase 18 Task 1: TLS/DTLS Protocol Implementation
+mod certificate_manager;   // Phase 18 Task 2: Certificate Management & PKI
+mod secure_channel;        // Phase 18 Task 3: Secure Channel Establishment
+mod traffic_encryption;    // Phase 18 Task 4: Traffic Encryption & Integrity
+mod ddos_protection;       // Phase 18 Task 5: DDoS Protection & Rate Limiting
+mod network_telemetry;     // Phase 18 Task 6: Network Monitoring & Telemetry
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
