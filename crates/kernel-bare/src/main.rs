@@ -301,6 +301,7 @@ mod network_stack;
 mod http_protocol;
 mod content_streaming;
 mod dns_discovery;
+mod network_security;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
