@@ -65,7 +65,7 @@ GPU_PRESENT_MARKER="[gpu] pci display controller: present"
 if grep -F -a -q "$BOOTLOADER_MARKER" "$SERIAL_NORM" \
     && grep -F -a -q "$KERNEL_MARKER" "$SERIAL_NORM" \
     && grep -F -a -q "$BICAMERAL_MARKER" "$SERIAL_NORM"; then
-    
+
     # GPU check: accept either virtio GPU features OK OR standard display controller detected
     if grep -F -a -q "$GPU_MARKER" "$SERIAL_NORM" \
         || grep -F -a -q "$GPU_PRESENT_MARKER" "$SERIAL_NORM"; then

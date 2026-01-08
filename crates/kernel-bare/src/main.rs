@@ -8366,21 +8366,23 @@ pub(crate) fn keyboard_handle_scancode(sc: u8) {
 
     // If the Linux desktop is currently presented, keep a deterministic escape hatch
     // so the user can always return to the RayOS shell/UI.
-    // (Set-1: F12 make = 0x58)
+    // (Set-1: F12 make = 0x58, backtick = 0x29)
     if guest_surface::presentation_state() == guest_surface::PresentationState::Presented
-        && sc == 0x58
+        && (sc == 0x58 || sc == 0x29)
     {
         guest_surface::set_presentation_state(guest_surface::PresentationState::Hidden);
         serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:HIDDEN\n");
+        #[cfg(feature = "dev_scanout")]
+        serial_write_str("DEV_SCANOUT: toggle hidden\n");
         // 2 = available (running hidden)
         LINUX_DESKTOP_STATE.store(2, Ordering::Relaxed);
         return;
     }
 
-    // F11: show/present the Linux desktop (Set-1: F11 make = 0x57).
+    // F11 (0x57) or Backtick (0x29): show/present the Linux desktop.
     // This provides a deterministic single-key way to enter Presented mode.
     if guest_surface::presentation_state() != guest_surface::PresentationState::Presented
-        && sc == 0x57
+        && (sc == 0x57 || sc == 0x29)
     {
         #[cfg(feature = "vmm_hypervisor")]
         {
@@ -8401,6 +8403,8 @@ pub(crate) fn keyboard_handle_scancode(sc: u8) {
         // new SET_SCANOUT.
         if guest_surface::surface_snapshot().is_some() {
             serial_write_str("RAYOS_HOST_EVENT_V0:LINUX_PRESENTATION:PRESENTED\n");
+            #[cfg(feature = "dev_scanout")]
+            serial_write_str("DEV_SCANOUT: toggle presented\n");
         }
         return;
     }

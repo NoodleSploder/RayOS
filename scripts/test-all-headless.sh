@@ -49,9 +49,9 @@ for test_script in "${HEADLESS_TESTS[@]}"; do
         ((SKIPPED++))
         continue
     fi
-    
+
     test_name="$(basename "$test_script")"
-    
+
     # Run with timeout
     if timeout "$TIMEOUT_SECS" bash "$test_script" >/dev/null 2>&1; then
         echo "✓ PASS: $test_name"

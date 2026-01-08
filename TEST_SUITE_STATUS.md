@@ -57,7 +57,7 @@ All automated headless tests are now functional. The test suite includes 21 prim
 ### 1. GPU Marker Detection (Fixed)
 **Issue**: Test scripts required `RAYOS_X86_64_VIRTIO_GPU:FEATURES_OK` marker but kernel only reported standard display controller detection.
 
-**Root Cause**: 
+**Root Cause**:
 - QEMU provides `-vga std` (standard VGA) as class 0x03 display controller
 - Kernel's virtio GPU detection only activates for virtio vendor devices
 - Tests were too strict in marker requirements
@@ -72,7 +72,7 @@ All automated headless tests are now functional. The test suite includes 21 prim
 ### 2. f32::abs() No-std Compatibility (Fixed)
 **Issue**: `dev_scanout` feature failed to compile with errors about missing `abs()` method on `f32`.
 
-**Root Cause**: 
+**Root Cause**:
 - Rust's no-std environment doesn't include `f32::abs()` without explicit libm support
 - Code in `hdr_color_management.rs` and `display_drivers.rs` used `.abs()` directly
 
@@ -115,7 +115,7 @@ TIMEOUT_SECS=120 ./scripts/test-all-headless.sh
 - Coverage: UEFI/BIOS, AI bridge, local inference, volume management
 - Status: ✅ 11/11 passing
 
-### Integration Tests  
+### Integration Tests
 - `test-chainloading.sh` - Bootloader chains loading between media
 - `test-conductor-*.sh` - Conductor service tests
 - Status: ✅ 3/3 passing
