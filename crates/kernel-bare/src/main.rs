@@ -279,6 +279,7 @@ mod wayland_scaling;
 mod phase_23_integration;
 mod soak_testing;
 mod stress_testing;
+mod failure_injection;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
