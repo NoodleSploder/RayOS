@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 mod shell;  // Phase 9A Task 1: Shell & Utilities
+mod init;   // Phase 9B Task 2: System Services & Init
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
