@@ -290,6 +290,7 @@ mod graphics_optimization;
 mod wayland_protocol;
 mod input_events;
 mod window_management;
+mod display_drivers;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
