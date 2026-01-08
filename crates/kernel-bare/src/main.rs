@@ -2255,6 +2255,104 @@ impl FAT32FileSystem {
         // File if archive bit set and directory bit not set
         (attributes & 0x20) != 0 && (attributes & 0x10) == 0
     }
+
+    /// Write cluster data to disk
+    /// cluster: cluster number to write, data: data to write
+    /// Returns bytes written or 0 on error
+    pub fn write_cluster(&self, _cluster: u32, _data: &[u8]) -> u32 {
+        // Calculate cluster sector location (same as read_cluster)
+        // Data area starts after: reserved_sectors + FATs + root directory
+        // cluster_sector = data_start_sector + (cluster - 2) * sectors_per_cluster
+        //
+        // Algorithm:
+        // 1. Calculate data area starting sector
+        // 2. Calculate cluster's starting sector
+        // 3. Calculate sectors needed: ceil(data.len() / bytes_per_sector)
+        // 4. Write sectors starting from cluster_sector
+        // 5. Pad last sector if needed
+        // 6. Return bytes written
+        //
+        // TODO: Implement with block device access:
+        // - Call block_device.write_blocks(lba, count, buffer)
+        // - Handle partial writes
+        // - Return actual bytes written
+        
+        0  // Placeholder: no bytes written
+    }
+
+    /// Allocate a cluster from the FAT
+    /// Returns cluster number or 0 if no free clusters available
+    pub fn allocate_free_cluster(&mut self) -> u32 {
+        // Scan FAT for first free cluster (marked as 0x00000000)
+        //
+        // Algorithm:
+        // 1. Start from cluster 2 (first data cluster)
+        // 2. For each cluster up to total_clusters:
+        //    - Call read_fat_entry(cluster)
+        //    - If returns 0x00000000: free cluster found
+        //    - Mark it as allocated (write 0x0FFFFFFF for EOF)
+        //    - Return cluster number
+        // 3. If no free clusters found, return 0
+        //
+        // Optimization opportunity: maintain free cluster search pointer
+        // to avoid rescanning from beginning each time
+        //
+        // TODO: Implement with read_fat_entry() and write_fat_entry()
+        
+        0  // Placeholder: no cluster allocated
+    }
+
+    /// Link two clusters in the FAT chain
+    /// current: current cluster number, next: next cluster in chain
+    /// Updates current cluster's FAT entry to point to next
+    pub fn link_clusters_in_chain(&mut self, _current: u32, _next: u32) -> bool {
+        // Set current cluster's FAT entry to point to next cluster
+        //
+        // Algorithm:
+        // 1. Call read_fat_entry(_current) to verify it's allocated
+        // 2. Call write_fat_entry(_current, _next) to link
+        // 3. Return success if both operations succeed
+        //
+        // Special cases:
+        // - If _next = 0x0FFFFFFF: mark as EOF (end of file)
+        // - If _current = 0: invalid operation
+        //
+        // TODO: Implement with read_fat_entry() and write_fat_entry()
+        
+        false  // Placeholder: linking failed
+    }
+
+    /// Free a cluster in the FAT (mark as available)
+    /// cluster: cluster number to free
+    /// Returns true if successful
+    pub fn free_cluster_chain(&mut self, _cluster: u32) -> bool {
+        // Walk FAT chain starting from cluster and free all clusters
+        //
+        // Algorithm:
+        // 1. Start with provided cluster
+        // 2. Loop:
+        //    - Call read_fat_entry(current) to get next cluster
+        //    - Call write_fat_entry(current, 0x00000000) to mark as free
+        //    - If next == 0x0FFFFFFF: reached EOF, stop
+        //    - Otherwise: current = next, continue
+        // 3. Return true if successful
+        //
+        // TODO: Implement with read_fat_entry() and write_fat_entry()
+        
+        false  // Placeholder: chain freeing failed
+    }
+
+    /// Calculate clusters needed for data size
+    /// size: data size in bytes
+    /// Returns number of clusters needed
+    pub fn clusters_needed(&self, size: u32) -> u32 {
+        if size == 0 {
+            return 0;
+        }
+        
+        let cluster_bytes = self.bytes_per_sector * self.sectors_per_cluster;
+        (size + cluster_bytes - 1) / cluster_bytes  // ceil(size / cluster_bytes)
+    }
 }
 
 /// Path parsing helper - split full path into components
@@ -2362,8 +2460,35 @@ pub fn fs_write_file(_path: &str, data: &[u8]) -> Result<u32, u32> {
     // 6. Update file size in directory entry
     // 7. Flush FAT and directory changes
 
+    // Full implementation steps:
+    // 1. Find file in root directory:
+    //    - Use find_file_in_root() to locate file
+    //    - If not found, return error
+    // 2. Get current file size and starting cluster from directory entry
+    // 3. Calculate clusters needed:
+    //    - new_clusters = ceil((current_size + write_data.len()) / bytes_per_cluster)
+    //    - additional = new_clusters - current_clusters
+    // 4. Allocate additional clusters:
+    //    - Call allocate_cluster() for each new cluster
+    //    - Link new cluster to end of chain using link_clusters()
+    // 5. Write data cluster by cluster:
+    //    - For each cluster in chain:
+    //      - Calculate bytes to write (min of remaining data and cluster_size)
+    //      - Call write_cluster() to write data
+    //      - Update cluster position for next iteration
+    // 6. Update directory entry:
+    //    - Recalculate high/low cluster words
+    //    - Update file size field
+    //    - Call write_directory_entry()
+    // 7. Flush FAT and directory changes
+    
+    // TODO: Implement with disk I/O:
+    // - Use FAT32FileSystem methods to allocate clusters
+    // - Use block device to write cluster data
+    // - Update directory entries with new size
+    
     let bytes_written = data.len() as u32;
-    Ok(bytes_written)
+    Ok(bytes_written)  // Placeholder: return data length
 }
 
 /// Delete a file from the filesystem
