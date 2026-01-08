@@ -25,6 +25,7 @@ mod vm_numa;               // Phase 12 Task 5: NUMA & Memory Optimization
 mod vm_cluster;            // Phase 12 Task 6: VM Clustering & Orchestration
 mod storage_volumes;       // Phase 13 Task 1: Storage Volume Management
 mod virtual_networking;    // Phase 13 Task 2: Virtual Networking
+mod container_orchestration; // Phase 13 Task 3: Container Orchestration
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
