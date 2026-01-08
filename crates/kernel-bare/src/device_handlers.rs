@@ -335,7 +335,7 @@ impl VirtioBlkHandler {
     /// Write to disk with capability and quota checks
     pub fn write_blocks(&mut self, size_bytes: u32, has_disk_write_cap: bool) -> bool {
         let quota_bytes = (self.max_disk_quota_mb as u64) * 1024 * 1024;
-        
+
         let denied_reason = if !has_disk_write_cap {
             Some("DISK_WRITE_CAPABILITY_DENIED")
         } else if self.total_write_bytes + (size_bytes as u64) > quota_bytes {
@@ -593,14 +593,14 @@ mod tests {
     #[test]
     fn test_gpu_handler_memory_quota() {
         let mut handler = VirtioGpuHandler::new(1000, 256);
-        
+
         // Allocate memory with capability
         assert!(handler.allocate_memory(100 * 1024 * 1024, true));
         assert_eq!(handler.get_memory_usage_percent(), 39); // ~100MB / 256MB
-        
+
         // Exceed quota
         assert!(!handler.allocate_memory(200 * 1024 * 1024, true));
-        
+
         // Deny without capability
         assert!(!handler.allocate_memory(10 * 1024 * 1024, false));
     }
@@ -608,16 +608,16 @@ mod tests {
     #[test]
     fn test_network_handler_bandwidth() {
         let mut handler = VirtioNetHandler::new(1000, 100_000);
-        
+
         // Allow TX with capability and firewall
         assert!(handler.transmit_packet(1500, true, true));
-        
+
         // Deny without capability
         assert!(!handler.transmit_packet(1500, false, true));
-        
+
         // Deny by firewall
         assert!(!handler.transmit_packet(1500, true, false));
-        
+
         let (tx, rx, _, _, _) = handler.get_statistics();
         assert_eq!(tx, 1);
         assert_eq!(rx, 0);
@@ -626,16 +626,16 @@ mod tests {
     #[test]
     fn test_disk_handler_quota() {
         let mut handler = VirtioBlkHandler::new(2000, 1024); // 1 GB quota
-        
+
         // Allow read with capability
         assert!(handler.read_blocks(4096, true));
-        
+
         // Allow write with capability
         assert!(handler.write_blocks(4096, true));
-        
+
         // Deny without write capability
         assert!(!handler.write_blocks(4096, false));
-        
+
         let (reads, writes, _, _, _) = handler.get_io_statistics();
         assert_eq!(reads, 1);
         assert_eq!(writes, 1);
@@ -644,13 +644,13 @@ mod tests {
     #[test]
     fn test_input_handler_queue() {
         let mut handler = VirtioInputHandler::new(1000);
-        
+
         // Allow key event with capability
         assert!(handler.inject_key_event(true));
-        
+
         // Deny without capability
         assert!(!handler.inject_key_event(false));
-        
+
         let (keys, _, _, dropped) = handler.get_event_statistics();
         assert_eq!(keys, 1);
         assert_eq!(dropped, 1);
@@ -659,14 +659,14 @@ mod tests {
     #[test]
     fn test_console_handler() {
         let mut handler = VirtioConsoleHandler::new(1000);
-        
+
         // Write always allowed
         assert!(handler.write_bytes(100));
-        
+
         // Read requires capability
         assert!(handler.read_bytes(50, true));
         assert!(!handler.read_bytes(50, false));
-        
+
         let (written, read, _, _) = handler.get_io_statistics();
         assert_eq!(written, 100);
         assert_eq!(read, 50);

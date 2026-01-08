@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn test_dhcp_discovery() {
         let mut client = DhcpClient::new([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
-        
+
         assert_eq!(client.get_state(), DhcpState::Init);
         assert!(client.start_discovery());
         assert_eq!(client.get_state(), DhcpState::Selecting);
@@ -480,24 +480,24 @@ mod tests {
     #[test]
     fn test_dhcp_offer_request_ack() {
         let mut client = DhcpClient::new([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        
+
         // Start discovery
         assert!(client.start_discovery());
-        
+
         // Receive offer
         let offered_ip = Ipv4Address::new(192, 168, 1, 100);
         let server_id = Ipv4Address::new(192, 168, 1, 1);
         assert!(client.process_offer(offered_ip, server_id));
         assert_eq!(client.get_state(), DhcpState::Requesting);
-        
+
         // Send request
         assert!(client.send_request());
-        
+
         // Receive ACK
         assert!(client.process_ack());
         assert_eq!(client.get_state(), DhcpState::Bound);
         assert!(client.is_bound());
-        
+
         // Check lease
         let lease = client.get_lease();
         assert!(lease.is_some());
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn test_dhcp_renewal() {
         let mut client = DhcpClient::new([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
-        
+
         // Establish lease
         client.start_discovery();
         let ip = Ipv4Address::new(192, 168, 1, 50);
@@ -516,7 +516,7 @@ mod tests {
         client.process_offer(ip, server);
         client.send_request();
         client.process_ack();
-        
+
         // Start renewal
         assert!(client.start_renewal());
         assert_eq!(client.get_state(), DhcpState::Renewing);
@@ -525,13 +525,13 @@ mod tests {
     #[test]
     fn test_dhcp_release() {
         let mut client = DhcpClient::new([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
-        
+
         // Establish lease
         client.start_discovery();
         client.process_offer(Ipv4Address::new(10, 0, 0, 100), Ipv4Address::new(10, 0, 0, 1));
         client.send_request();
         client.process_ack();
-        
+
         // Release lease
         assert!(client.release_lease());
         assert_eq!(client.get_state(), DhcpState::Released);
@@ -541,10 +541,10 @@ mod tests {
     #[test]
     fn test_dhcp_nak() {
         let mut client = DhcpClient::new([0x99, 0x88, 0x77, 0x66, 0x55, 0x44]);
-        
+
         client.start_discovery();
         assert_eq!(client.get_state(), DhcpState::Selecting);
-        
+
         // Receive NAK
         assert!(!client.process_nak());
         assert_eq!(client.get_state(), DhcpState::Init);
@@ -554,7 +554,7 @@ mod tests {
     fn test_ipv4_address_display() {
         let addr = Ipv4Address::new(192, 168, 1, 1);
         assert_eq!(format!("{}", addr), "192.168.1.1");
-        
+
         let addr2 = Ipv4Address::new(8, 8, 8, 8);
         assert_eq!(format!("{}", addr2), "8.8.8.8");
     }
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn test_dhcp_statistics() {
         let mut client = DhcpClient::new([0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
-        
+
         client.start_discovery();
         let (requests, acks, denials, _) = client.get_statistics();
         assert_eq!(requests, 1);
