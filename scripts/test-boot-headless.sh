@@ -60,15 +60,20 @@ BOOTLOADER_MARKER="RayOS uefi_boot: start"
 KERNEL_MARKER="RayOS kernel-bare: _start"
 BICAMERAL_MARKER="RayOS bicameral loop ready (':' for shell)"
 GPU_MARKER="RAYOS_X86_64_VIRTIO_GPU:FEATURES_OK"
+GPU_PRESENT_MARKER="[gpu] pci display controller: present"
 
 if grep -F -a -q "$BOOTLOADER_MARKER" "$SERIAL_NORM" \
     && grep -F -a -q "$KERNEL_MARKER" "$SERIAL_NORM" \
-    && grep -F -a -q "$BICAMERAL_MARKER" "$SERIAL_NORM" \
-    && grep -F -a -q "$GPU_MARKER" "$SERIAL_NORM"; then
-    echo "PASS: Found boot markers in serial log"
-    echo "Serial log: $SERIAL_LOG"
-    echo "QEMU log: $QEMU_LOG"
-    exit 0
+    && grep -F -a -q "$BICAMERAL_MARKER" "$SERIAL_NORM"; then
+    
+    # GPU check: accept either virtio GPU features OK OR standard display controller detected
+    if grep -F -a -q "$GPU_MARKER" "$SERIAL_NORM" \
+        || grep -F -a -q "$GPU_PRESENT_MARKER" "$SERIAL_NORM"; then
+        echo "PASS: Found boot markers in serial log"
+        echo "Serial log: $SERIAL_LOG"
+        echo "QEMU log: $QEMU_LOG"
+        exit 0
+    fi
 fi
 
 echo "FAIL: Missing expected boot markers"

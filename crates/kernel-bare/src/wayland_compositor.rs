@@ -276,7 +276,7 @@ impl Surface {
             unsafe {
                 if let Some(output) = core::fmt::write(
                     &mut Logger,
-                    format_args!("[RAYOS_SURFACE:BUFFER_ATTACHED] surface_id={} buffer_id={}\n", 
+                    format_args!("[RAYOS_SURFACE:BUFFER_ATTACHED] surface_id={} buffer_id={}\n",
                         self.id, buffer_id.unwrap_or(0))
                 ).ok() {
                     // Marker emitted

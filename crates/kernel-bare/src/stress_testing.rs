@@ -538,7 +538,7 @@ mod tests {
     #[test]
     fn test_cpu_stress_ramp() {
         let mut harness = StressTestHarness::new(StressType::CPU, 100, 200);
-        
+
         for i in 0..200 {
             if harness.should_continue() {
                 let cpu_load = (i as u32 * 100) / 200;
@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn test_graceful_degradation_detection() {
         let mut harness = StressTestHarness::new(StressType::CPU, 100, 100);
-        
+
         // Linear degradation (graceful)
         for i in 0..100 {
             if harness.should_continue() {
@@ -602,7 +602,7 @@ mod tests {
     #[test]
     fn test_recovery_detection() {
         let mut harness = StressTestHarness::new(StressType::Memory, 100, 100);
-        
+
         // Start normal, then degrade, then recover
         for i in 0..100 {
             if i < 30 {

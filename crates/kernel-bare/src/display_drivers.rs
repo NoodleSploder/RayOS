@@ -9,6 +9,12 @@ const MAX_CONNECTORS: usize = 4;
 const MAX_MODES: usize = 32;
 const EDID_SIZE: usize = 256;
 
+// Helper for no-std environments where f32::abs() may not be available
+#[inline]
+fn f32_abs(x: f32) -> f32 {
+    if x < 0.0 { -x } else { x }
+}
+
 // ============================================================================
 // DISPLAY MODE & PIXEL FORMAT
 // ============================================================================
@@ -327,7 +333,7 @@ impl DisplayController {
         for i in 0..256 {
             let normalized = (i as f32) / 255.0;
             // Simplified power function without powf
-            let corrected = if (gamma - 2.2).abs() < 0.1 {
+            let corrected = if f32_abs(gamma - 2.2) < 0.1 {
                 // Approximate 2.2 gamma for display
                 if normalized < 0.04045 {
                     normalized / 12.92

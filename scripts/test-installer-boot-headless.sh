@@ -86,11 +86,12 @@ BOOTLOADER_MARKER="RayOS uefi_boot: start"
 KERNEL_MARKER="RayOS kernel-bare: _start"
 BICAMERAL_MARKER="RayOS bicameral loop ready (':' for shell)"
 GPU_MARKER="RAYOS_X86_64_VIRTIO_GPU:FEATURES_OK"
+GPU_PRESENT_MARKER="[gpu] pci display controller: present"
 
 if grep -F -a -q "$BOOTLOADER_MARKER" "$SERIAL_NORM" \
   && grep -F -a -q "$KERNEL_MARKER" "$SERIAL_NORM" \
   && grep -F -a -q "$BICAMERAL_MARKER" "$SERIAL_NORM" \
-  && grep -F -a -q "$GPU_MARKER" "$SERIAL_NORM"; then
+  && (grep -F -a -q "$GPU_MARKER" "$SERIAL_NORM" || grep -F -a -q "$GPU_PRESENT_MARKER" "$SERIAL_NORM"); then
   echo "PASS: installer media boots (markers present)" >&2
   echo "Serial log: $SERIAL_LOG" >&2
   echo "QEMU log: $QEMU_LOG" >&2

@@ -1,10 +1,10 @@
 # Phase 23: Wayland-First GUI - Plan
 
-**Date**: 2026-01-08  
-**Project**: RayOS (Rust-based Advanced RTOS)  
-**Phase**: 23 - Wayland-First GUI Architecture  
-**Duration**: Single focused session  
-**Target**: ~5,000 lines, 6 tasks, 50+ tests  
+**Date**: 2026-01-08
+**Project**: RayOS (Rust-based Advanced RTOS)
+**Phase**: 23 - Wayland-First GUI Architecture
+**Duration**: Single focused session
+**Target**: ~5,000 lines, 6 tasks, 50+ tests
 
 ---
 
@@ -15,7 +15,7 @@ Replace RayOS's PPM (PPM-based scanout) presentation layer with a **real Wayland
 1. **Native Wayland Protocol**: Full wayland-core protocol implementation
 2. **Multi-Window Display**: Proper window titles, decorations, resizing
 3. **Input Events**: Full keyboard/mouse/touch event delivery
-4. **Drag & Drop**: Cross-app clipboard and file operations  
+4. **Drag & Drop**: Cross-app clipboard and file operations
 5. **DPI Scaling**: Resolution-aware rendering and scaling
 6. **Wayland Clients**: Support standard wl-shell and xdg-shell protocols
 
@@ -103,7 +103,7 @@ This transforms RayOS from "custom GUI framework" to "standard Wayland composito
 - Markers: 8 (RAYOS_DND:*, RAYOS_SELECTION:*)
 
 **Task 6: Testing, Integration & DPI Scaling** (~1000 lines)
-- Files: 
+- Files:
   - `crates/kernel-bare/tests/phase_23_integration.rs` (new, ~600 lines)
   - `crates/kernel-bare/src/wayland_scaling.rs` (new, ~400 lines)
 - DPI Scaling: logical vs physical coordinates

@@ -9,6 +9,12 @@ const MAX_COLORSPACES: usize = 32;
 const MAX_HDR_SURFACES: usize = 128;
 const TONE_MAPPING_LUT_SIZE: usize = 256;
 
+// Helper for no-std environments where f32::abs() may not be available
+#[inline]
+fn f32_abs(x: f32) -> f32 {
+    if x < 0.0 { -x } else { x }
+}
+
 // ============================================================================
 // COLOR SPACE DEFINITIONS
 // ============================================================================
@@ -302,7 +308,7 @@ impl ToneMapper {
                 let numerator = hdr_value * (a * hdr_value + b);
                 let denominator = hdr_value * (c * hdr_value + d) + e;
 
-                if denominator.abs() > 0.0001 {
+                if f32_abs(denominator) > 0.0001 {
                     numerator / denominator
                 } else {
                     0.0
@@ -385,13 +391,13 @@ impl ColorConverter {
         if base <= 0.0 {
             return 0.0;
         }
-        if (exp - 1.0).abs() < 0.0001 {
+        if f32_abs(exp - 1.0) < 0.0001 {
             return base;
         }
-        if (exp - 2.0).abs() < 0.0001 {
+        if f32_abs(exp - 2.0) < 0.0001 {
             return base * base;
         }
-        if (exp - 0.5).abs() < 0.0001 {
+        if f32_abs(exp - 0.5) < 0.0001 {
             // Newton-Raphson approximation for sqrt
             let mut x = base;
             x = (x + base / x) / 2.0;
@@ -498,13 +504,13 @@ impl GammaCorrection {
         if base <= 0.0 {
             return 0.0;
         }
-        if (exp - 1.0).abs() < 0.0001 {
+        if f32_abs(exp - 1.0) < 0.0001 {
             return base;
         }
-        if (exp - 2.0).abs() < 0.0001 {
+        if f32_abs(exp - 2.0) < 0.0001 {
             return base * base;
         }
-        if (exp - 0.5).abs() < 0.0001 {
+        if f32_abs(exp - 0.5) < 0.0001 {
             // Newton-Raphson approximation for sqrt
             let mut x = base;
             x = (x + base / x) / 2.0;
