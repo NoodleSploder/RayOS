@@ -2354,6 +2354,98 @@ impl FAT32FileSystem {
         (size + cluster_bytes - 1) / cluster_bytes  // ceil(size / cluster_bytes)
     }
 
+    /// File attribute constants for FAT32
+    /// Attribute byte is at offset 11 in directory entry
+    pub const ATTR_READ_ONLY: u8 = 0x01;     // Read-only file
+    pub const ATTR_HIDDEN: u8 = 0x02;        // Hidden file
+    pub const ATTR_SYSTEM: u8 = 0x04;        // System file
+    pub const ATTR_VOLUME_LABEL: u8 = 0x08;  // Volume label entry
+    pub const ATTR_DIRECTORY: u8 = 0x10;     // Directory
+    pub const ATTR_ARCHIVE: u8 = 0x20;       // Archive (should be backed up)
+    pub const ATTR_LFN: u8 = 0x0F;           // Long filename entry (when all bits 0-3 set)
+
+    /// Check if entry is read-only
+    pub fn is_read_only(entry_bytes: &[u8; 32]) -> bool {
+        if entry_bytes.len() < 12 { return false; }
+        (entry_bytes[11] & Self::ATTR_READ_ONLY) != 0
+    }
+
+    /// Check if entry is hidden
+    pub fn is_hidden(entry_bytes: &[u8; 32]) -> bool {
+        if entry_bytes.len() < 12 { return false; }
+        (entry_bytes[11] & Self::ATTR_HIDDEN) != 0
+    }
+
+    /// Check if entry is system file
+    pub fn is_system(entry_bytes: &[u8; 32]) -> bool {
+        if entry_bytes.len() < 12 { return false; }
+        (entry_bytes[11] & Self::ATTR_SYSTEM) != 0
+    }
+
+    /// Check if entry is archive (needs backup)
+    pub fn is_archive(entry_bytes: &[u8; 32]) -> bool {
+        if entry_bytes.len() < 12 { return false; }
+        (entry_bytes[11] & Self::ATTR_ARCHIVE) != 0
+    }
+
+    /// Get attributes byte from entry
+    pub fn entry_attributes(entry_bytes: &[u8; 32]) -> u8 {
+        if entry_bytes.len() < 12 { return 0; }
+        entry_bytes[11]
+    }
+
+    /// Extract creation time from entry (bytes 13-14, little-endian)
+    /// Time format: bits 15-11=hours(0-23), bits 10-5=minutes(0-59), bits 4-0=seconds*2(0-58)
+    pub fn entry_creation_time(entry_bytes: &[u8; 32]) -> u16 {
+        if entry_bytes.len() < 15 { return 0; }
+        let low = entry_bytes[13] as u16;
+        let high = entry_bytes[14] as u16;
+        (high << 8) | low
+    }
+
+    /// Extract creation date from entry (bytes 15-16, little-endian)
+    /// Date format: bits 15-9=years(0=1980), bits 8-5=months(1-12), bits 4-0=days(1-31)
+    pub fn entry_creation_date(entry_bytes: &[u8; 32]) -> u16 {
+        if entry_bytes.len() < 17 { return 0; }
+        let low = entry_bytes[15] as u16;
+        let high = entry_bytes[16] as u16;
+        (high << 8) | low
+    }
+
+    /// Extract write time from entry (bytes 22-23, little-endian)
+    pub fn entry_write_time(entry_bytes: &[u8; 32]) -> u16 {
+        if entry_bytes.len() < 24 { return 0; }
+        let low = entry_bytes[22] as u16;
+        let high = entry_bytes[23] as u16;
+        (high << 8) | low
+    }
+
+    /// Extract write date from entry (bytes 24-25, little-endian)
+    pub fn entry_write_date(entry_bytes: &[u8; 32]) -> u16 {
+        if entry_bytes.len() < 26 { return 0; }
+        let low = entry_bytes[24] as u16;
+        let high = entry_bytes[25] as u16;
+        (high << 8) | low
+    }
+
+    /// Check if entry is a long filename entry (LFN)
+    pub fn is_lfn_entry(entry_bytes: &[u8; 32]) -> bool {
+        if entry_bytes.len() < 12 { return false; }
+        entry_bytes[11] == Self::ATTR_LFN
+    }
+
+    /// Check if directory entry is used (first byte is not 0x00 or 0xE5)
+    pub fn is_used_entry(entry_bytes: &[u8; 32]) -> bool {
+        if entry_bytes.is_empty() { return false; }
+        let first_byte = entry_bytes[0];
+        first_byte != 0x00 && first_byte != 0xE5
+    }
+
+    /// Check if directory entry is empty/free (first byte is 0xE5 or 0x00)
+    pub fn is_free_entry(entry_bytes: &[u8; 32]) -> bool {
+        !Self::is_used_entry(entry_bytes)
+    }
+
     /// Check if entry is a directory
     /// Returns true if attributes indicate directory (0x10 bit set)
     pub fn is_directory_entry(entry_bytes: &[u8; 32]) -> bool {
@@ -2467,6 +2559,36 @@ impl FAT32FileSystem {
         }
         
         (None, 0)  // Should not reach here
+    }
+}
+
+/// Format file attributes for display as a 4-character string
+/// Example: "r--a" for read-only and archive, or "d---" for directory
+pub fn format_file_attributes(entry_bytes: &[u8; 32]) -> [u8; 4] {
+    let mut result = [b'-'; 4];  // Default: "----"
+    
+    if FAT32FileSystem::is_read_only(entry_bytes) {
+        result[0] = b'r';
+    }
+    if FAT32FileSystem::is_hidden(entry_bytes) {
+        result[1] = b'h';
+    }
+    if FAT32FileSystem::is_system(entry_bytes) {
+        result[2] = b's';
+    }
+    if FAT32FileSystem::is_archive(entry_bytes) {
+        result[3] = b'a';
+    }
+    
+    result
+}
+
+/// Format entry type as a 4-character string ("FILE" or "DIR ")
+pub fn format_entry_type(entry_bytes: &[u8; 32]) -> [u8; 4] {
+    if FAT32FileSystem::is_directory_entry(entry_bytes) {
+        [b'D', b'I', b'R', b' ']
+    } else {
+        [b'F', b'I', b'L', b'E']
     }
 }
 

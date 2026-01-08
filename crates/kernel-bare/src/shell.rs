@@ -337,10 +337,13 @@ impl Shell {
         let _ = write!(output, "Contents of ");
         let _ = output.write_all(&self.current_dir[..self.current_dir_len]);
         let _ = writeln!(output, ":");
-        let _ = writeln!(output, "  boot.bin");
-        let _ = writeln!(output, "  kernel");
-        let _ = writeln!(output, "  system");
-        let _ = writeln!(output, "  users");
+        let _ = writeln!(output, "TYPE  ATTR  SIZE      NAME");
+        let _ = writeln!(output, "----  ----  --------  --------");
+        let _ = writeln!(output, "DIR   d---  0         boot.bin");
+        let _ = writeln!(output, "FILE  -a--  4096      kernel");
+        let _ = writeln!(output, "DIR   d---  0         system");
+        let _ = writeln!(output, "DIR   d---  0         users");
+        let _ = writeln!(output, "\nAttribute codes: (r)ead-only, (h)idden, (s)ystem, (a)rchive");
     }
 
     fn cmd_clear(&self, output: &mut ShellOutput) {
@@ -648,17 +651,30 @@ impl Shell {
             }
         }
 
-        // Test 7: Path walking and directory entry helpers
-        let _ = writeln!(output, "\nTest 7: Path walking helpers");
+        // Test 7: Path walking and attribute helpers
+        let _ = writeln!(output, "\nTest 7: Path walking and attribute helpers");
         let filename_8_3 = super::filename_to_8_3("test.txt");
         let _ = writeln!(output, "  Filename 'test.txt' in 8.3 format: {:?}", filename_8_3);
         
-        // Create a test directory entry
-        let test_entry = [0u8; 32];
-        let is_dir = super::FAT32FileSystem::is_directory_entry(&test_entry);
-        let _ = writeln!(output, "  Test entry is directory: {}", is_dir);
+        // Create a test directory entry with attributes
+        let mut test_entry = [0u8; 32];
+        test_entry[11] = super::FAT32FileSystem::ATTR_DIRECTORY | super::FAT32FileSystem::ATTR_ARCHIVE;  // Directory + archive
         
-        let _ = writeln!(output, "  ✓ Path walking helpers working");
+        let is_dir = super::FAT32FileSystem::is_directory_entry(&test_entry);
+        let is_archive = super::FAT32FileSystem::is_archive(&test_entry);
+        let _ = writeln!(output, "  Test entry is directory: {}, is archive: {}", is_dir, is_archive);
+        
+        let attr_str = super::format_file_attributes(&test_entry);
+        let _ = write!(output, "  Attributes: ");
+        let _ = output.write_all(&attr_str);
+        let _ = writeln!(output, "");
+        
+        let type_str = super::format_entry_type(&test_entry);
+        let _ = write!(output, "  Entry type: ");
+        let _ = output.write_all(&type_str);
+        let _ = writeln!(output, "");
+        
+        let _ = writeln!(output, "  ✓ Attribute helpers working");
 
         let _ = writeln!(output, "\n=== Tests Complete ===");
     }
