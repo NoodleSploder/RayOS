@@ -2276,7 +2276,7 @@ impl FAT32FileSystem {
         // - Call block_device.write_blocks(lba, count, buffer)
         // - Handle partial writes
         // - Return actual bytes written
-        
+
         0  // Placeholder: no bytes written
     }
 
@@ -2298,7 +2298,7 @@ impl FAT32FileSystem {
         // to avoid rescanning from beginning each time
         //
         // TODO: Implement with read_fat_entry() and write_fat_entry()
-        
+
         0  // Placeholder: no cluster allocated
     }
 
@@ -2318,7 +2318,7 @@ impl FAT32FileSystem {
         // - If _current = 0: invalid operation
         //
         // TODO: Implement with read_fat_entry() and write_fat_entry()
-        
+
         false  // Placeholder: linking failed
     }
 
@@ -2338,7 +2338,7 @@ impl FAT32FileSystem {
         // 3. Return true if successful
         //
         // TODO: Implement with read_fat_entry() and write_fat_entry()
-        
+
         false  // Placeholder: chain freeing failed
     }
 
@@ -2349,15 +2349,60 @@ impl FAT32FileSystem {
         if size == 0 {
             return 0;
         }
-        
+
         let cluster_bytes = self.bytes_per_sector * self.sectors_per_cluster;
         (size + cluster_bytes - 1) / cluster_bytes  // ceil(size / cluster_bytes)
+    }
+
+    /// Check if entry is a directory
+    /// Returns true if attributes indicate directory (0x10 bit set)
+    pub fn is_directory_entry(entry_bytes: &[u8; 32]) -> bool {
+        if entry_bytes.len() < 12 {
+            return false;
+        }
+        let attributes = entry_bytes[11];
+        (attributes & 0x10) != 0  // 0x10 = directory attribute
+    }
+
+    /// Find an entry by name in a directory cluster
+    /// start_cluster: directory cluster to search
+    /// target_name: name of entry to find (8.3 format)
+    /// Returns (entry_bytes, cluster_offset) or (None, 0) if not found
+    pub fn find_in_directory(&self, _start_cluster: u32, _target_name: &str) -> (Option<[u8; 32]>, u32) {
+        // Algorithm:
+        // 1. Start at directory's first cluster
+        // 2. Read directory entries (32 bytes each)
+        // 3. Check each entry's name field (bytes 0-10)
+        // 4. Compare with target (convert target to 8.3 format)
+        // 5. If found, return entry bytes and byte offset
+        // 6. If end of directory (0x00), return not found
+        // 7. If end of cluster, read next cluster in chain
+        // TODO: Implement with read_cluster and FAT chain walking
+        (None, 0)  // Placeholder
+    }
+
+    /// Walk a filesystem path to find target entry
+    /// path: full path like "/dir1/dir2/file.txt" or "dir/file.txt"
+    /// Returns (entry_bytes, final_cluster) or (None, 0) if not found
+    pub fn walk_path(&self, _path: &str) -> (Option<[u8; 32]>, u32) {
+        // Algorithm:
+        // 1. Split path into components by '/'
+        // 2. Start at root directory (cluster 0 conceptually)
+        // 3. For each component except last:
+        //    a. Find component name in current directory
+        //    b. Check if it's a directory (attribute 0x10)
+        //    c. Get its starting cluster
+        //    d. Make it the current directory
+        // 4. Find last component (file or dir)
+        // 5. Return its entry bytes
+        // TODO: Implement with find_in_directory, FAT chain walking, and directory checking
+        (None, 0)  // Placeholder
     }
 }
 
 /// Path parsing helper - split full path into components
 /// Returns (parent_path, filename)
-fn parse_file_path(path: &str) -> (&str, &str) {
+pub fn parse_file_path(path: &str) -> (&str, &str) {
     if let Some(pos) = path.rfind('/') {
         let parent = if pos == 0 { "/" } else { &path[..pos] };
         let name = &path[pos + 1..];
@@ -2365,6 +2410,75 @@ fn parse_file_path(path: &str) -> (&str, &str) {
     } else {
         ("/", path)
     }
+}
+
+/// Convert filename to FAT32 8.3 format (uppercase, padded)
+/// Converts "test.txt" -> "TEST    TXT" (8 bytes name, 3 bytes ext)
+pub fn filename_to_8_3(filename: &str) -> [u8; 11] {
+    let mut result = [0x20u8; 11];  // Pad with spaces
+    
+    // Split filename and extension
+    let (name, ext) = if let Some(pos) = filename.rfind('.') {
+        (&filename[..pos], &filename[pos + 1..])
+    } else {
+        (filename, "")
+    };
+    
+    // Copy name (max 8 chars, uppercase)
+    let name_len = core::cmp::min(name.len(), 8);
+    for (i, &byte) in name.as_bytes()[..name_len].iter().enumerate() {
+        result[i] = byte.to_ascii_uppercase();
+    }
+    
+    // Copy extension (max 3 chars, uppercase)
+    let ext_len = core::cmp::min(ext.len(), 3);
+    for (i, &byte) in ext.as_bytes()[..ext_len].iter().enumerate() {
+        result[8 + i] = byte.to_ascii_uppercase();
+    }
+    
+    result
+}
+
+/// Extract filename from FAT32 8.3 format entry
+/// Returns filename string (without trailing spaces)
+pub fn filename_from_8_3(entry_bytes: &[u8; 32]) -> [u8; 256] {
+    let mut result = [0u8; 256];
+    let mut pos = 0;
+    
+    // Copy and trim name portion (bytes 0-7)
+    for i in 0..8 {
+        let byte = entry_bytes[i];
+        if byte != 0x20 && byte != 0 {  // Skip spaces and nulls
+            if pos < 256 {
+                result[pos] = byte;
+                pos += 1;
+            }
+        } else if pos > 0 && entry_bytes[i] != 0x20 {
+            break;
+        }
+    }
+    
+    // Add dot if extension exists (bytes 8-10)
+    let ext_start = 8;
+    let has_ext = entry_bytes[ext_start] != 0x20 && entry_bytes[ext_start] != 0;
+    
+    if has_ext && pos < 256 {
+        result[pos] = b'.';
+        pos += 1;
+    }
+    
+    // Copy extension (bytes 8-10)
+    for i in ext_start..ext_start + 3 {
+        let byte = entry_bytes[i];
+        if byte != 0x20 && byte != 0 {
+            if pos < 256 {
+                result[pos] = byte;
+                pos += 1;
+            }
+        }
+    }
+    
+    result
 }
 
 /// Create a new file in the filesystem
@@ -2481,12 +2595,12 @@ pub fn fs_write_file(_path: &str, data: &[u8]) -> Result<u32, u32> {
     //    - Update file size field
     //    - Call write_directory_entry()
     // 7. Flush FAT and directory changes
-    
+
     // TODO: Implement with disk I/O:
     // - Use FAT32FileSystem methods to allocate clusters
     // - Use block device to write cluster data
     // - Update directory entries with new size
-    
+
     let bytes_written = data.len() as u32;
     Ok(bytes_written)  // Placeholder: return data length
 }
