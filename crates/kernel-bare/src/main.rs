@@ -275,6 +275,8 @@ mod wayland_compositor;
 mod wayland_shell;
 mod wayland_input;
 mod wayland_dnd;
+mod wayland_scaling;
+mod phase_23_integration;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
