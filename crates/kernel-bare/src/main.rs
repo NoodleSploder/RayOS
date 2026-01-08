@@ -14,6 +14,7 @@ mod observability;         // Phase 10 Task 5: Observability & Telemetry
 mod device_handlers;       // Phase 11 Task 1: Virtio Device Handler Integration
 mod dhcp;                  // Phase 11 Task 2: DHCP Client & Network Stack
 mod tpm2;                  // Phase 11 Task 3: TPM 2.0 Measured Boot Integration
+mod performance;           // Phase 11 Task 4: Performance Optimization
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
