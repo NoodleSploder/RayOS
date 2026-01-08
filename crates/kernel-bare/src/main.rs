@@ -288,6 +288,7 @@ mod hdr_color_management;
 mod advanced_compositing;
 mod graphics_optimization;
 mod wayland_protocol;
+mod input_events;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
