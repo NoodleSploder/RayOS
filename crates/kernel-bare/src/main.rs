@@ -268,6 +268,7 @@ mod guest_driver_template;
 mod guest_surface;
 mod pci;
 mod rayapp;
+mod rayapp_clipboard;
 mod vmm;
 
 #[cfg(feature = "vmm_hypervisor")]
