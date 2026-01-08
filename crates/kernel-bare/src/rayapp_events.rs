@@ -347,7 +347,7 @@ impl EventRouter {
         unsafe {
             let queues_ptr = self.app_queues.get() as *const AppEventQueue;
             let queue = &*queues_ptr.add(focused_app_id as usize);
-            
+
             self.emit_event_input(&event);
             queue.push_input(event)
         }

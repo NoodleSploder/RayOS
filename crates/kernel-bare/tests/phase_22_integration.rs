@@ -10,7 +10,7 @@ mod phase_22_integration_tests {
     // ========================================================================
     // Test 1: Window Lifecycle Integration
     // ========================================================================
-    
+
     #[test]
     fn test_window_creation_to_destruction() {
         // [RAYOS_GUI_WINDOW:CREATE] window_id=1, properties=(800,600), title="Test App"
@@ -18,15 +18,15 @@ mod phase_22_integration_tests {
         // Verify default window state is Normal
         // Verify window receives unique ID
         assert!(true, "Window creation succeeds");
-        
+
         // [RAYOS_GUI_WINDOW:FOCUS] window_id=1
         // Verify window can receive focus
         assert!(true, "Window can receive focus");
-        
+
         // [RAYOS_GUI_WINDOW:STATE_CHANGE] window_id=1, new_state=Minimized
         // Verify window state transitions work
         assert!(true, "Window state changes work");
-        
+
         // [RAYOS_GUI_WINDOW:DESTROY] window_id=1
         // Verify window destruction cleanup
         assert!(true, "Window destruction cleanup succeeds");
@@ -36,21 +36,21 @@ mod phase_22_integration_tests {
     fn test_focus_management_with_multiple_windows() {
         // Create Window 1 (terminal)
         // [RAYOS_GUI_WINDOW:CREATE] window_id=1, app=terminal
-        
+
         // Create Window 2 (vnc)
         // [RAYOS_GUI_WINDOW:CREATE] window_id=2, app=vnc
-        
+
         // Focus Window 1
         // [RAYOS_GUI_WINDOW:FOCUS] window_id=1
         // Verify only Window 1 receives input
         assert!(true, "Only focused window receives input");
-        
+
         // Focus Window 2
         // [RAYOS_GUI_WINDOW:FOCUS] window_id=2
         // [RAYOS_GUI_WINDOW:FOCUS_LOST] window_id=1
         // Verify Window 1 loses focus when Window 2 gains focus
         assert!(true, "Focus transfers correctly between windows");
-        
+
         // Close Window 2
         // [RAYOS_GUI_WINDOW:DESTROY] window_id=2
         // Verify focus recovers to Window 1
@@ -62,15 +62,15 @@ mod phase_22_integration_tests {
     fn test_input_routing_respects_focus() {
         // Create Window 1 (terminal) and Window 2 (editor)
         // Focus Window 1
-        
+
         // Send keyboard input
         // [RAYOS_GUI_EVENT:KEYBOARD] window_id=1, key=A, modifiers=0
         // Verify only Window 1 receives the input
         assert!(true, "Input routes only to focused window");
-        
+
         // Switch focus to Window 2
         // [RAYOS_GUI_WINDOW:FOCUS] window_id=2
-        
+
         // Send mouse input
         // [RAYOS_GUI_EVENT:MOUSE] window_id=2, x=100, y=200
         // Verify only Window 2 receives the input
@@ -86,12 +86,12 @@ mod phase_22_integration_tests {
         // App 1 (terminal) sets clipboard
         // [RAYOS_GUI_CLIPBOARD:SET] app_id=1, size=47
         // Clipboard contains: "Welcome to RayOS!"
-        
+
         // App 2 (editor) reads clipboard
         // [RAYOS_GUI_CLIPBOARD:GET] app_id=2
         // Verify App 2 gets the same content
         assert!(true, "Clipboard content shared between apps");
-        
+
         // App 3 (vnc) also reads clipboard
         // [RAYOS_GUI_CLIPBOARD:GET] app_id=3
         // Verify App 3 also gets the content
@@ -105,13 +105,13 @@ mod phase_22_integration_tests {
         // Verify request is GRANTED (within app's sandbox)
         // [RAYOS_GUI_FILEIO:GRANT] app_id=1, path=/rayos/app/1/data.txt
         assert!(true, "App can access files in its sandbox");
-        
+
         // App 1 requests file outside sandbox
         // [RAYOS_GUI_FILEIO:REQUEST] app_id=1, path=/rayos/app/2/other.txt
         // Verify request is DENIED (outside app's sandbox)
         // [RAYOS_GUI_FILEIO:DENY] app_id=1, path=/rayos/app/2/other.txt
         assert!(true, "Sandbox prevents cross-app file access");
-        
+
         // App 1 tries directory traversal attack
         // [RAYOS_GUI_FILEIO:REQUEST] app_id=1, path=/rayos/app/1/../2/data.txt
         // Verify ".." is blocked
@@ -125,7 +125,7 @@ mod phase_22_integration_tests {
         // [RAYOS_GUI_CLIPBOARD:SET] app_id=1, size=16384
         // Verify content is stored
         assert!(true, "16KB clipboard limit accepted");
-        
+
         // Try to set clipboard with 20KB content (exceeds limit)
         // [RAYOS_GUI_CLIPBOARD:SET] app_id=1, size=20480
         // Verify truncation or rejection occurs
@@ -139,13 +139,13 @@ mod phase_22_integration_tests {
     #[test]
     fn test_event_queue_per_app() {
         // Create App 1 (terminal) and App 2 (editor)
-        
+
         // Send keyboard event to focused window (App 1)
         // [RAYOS_GUI_EVENT:KEYBOARD] window_id=1, key=A
         // App 1's event queue receives the event
         // Verify App 2's queue remains empty
         assert!(true, "Events route only to focused app");
-        
+
         // Queue 64 events for App 1
         // Verify all 64 are stored in FIFO order
         // Send 65th event
@@ -160,7 +160,7 @@ mod phase_22_integration_tests {
         // Verify message appears in App 2's event queue
         // [RAYOS_GUI_IPC] Message delivered to target app
         assert!(true, "Messages deliver to target app");
-        
+
         // Verify message payload is intact (64 byte max)
         assert!(true, "Message payload preserved");
     }
@@ -168,7 +168,7 @@ mod phase_22_integration_tests {
     #[test]
     fn test_broadcast_messaging() {
         // Create App 1, 2, 3
-        
+
         // App 1 broadcasts message
         // [RAYOS_GUI_IPC:BROADCAST] from_app=1, recipients=2,3
         // Verify App 2 receives message in its queue
@@ -183,7 +183,7 @@ mod phase_22_integration_tests {
         // [RAYOS_GUI_WINDOW:STATE_CHANGE] window_id=1, old_state=Normal, new_state=Minimized
         // App 1's event queue receives WindowStateChange event
         assert!(true, "App receives window state change events");
-        
+
         // Restore Window 1
         // [RAYOS_GUI_WINDOW:STATE_CHANGE] window_id=1, new_state=Normal
         // App 1's event queue receives state change event
@@ -198,7 +198,7 @@ mod phase_22_integration_tests {
     fn test_window_decoration_rendering() {
         // Create window with title "Terminal"
         // [RAYOS_GUI_RENDER:WINDOW] window_id=1, title="Terminal", width=800, height=600
-        
+
         // Render window decoration (title bar, border)
         // Verify title bar is 24 pixels tall
         // Verify border is 1 pixel white
@@ -210,7 +210,7 @@ mod phase_22_integration_tests {
     fn test_surface_composition() {
         // Create 3 windows with content
         // [RAYOS_GUI_RENDER:COMPOSITE] window_count=3, output_width=1920, output_height=1080
-        
+
         // Composite surfaces in Z-order (bottom to top)
         // Verify output framebuffer contains blended content
         // Verify focus window is topmost
@@ -221,12 +221,12 @@ mod phase_22_integration_tests {
     fn test_dirty_region_optimization() {
         // Create window and set content
         // [RAYOS_GUI_RENDER:DIRTY_REGION] window_id=1, x=100, y=200, width=300, height=150
-        
+
         // Mark region as dirty
         // Compositor only re-renders dirty regions
         // Verify unchanged regions reuse previous framebuffer
         assert!(true, "Dirty region optimization reduces redraws");
-        
+
         // Clear dirty regions after render
         // [RAYOS_GUI_RENDER:DIRTY_REGION] cleared
         // Next render has no dirty regions
@@ -237,12 +237,12 @@ mod phase_22_integration_tests {
     fn test_scanout_optimization() {
         // Prepare surface for display
         // [RAYOS_GUI_RENDER:SCANOUT] surfaces=3, target_fps=60
-        
+
         // Emit scanout operation
         // [RAYOS_GUI_RENDER:SCANOUT] frame_id=145, output_size=8294400
         // Verify frame is ready for hardware scanout
         assert!(true, "Scanout optimization prepares frames");
-        
+
         // Estimate memory usage
         // Surfaces: 3 × (800×600×4) = 5.76 MB
         // Verify estimation is accurate
@@ -257,7 +257,7 @@ mod phase_22_integration_tests {
     fn test_app_launch_command() {
         // Execute: app launch terminal
         // [RAYOS_GUI_CMD:LAUNCH] app=terminal, window_id=4, size=800x600
-        
+
         // Verify terminal app spawns
         // Verify window is created
         // Verify focus transfers to new window
@@ -268,7 +268,7 @@ mod phase_22_integration_tests {
     fn test_app_launch_with_custom_size() {
         // Execute: app launch vnc 1024 768
         // [RAYOS_GUI_CMD:LAUNCH] app=vnc, window_id=5, size=1024x768
-        
+
         // Verify window is created with requested size
         // Verify size is within limits (320-2000 pixels)
         assert!(true, "app launch accepts custom window size");
@@ -278,7 +278,7 @@ mod phase_22_integration_tests {
     fn test_app_list_command() {
         // Execute: app list
         // [RAYOS_GUI_CMD:LIST] apps=3, focused=0
-        
+
         // Verify all running apps are listed
         // Verify focus indicator is accurate
         // Verify memory usage is shown
@@ -290,7 +290,7 @@ mod phase_22_integration_tests {
         // Execute: app focus 1
         // [RAYOS_GUI_CMD:FOCUS] target=1
         // [RAYOS_GUI_CMD:FOCUS_CHANGE] from_app=0, to_app=1
-        
+
         // Verify focus transfers to requested app
         // Verify previous app loses focus
         // Verify input routing updates
@@ -303,7 +303,7 @@ mod phase_22_integration_tests {
         // [RAYOS_GUI_CMD:CLOSE] target=1
         // [RAYOS_GUI_CMD:CLOSING] app_id=1
         // [RAYOS_GUI_CMD:CLOSED] app_id=1, status=success
-        
+
         // Verify app is terminated
         // Verify window is destroyed
         // Verify memory is freed
@@ -316,7 +316,7 @@ mod phase_22_integration_tests {
         // Execute: app status
         // [RAYOS_GUI_CMD:STATUS] timestamp=3245
         // [RAYOS_GUI_CMD:STATUS_COMPLETE] success=true
-        
+
         // Verify system status is reported
         // Verify performance metrics are shown
         // Verify resource allocation is accurate
@@ -327,7 +327,7 @@ mod phase_22_integration_tests {
     fn test_clipboard_set_command() {
         // Execute: clipboard set "Test content"
         // [RAYOS_GUI_CMD:CLIPBOARD_SET] size=12, app=terminal
-        
+
         // Verify clipboard is updated
         // Verify content is available to other apps
         assert!(true, "clipboard set command updates content");
@@ -337,7 +337,7 @@ mod phase_22_integration_tests {
     fn test_clipboard_get_command() {
         // Execute: clipboard get
         // [RAYOS_GUI_CMD:CLIPBOARD_GET] app=terminal
-        
+
         // Verify current clipboard content is displayed
         // Verify owner app is shown
         assert!(true, "clipboard get command retrieves content");
@@ -430,26 +430,26 @@ mod phase_22_integration_tests {
             "RAYOS_GUI_WINDOW:STATE_CHANGE",
             "RAYOS_GUI_WINDOW:DESTROY",
         ];
-        
+
         // Clipboard markers (4 types)
         let clipboard_markers = vec![
             "RAYOS_GUI_CLIPBOARD:SET",
             "RAYOS_GUI_CLIPBOARD:GET",
         ];
-        
+
         // File I/O markers (4 types)
         let fileio_markers = vec![
             "RAYOS_GUI_FILEIO:REQUEST",
             "RAYOS_GUI_FILEIO:GRANT",
             "RAYOS_GUI_FILEIO:DENY",
         ];
-        
+
         // IPC markers (4 types)
         let ipc_markers = vec![
             "RAYOS_GUI_IPC:SEND",
             "RAYOS_GUI_IPC:BROADCAST",
         ];
-        
+
         // Event markers (4 types)
         let event_markers = vec![
             "RAYOS_GUI_EVENT:KEYBOARD",
@@ -457,7 +457,7 @@ mod phase_22_integration_tests {
             "RAYOS_GUI_EVENT:MOUSEBUTTON",
             "RAYOS_GUI_EVENT:MOUSEWHEEL",
         ];
-        
+
         // Render markers (4 types)
         let render_markers = vec![
             "RAYOS_GUI_RENDER:COMPOSITE",
@@ -465,7 +465,7 @@ mod phase_22_integration_tests {
             "RAYOS_GUI_RENDER:SCANOUT",
             "RAYOS_GUI_RENDER:WINDOW",
         ];
-        
+
         // Command markers (8 types)
         let cmd_markers = vec![
             "RAYOS_GUI_CMD:LIST",
@@ -486,13 +486,13 @@ mod phase_22_integration_tests {
             "RAYOS_GUI_CMD:CLIPBOARD_CLEAR",
             "RAYOS_GUI_CMD:CLIPBOARD_STATUS",
         ];
-        
+
         // Verify all markers are unique and properly formatted
-        let total_markers = window_markers.len() + clipboard_markers.len() + 
-                           fileio_markers.len() + ipc_markers.len() + 
-                           event_markers.len() + render_markers.len() + 
+        let total_markers = window_markers.len() + clipboard_markers.len() +
+                           fileio_markers.len() + ipc_markers.len() +
+                           event_markers.len() + render_markers.len() +
                            cmd_markers.len();
-        
+
         assert!(total_markers >= 40, "At least 40 deterministic markers defined");
         assert!(true, "All required deterministic markers emitted");
     }

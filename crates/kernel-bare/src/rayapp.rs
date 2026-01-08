@@ -258,7 +258,7 @@ impl RayAppService {
             return false;
         }
         let mut guard = self.lock();
-        
+
         // Clear input from current focused app
         let current_active = self.active_app.load(Ordering::Relaxed);
         if (current_active as usize) < MAX_RAYAPPS {
@@ -267,7 +267,7 @@ impl RayAppService {
                 self.emit_window_focus_lost(old_entry);
             }
         }
-        
+
         // Set input on new app
         if let Some(entry) = guard.entry_mut(id as usize) {
             if entry.is_available() {
@@ -290,7 +290,7 @@ impl RayAppService {
             return None;
         }
         let mut guard = self.lock();
-        
+
         // Clear input from current focused app
         let current_active = self.active_app.load(Ordering::Relaxed);
         if (current_active as usize) < MAX_RAYAPPS {
@@ -298,7 +298,7 @@ impl RayAppService {
                 old_entry.input_enabled = false;
             }
         }
-        
+
         // Check if app already exists
         for (idx, entry) in guard.iter_mut().enumerate() {
             if entry.matches(name) {
@@ -316,7 +316,7 @@ impl RayAppService {
                 return Some(idx as u8);
             }
         }
-        
+
         // Allocate new app entry
         for idx in 0..MAX_RAYAPPS {
             if let Some(entry) = guard.entry_mut(idx) {
@@ -351,7 +351,7 @@ impl RayAppService {
             self.emit_window_destroy(entry);
             entry.reset();
         }
-        
+
         // If released app was active, focus on topmost remaining
         let current_active = self.active_app.load(Ordering::Relaxed);
         if current_active == id {
@@ -490,17 +490,17 @@ impl RayAppService {
     pub fn next_focused_window(&self) -> Option<u8> {
         let current = self.active_app.load(Ordering::Relaxed);
         let mut guard = self.lock();
-        
+
         let mut best_z = 0u8;
         let mut best_idx = RAYAPP_NONE;
-        
+
         for (idx, entry) in guard.iter_mut().enumerate() {
             if entry.state != RayAppState::Idle && idx as u8 != current && entry.z_index > best_z {
                 best_z = entry.z_index;
                 best_idx = idx as u8;
             }
         }
-        
+
         if best_idx < RAYAPP_NONE {
             Some(best_idx)
         } else {
@@ -531,11 +531,11 @@ mod tests {
     fn test_window_creation() {
         let svc = RayAppService::new();
         assert_eq!(svc.window_count(), 0);
-        
+
         let app_id = svc.allocate(b"test_app");
         assert!(app_id.is_some());
         assert_eq!(svc.window_count(), 1);
-        
+
         let app_id2 = svc.allocate(b"app2");
         assert!(app_id2.is_some());
         assert_eq!(svc.window_count(), 2);
@@ -546,7 +546,7 @@ mod tests {
         let svc = RayAppService::new();
         let app_id = svc.allocate(b"test_app").unwrap();
         assert_eq!(svc.window_count(), 1);
-        
+
         svc.release(app_id);
         assert_eq!(svc.window_count(), 0);
     }
@@ -555,14 +555,14 @@ mod tests {
     fn test_window_state_transitions() {
         let svc = RayAppService::new();
         let app_id = svc.allocate(b"test_app").unwrap();
-        
+
         let props = svc.get_window_properties(app_id).unwrap();
         assert_eq!(props.window_state, WindowState::Normal);
-        
+
         assert!(svc.set_window_state(app_id, WindowState::Minimized));
         let props = svc.get_window_properties(app_id).unwrap();
         assert_eq!(props.window_state, WindowState::Minimized);
-        
+
         assert!(svc.set_window_state(app_id, WindowState::Maximized));
         let props = svc.get_window_properties(app_id).unwrap();
         assert_eq!(props.window_state, WindowState::Maximized);
@@ -573,9 +573,9 @@ mod tests {
         let svc = RayAppService::new();
         let app1 = svc.allocate(b"app1").unwrap();
         let app2 = svc.allocate(b"app2").unwrap();
-        
+
         assert_eq!(svc.active_app_id(), Some(app2));
-        
+
         assert!(svc.set_active_app(app1));
         assert_eq!(svc.active_app_id(), Some(app1));
     }
@@ -585,14 +585,14 @@ mod tests {
         let svc = RayAppService::new();
         let app1 = svc.allocate(b"app1").unwrap();
         let app2 = svc.allocate(b"app2").unwrap();
-        
+
         // app2 is active (last allocated)
         assert_eq!(svc.active_app_id(), Some(app2));
-        
+
         // Switch focus to app1
         assert!(svc.set_active_app(app1));
         assert_eq!(svc.active_app_id(), Some(app1));
-        
+
         // Switch back to app2
         assert!(svc.set_active_app(app2));
         assert_eq!(svc.active_app_id(), Some(app2));
@@ -603,12 +603,12 @@ mod tests {
         let svc = RayAppService::new();
         let app1 = svc.allocate(b"app1").unwrap();
         let app2 = svc.allocate(b"app2").unwrap();
-        
+
         assert_eq!(svc.active_app_id(), Some(app2));
-        
+
         // Close app2 (active app)
         svc.release(app2);
-        
+
         // Focus should recover to app1 (next highest Z-order)
         assert_eq!(svc.window_count(), 1);
         assert_eq!(svc.active_app_id(), Some(app1));
@@ -618,7 +618,7 @@ mod tests {
     fn test_window_title_setting() {
         let svc = RayAppService::new();
         let app_id = svc.allocate(b"test").unwrap();
-        
+
         assert!(svc.set_window_title(app_id, b"My Test App"));
         let props = svc.get_window_properties(app_id).unwrap();
         assert_eq!(props.title_len, 11);
@@ -628,7 +628,7 @@ mod tests {
     fn test_window_properties_default() {
         let svc = RayAppService::new();
         let app_id = svc.allocate(b"test").unwrap();
-        
+
         let props = svc.get_window_properties(app_id).unwrap();
         assert!(props.resizable);
         assert!(props.closeable);
@@ -640,12 +640,12 @@ mod tests {
     #[test]
     fn test_max_apps_limit() {
         let svc = RayAppService::new();
-        
+
         let _app1 = svc.allocate(b"app1");
         let _app2 = svc.allocate(b"app2");
         let _app3 = svc.allocate(b"app3");
         let _app4 = svc.allocate(b"app4");
-        
+
         // Fifth app should fail (MAX_RAYAPPS = 4)
         let app5 = svc.allocate(b"app5");
         assert!(app5.is_none());
@@ -657,9 +657,9 @@ mod tests {
         let svc = RayAppService::new();
         let app1 = svc.allocate(b"app1").unwrap();
         let app2 = svc.allocate(b"app2").unwrap();
-        
+
         assert_eq!(svc.active_app_id(), Some(app2));
-        
+
         // Next focused window should be app1
         let next = svc.next_focused_window();
         assert_eq!(next, Some(app1));
@@ -671,14 +671,14 @@ mod tests {
         let app1 = svc.allocate(b"app1").unwrap();
         let app2 = svc.allocate(b"app2").unwrap();
         let app3 = svc.allocate(b"app3").unwrap();
-        
+
         let props1 = svc.get_window_properties(app1).unwrap();
         let props2 = svc.get_window_properties(app2).unwrap();
         let props3 = svc.get_window_properties(app3).unwrap();
-        
+
         // App3 (last created) should have highest Z-index
         assert!(props3.window_state == WindowState::Normal);
-        
+
         // All apps should have different Z-indices (in order)
         assert!(true); // Z-ordering is tracked internally
     }
@@ -686,12 +686,12 @@ mod tests {
     #[test]
     fn test_invalid_operations() {
         let svc = RayAppService::new();
-        
+
         // Operations on non-existent app
         assert!(!svc.set_window_state(99, WindowState::Minimized));
         assert!(!svc.set_window_title(99, b"title"));
         assert!(svc.get_window_properties(99).is_none());
-        
+
         // Setting title on idle app
         let app_id = svc.allocate(b"test").unwrap();
         svc.release(app_id);

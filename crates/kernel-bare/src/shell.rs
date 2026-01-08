@@ -3056,7 +3056,7 @@ impl Shell {
         // Parse optional width/height
         let mut w = 800u32;
         let mut h = 600u32;
-        
+
         let mut param_start = app_end;
         while param_start < args.len() && (args[param_start] == b' ' || args[param_start] == b'\t') {
             param_start += 1;
@@ -3115,7 +3115,7 @@ impl Shell {
 
     fn app_close(&self, output: &mut ShellOutput, args: &[u8]) {
         let _ = writeln!(output, "");
-        
+
         // Extract app ID or name from args
         let mut start = 0;
         while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {

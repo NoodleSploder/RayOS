@@ -736,7 +736,7 @@ impl SurfaceCompositor {
 
         // In production, would iterate through surfaces sorted by Z-order
         // and composite each surface with decorations
-        
+
         self.emit_composite_marker(surface_count as u32);
         frame_id
     }
