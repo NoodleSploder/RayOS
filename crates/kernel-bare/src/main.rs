@@ -41,6 +41,12 @@ mod interrupt_coalescing;  // Phase 15 Task 3: Interrupt Coalescing & Latency Op
 mod vectorized_io;         // Phase 15 Task 4: Vectorized I/O Operations
 mod power_management;      // Phase 15 Task 5: Power Management & Dynamic Frequency Scaling
 mod system_tuning;         // Phase 15 Task 6: System Tuning & Auto-configuration
+mod raft_consensus;        // Phase 16 Task 1: Distributed Consensus Engine (Raft)
+mod bft;                   // Phase 16 Task 2: Byzantine Fault Tolerance (PBFT)
+mod service_mesh;          // Phase 16 Task 3: Service Mesh Control Plane
+mod tracing;               // Phase 16 Task 4: Distributed Tracing & Observability
+mod container_scheduler;   // Phase 16 Task 5: Advanced Container Scheduling
+mod zero_copy_net;         // Phase 16 Task 6: Zero-Copy Networking Stack
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
