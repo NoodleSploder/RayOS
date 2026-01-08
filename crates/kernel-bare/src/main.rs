@@ -12,6 +12,7 @@ mod policy_enforcement;    // Phase 10 Task 3: Process Sandboxing & Capability E
 mod firewall;              // Phase 10 Task 4: Network Stack & Firewall
 mod observability;         // Phase 10 Task 5: Observability & Telemetry
 mod device_handlers;       // Phase 11 Task 1: Virtio Device Handler Integration
+mod dhcp;                  // Phase 11 Task 2: DHCP Client & Network Stack
 
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
