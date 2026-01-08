@@ -160,7 +160,7 @@ impl UpdateManager {
     pub fn verify_update(&mut self) -> bool {
         if self.update_state == UpdateState::Downloading {
             self.update_state = UpdateState::Verifying;
-            
+
             // Simulate verification
             let verified = true;
 
@@ -179,7 +179,7 @@ impl UpdateManager {
     pub fn install_update(&mut self) -> bool {
         if self.update_state == UpdateState::Staging {
             self.update_state = UpdateState::Installing;
-            
+
             // Create rollback snapshot before updating
             self.create_snapshot(b"pre-update-9.3");
 

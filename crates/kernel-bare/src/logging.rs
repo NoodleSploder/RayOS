@@ -85,7 +85,7 @@ impl KernelLogger {
 
     pub fn log(&self, level: LogLevel, _source: &str, _message: &str) {
         let min_level_val = self.min_log_level.load(Ordering::Relaxed);
-        
+
         // Compare as usize values
         if (level as usize) < min_level_val {
             return;  // Filter out messages below minimum level
@@ -343,7 +343,7 @@ pub fn dump_health_status(health: &HealthMonitor, output: &mut dyn Write) {
 
 pub fn test_logging_system() -> bool {
     let logger = kernel_logger();
-    
+
     // Record some test messages
     logger.log(LogLevel::Info, "test", "Test info message");
     logger.log(LogLevel::Warn, "test", "Test warning message");
