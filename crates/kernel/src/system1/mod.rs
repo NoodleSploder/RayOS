@@ -3,8 +3,15 @@
 /// This is the persistent compute shader that runs the megakernel loop.
 /// Handles millisecond-level execution, the core event loop of RayOS.
 
+pub mod gpu_reflex;
 pub mod megakernel;
 pub mod ray_logic;
+
+pub use gpu_reflex::{
+    GpuReflexEngine, GpuInputEvent, GpuPatternElement, GpuReflex,
+    GpuReflexConfig, GpuMatchResult, ReflexStats as GpuReflexStats,
+    MAX_GPU_REFLEXES, MAX_PATTERN_LEN, INPUT_HISTORY_SIZE, MAX_MATCHES,
+};
 
 use crate::hal::HalManager;
 use crate::hal::hive::HiveManager;
