@@ -13,8 +13,23 @@ static SHELL_INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Tick counter for timing.
 static TICK_COUNT: AtomicU64 = AtomicU64::new(0);
 
+/// Last frame tick - used for frame rate limiting.
+static LAST_FRAME_TICK: AtomicU64 = AtomicU64::new(0);
+
 /// Desktop window ID.
 static DESKTOP_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Linux Desktop window ID (0 = not created)
+static LINUX_DESKTOP_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Windows Desktop window ID (0 = not created)
+static WINDOWS_DESKTOP_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Process Explorer window ID (0 = not created)
+static PROCESS_EXPLORER_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
+
+/// System Log window ID (0 = not created)
+static SYSTEM_LOG_WINDOW_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Initialize the UI shell.
 ///
@@ -110,21 +125,43 @@ pub fn ui_shell_tick() {
         return;
     }
 
-    let tick = TICK_COUNT.fetch_add(1, Ordering::Relaxed);
+    // Increment our internal tick counter
+    TICK_COUNT.fetch_add(1, Ordering::Relaxed);
 
-    // Mark dirty periodically for now (every 60 ticks for ~60fps refresh)
-    // Later this will be driven by actual changes
-    if tick % 60 == 0 {
+    // Use the kernel's TIMER_TICKS for real-time frame pacing
+    // TIMER_TICKS increments at ~100Hz, so we target ~30fps (every 3 ticks)
+    let now = crate::TIMER_TICKS.load(Ordering::Relaxed);
+    let last_frame = LAST_FRAME_TICK.load(Ordering::Relaxed);
+
+    // Frame rate limiting: ~30fps for smooth updates without tearing
+    const MIN_FRAME_INTERVAL: u64 = 3;
+
+    // Check if we need a refresh for dynamic content (Process Explorer, VM window, System Log)
+    let process_explorer_id = PROCESS_EXPLORER_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    let linux_window_id = LINUX_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    let system_log_id = SYSTEM_LOG_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    let has_dynamic_window = process_explorer_id != 0 || linux_window_id != 0 || system_log_id != 0;
+
+    // Mark dirty periodically for dynamic windows at ~10fps (every 10 timer ticks)
+    if has_dynamic_window && (now / 10) != (last_frame / 10) {
         compositor::mark_dirty();
     }
 
-    // Composite if dirty
-    if compositor::is_dirty() {
+    // Only composite if dirty AND enough time has passed since last frame
+    let elapsed = now.saturating_sub(last_frame);
+    let did_composite = if compositor::is_dirty() && elapsed >= MIN_FRAME_INTERVAL {
         compositor::composite();
-    }
+        LAST_FRAME_TICK.store(now, Ordering::Relaxed);
+        true
+    } else {
+        false
+    };
 
     // Update cursor display (draw on top of composited content)
-    input::update_cursor();
+    // Update when we composited, or when cursor moved (at frame rate limit)
+    if did_composite || (input::cursor_needs_update() && elapsed >= MIN_FRAME_INTERVAL) {
+        input::update_cursor();
+    }
 }
 
 /// Check if the shell is initialized.
@@ -208,4 +245,444 @@ pub fn handle_mouse_delta(dx: i32, dy: i32) {
 /// Get current mouse position.
 pub fn get_mouse_position() -> (i32, i32) {
     input::mouse_position()
+}
+
+// ===== Linux Desktop Window Management =====
+
+/// Show the Linux Desktop window.
+///
+/// Creates the window if it doesn't exist, or shows/focuses it if hidden.
+/// Returns the window ID.
+pub fn show_linux_desktop() -> Option<u32> {
+    if !SHELL_INITIALIZED.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let existing_id = LINUX_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+
+    if existing_id != 0 {
+        // Window exists - just focus and raise it
+        let wm = window_manager::get_mut();
+        if let Some(win) = wm.get_window_mut(existing_id) {
+            win.visible = true;
+        }
+        window_manager::set_focus(existing_id);
+        window_manager::raise_window(existing_id);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        {
+            crate::serial_write_str("RAYOS_UI_LINUX_DESKTOP_SHOWN:");
+            crate::serial_write_hex_u64(existing_id as u64);
+            crate::serial_write_str("\n");
+        }
+
+        return Some(existing_id);
+    }
+
+    // Create a new Linux Desktop window
+    // Position it centered and reasonably sized
+    let (screen_w, screen_h) = renderer::get_dimensions();
+    let win_w = (screen_w as u32).saturating_sub(300).min(640);
+    let win_h = (screen_h as u32).saturating_sub(250).min(400);
+    let win_x = ((screen_w as u32 - win_w) / 2) as i32;
+    // Position with enough vertical space - the title bar starts at y, content below
+    // Use y=100 to ensure clear visibility below the top accent bar
+    let win_y = 100;
+
+    if let Some(id) = window_manager::create_window(
+        b"Linux Desktop",
+        win_x,
+        win_y,
+        win_w,
+        win_h,
+        WindowType::VmSurface,
+    ) {
+        LINUX_DESKTOP_WINDOW_ID.store(id as u64, Ordering::Relaxed);
+        window_manager::set_focus(id);
+        window_manager::raise_window(id);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        {
+            crate::serial_write_str("RAYOS_UI_LINUX_DESKTOP_CREATED:");
+            crate::serial_write_hex_u64(id as u64);
+            crate::serial_write_str("\n");
+        }
+
+        Some(id)
+    } else {
+        None
+    }
+}
+
+/// Hide the Linux Desktop window (but keep it alive).
+pub fn hide_linux_desktop() {
+    let id = LINUX_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id != 0 {
+        let wm = window_manager::get_mut();
+        if let Some(win) = wm.get_window_mut(id) {
+            win.visible = false;
+        }
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        crate::serial_write_str("RAYOS_UI_LINUX_DESKTOP_HIDDEN\n");
+    }
+}
+
+/// Close the Linux Desktop window.
+pub fn close_linux_desktop() {
+    let id = LINUX_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id != 0 {
+        window_manager::destroy_window(id);
+        LINUX_DESKTOP_WINDOW_ID.store(0, Ordering::Relaxed);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        crate::serial_write_str("RAYOS_UI_LINUX_DESKTOP_CLOSED\n");
+    }
+}
+
+/// Check if Linux Desktop window is currently visible.
+pub fn is_linux_desktop_visible() -> bool {
+    let id = LINUX_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id == 0 {
+        return false;
+    }
+    let wm = window_manager::get();
+    if let Some(win) = wm.get_window(id) {
+        win.visible
+    } else {
+        false
+    }
+}
+
+/// Check if Linux Desktop window is focused.
+pub fn is_linux_desktop_focused() -> bool {
+    let id = LINUX_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id == 0 {
+        return false;
+    }
+    window_manager::get().get_focused() == id
+}
+
+/// Get the Linux Desktop window ID (0 if not created).
+pub fn linux_desktop_window_id() -> u32 {
+    LINUX_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32
+}
+
+// ===== Windows Desktop Window Management =====
+
+/// Show the Windows Desktop window.
+///
+/// Creates the window if it doesn't exist, or shows/focuses it if hidden.
+/// Returns the window ID.
+pub fn show_windows_desktop() -> Option<u32> {
+    if !SHELL_INITIALIZED.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let existing_id = WINDOWS_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+
+    if existing_id != 0 {
+        // Window exists - just focus and raise it
+        let wm = window_manager::get_mut();
+        if let Some(win) = wm.get_window_mut(existing_id) {
+            win.visible = true;
+        }
+        window_manager::set_focus(existing_id);
+        window_manager::raise_window(existing_id);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        {
+            crate::serial_write_str("RAYOS_UI_WINDOWS_DESKTOP_SHOWN:");
+            crate::serial_write_hex_u64(existing_id as u64);
+            crate::serial_write_str("\n");
+        }
+
+        return Some(existing_id);
+    }
+
+    // Create a new Windows Desktop window (VM Surface type)
+    // Default to 1024x768 for Windows
+    let (screen_w, screen_h) = renderer::get_dimensions();
+    let win_w = 1024;
+    let win_h = 768;
+    // Center the window
+    let win_x = ((screen_w as u32).saturating_sub(win_w) / 2) as i32;
+    let win_y = ((screen_h as u32).saturating_sub(win_h) / 2) as i32;
+
+    if let Some(id) = window_manager::create_window(
+        b"Windows Desktop",
+        win_x,
+        win_y,
+        win_w,
+        win_h,
+        WindowType::VmSurface,
+    ) {
+        WINDOWS_DESKTOP_WINDOW_ID.store(id as u64, Ordering::Relaxed);
+        window_manager::set_focus(id);
+        window_manager::raise_window(id);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        {
+            crate::serial_write_str("RAYOS_UI_WINDOWS_DESKTOP_CREATED:");
+            crate::serial_write_hex_u64(id as u64);
+            crate::serial_write_str("\n");
+        }
+
+        Some(id)
+    } else {
+        None
+    }
+}
+
+/// Hide the Windows Desktop window (keeps it in memory).
+pub fn hide_windows_desktop() {
+    let id = WINDOWS_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id != 0 {
+        let wm = window_manager::get_mut();
+        if let Some(win) = wm.get_window_mut(id) {
+            win.visible = false;
+        }
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        crate::serial_write_str("RAYOS_UI_WINDOWS_DESKTOP_HIDDEN\n");
+    }
+}
+
+/// Close the Windows Desktop window completely.
+pub fn close_windows_desktop() {
+    let id = WINDOWS_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id != 0 {
+        window_manager::destroy_window(id);
+        WINDOWS_DESKTOP_WINDOW_ID.store(0, Ordering::Relaxed);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        crate::serial_write_str("RAYOS_UI_WINDOWS_DESKTOP_CLOSED\n");
+    }
+}
+
+/// Check if Windows Desktop window is currently visible.
+pub fn is_windows_desktop_visible() -> bool {
+    let id = WINDOWS_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id == 0 {
+        return false;
+    }
+    let wm = window_manager::get();
+    if let Some(win) = wm.get_window(id) {
+        win.visible
+    } else {
+        false
+    }
+}
+
+/// Check if Windows Desktop window is focused.
+pub fn is_windows_desktop_focused() -> bool {
+    let id = WINDOWS_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id == 0 {
+        return false;
+    }
+    window_manager::get().get_focused() == id
+}
+
+/// Get the Windows Desktop window ID (0 if not created).
+pub fn windows_desktop_window_id() -> u32 {
+    WINDOWS_DESKTOP_WINDOW_ID.load(Ordering::Relaxed) as u32
+}
+
+// ===== Process Explorer Window Management =====
+
+/// Show the Process Explorer window.
+///
+/// Creates the window if it doesn't exist, or shows/focuses it if hidden.
+/// Returns the window ID.
+pub fn show_process_explorer() -> Option<u32> {
+    if !SHELL_INITIALIZED.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let existing_id = PROCESS_EXPLORER_WINDOW_ID.load(Ordering::Relaxed) as u32;
+
+    if existing_id != 0 {
+        // Window exists - just focus and raise it
+        let wm = window_manager::get_mut();
+        if let Some(win) = wm.get_window_mut(existing_id) {
+            win.visible = true;
+        }
+        window_manager::set_focus(existing_id);
+        window_manager::raise_window(existing_id);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        {
+            crate::serial_write_str("RAYOS_UI_PROCESS_EXPLORER_SHOWN:");
+            crate::serial_write_hex_u64(existing_id as u64);
+            crate::serial_write_str("\n");
+        }
+
+        return Some(existing_id);
+    }
+
+    // Create a new Process Explorer window
+    // Position it centered and reasonably sized
+    let (screen_w, screen_h) = renderer::get_dimensions();
+    let win_w = 460;
+    let win_h = 400;
+    let win_x = ((screen_w as u32 - win_w) / 2) as i32;
+    let win_y = ((screen_h as u32 - win_h) / 2) as i32;
+
+    if let Some(id) = window_manager::create_window(
+        b"Process Explorer",
+        win_x,
+        win_y,
+        win_w,
+        win_h,
+        WindowType::Normal,
+    ) {
+        PROCESS_EXPLORER_WINDOW_ID.store(id as u64, Ordering::Relaxed);
+        window_manager::set_focus(id);
+        window_manager::raise_window(id);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        {
+            crate::serial_write_str("RAYOS_UI_PROCESS_EXPLORER_CREATED:");
+            crate::serial_write_hex_u64(id as u64);
+            crate::serial_write_str("\n");
+        }
+
+        Some(id)
+    } else {
+        None
+    }
+}
+
+/// Close the Process Explorer window.
+pub fn close_process_explorer() {
+    let id = PROCESS_EXPLORER_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id != 0 {
+        window_manager::destroy_window(id);
+        PROCESS_EXPLORER_WINDOW_ID.store(0, Ordering::Relaxed);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        crate::serial_write_str("RAYOS_UI_PROCESS_EXPLORER_CLOSED\n");
+    }
+}
+
+/// Check if Process Explorer window is currently visible.
+pub fn is_process_explorer_visible() -> bool {
+    let id = PROCESS_EXPLORER_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id == 0 {
+        return false;
+    }
+    let wm = window_manager::get();
+    if let Some(win) = wm.get_window(id) {
+        win.visible
+    } else {
+        false
+    }
+}
+
+// ===== System Log Window Management =====
+
+/// Show the System Log window.
+///
+/// Creates the window if it doesn't exist, or shows/focuses it if hidden.
+/// Returns the window ID.
+pub fn show_system_log() -> Option<u32> {
+    if !SHELL_INITIALIZED.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let existing_id = SYSTEM_LOG_WINDOW_ID.load(Ordering::Relaxed) as u32;
+
+    if existing_id != 0 {
+        // Window exists - just focus and raise it
+        let wm = window_manager::get_mut();
+        if let Some(win) = wm.get_window_mut(existing_id) {
+            win.visible = true;
+        }
+        window_manager::set_focus(existing_id);
+        window_manager::raise_window(existing_id);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        {
+            crate::serial_write_str("RAYOS_UI_SYSTEM_LOG_SHOWN:");
+            crate::serial_write_hex_u64(existing_id as u64);
+            crate::serial_write_str("\n");
+        }
+
+        return Some(existing_id);
+    }
+
+    // Create a new System Log window
+    // Position it at bottom-left, wide enough for log entries
+    let (screen_w, screen_h) = renderer::get_dimensions();
+    let win_w = 550;
+    let win_h = 350;
+    let win_x = 40;
+    let win_y = (screen_h as i32 - win_h as i32 - 60).max(100);
+
+    if let Some(id) = window_manager::create_window(
+        b"System Log",
+        win_x,
+        win_y,
+        win_w,
+        win_h,
+        WindowType::Normal,
+    ) {
+        SYSTEM_LOG_WINDOW_ID.store(id as u64, Ordering::Relaxed);
+        window_manager::set_focus(id);
+        window_manager::raise_window(id);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        {
+            crate::serial_write_str("RAYOS_UI_SYSTEM_LOG_CREATED:");
+            crate::serial_write_hex_u64(id as u64);
+            crate::serial_write_str("\n");
+        }
+
+        // Log that we opened the log window
+        crate::syslog::info(crate::syslog::SUBSYSTEM_UI, b"System Log window opened");
+
+        Some(id)
+    } else {
+        None
+    }
+}
+
+/// Close the System Log window.
+pub fn close_system_log() {
+    let id = SYSTEM_LOG_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id != 0 {
+        window_manager::destroy_window(id);
+        SYSTEM_LOG_WINDOW_ID.store(0, Ordering::Relaxed);
+        compositor::mark_dirty();
+
+        #[cfg(feature = "serial_debug")]
+        crate::serial_write_str("RAYOS_UI_SYSTEM_LOG_CLOSED\n");
+    }
+}
+
+/// Check if System Log window is currently visible.
+pub fn is_system_log_visible() -> bool {
+    let id = SYSTEM_LOG_WINDOW_ID.load(Ordering::Relaxed) as u32;
+    if id == 0 {
+        return false;
+    }
+    let wm = window_manager::get();
+    if let Some(win) = wm.get_window(id) {
+        win.visible
+    } else {
+        false
+    }
 }

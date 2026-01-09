@@ -246,13 +246,8 @@ impl Compositor {
 
     /// Render a VM surface window.
     fn render_vm_window(&self, win: &Window) {
-        // For now, render like a normal window
-        // Later, this will blit the VM's framebuffer
+        // Render decorated window - content.rs handles the VM surface blitting
         self.render_decorated_window(win);
-
-        // Overlay "VM Surface" label
-        let (cx, cy, _, _) = win.content_rect();
-        draw_text(cx + 10, cy + 30, b"[VM Surface]", COLOR_ACCENT);
     }
 
     /// Render a panel (status bar).
@@ -306,6 +301,11 @@ pub fn mark_dirty() {
 /// Check if a redraw is needed.
 pub fn is_dirty() -> bool {
     COMPOSITOR_DIRTY.load(Ordering::Acquire)
+}
+
+/// Get the current frame count.
+pub fn frame_count() -> u64 {
+    get().frame_count()
 }
 
 /// Composite all windows to the framebuffer.

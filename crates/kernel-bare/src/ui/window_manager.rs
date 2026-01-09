@@ -108,7 +108,8 @@ impl Window {
             width,
             height,
             window_type,
-            decorations: matches!(window_type, WindowType::Normal | WindowType::Dialog),
+            // VmSurface windows also get decorations (title bar, close button, etc.)
+            decorations: matches!(window_type, WindowType::Normal | WindowType::Dialog | WindowType::VmSurface),
             ..Default::default()
         };
         win.set_title(title);

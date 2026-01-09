@@ -1289,6 +1289,11 @@ static PIT_TICK_LAST_VMEXIT: AtomicUsize = AtomicUsize::new(0);
 // When non-zero, holds the vector number for a pending synthetic IRQ0 tick.
 static PIT_TICK_PENDING_VEC: AtomicUsize = AtomicUsize::new(0);
 
+/// Returns the total VMX exit count for use by the Process Explorer UI.
+pub fn get_vmx_exit_count() -> u64 {
+    VMEXIT_COUNT.load(core::sync::atomic::Ordering::Relaxed) as u64
+}
+
 static mut GUEST_FAKE_LAPIC_PAGE_PHYS: u64 = 0;
 
 const PAGE_SIZE: usize = 4096;

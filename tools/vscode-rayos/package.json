@@ -1,0 +1,198 @@
+{
+  "name": "rayos-dev",
+  "displayName": "RayOS Development",
+  "description": "Development tools for RayOS - build, run, and debug RayOS applications",
+  "version": "0.1.0",
+  "publisher": "rayos",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rayos/RayOS"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Other"
+  ],
+  "keywords": [
+    "rayos",
+    "operating system",
+    "hypervisor",
+    "rust",
+    "kernel"
+  ],
+  "icon": "images/rayos-icon.png",
+  "activationEvents": [
+    "workspaceContains:**/Cargo.toml",
+    "workspaceContains:**/*.rayapp"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "rayos.build",
+        "title": "RayOS: Build Kernel",
+        "category": "RayOS"
+      },
+      {
+        "command": "rayos.run",
+        "title": "RayOS: Run in QEMU",
+        "category": "RayOS"
+      },
+      {
+        "command": "rayos.clean",
+        "title": "RayOS: Clean Build",
+        "category": "RayOS"
+      },
+      {
+        "command": "rayos.createApp",
+        "title": "RayOS: Create New App",
+        "category": "RayOS"
+      },
+      {
+        "command": "rayos.buildApp",
+        "title": "RayOS: Build Current App",
+        "category": "RayOS"
+      },
+      {
+        "command": "rayos.showDocs",
+        "title": "RayOS: Open Documentation",
+        "category": "RayOS"
+      }
+    ],
+    "configuration": {
+      "title": "RayOS",
+      "properties": {
+        "rayos.qemuPath": {
+          "type": "string",
+          "default": "qemu-system-x86_64",
+          "description": "Path to QEMU executable"
+        },
+        "rayos.targetArch": {
+          "type": "string",
+          "enum": ["x86_64", "aarch64"],
+          "default": "x86_64",
+          "description": "Target architecture for builds"
+        },
+        "rayos.enableSerial": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable serial output in QEMU"
+        },
+        "rayos.extraQemuArgs": {
+          "type": "string",
+          "default": "",
+          "description": "Additional QEMU arguments"
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "rayapp",
+        "aliases": ["RayOS App Manifest", "rayapp"],
+        "extensions": [".rayapp"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rayapp",
+        "scopeName": "source.rayapp",
+        "path": "./syntaxes/rayapp.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "rust",
+        "path": "./snippets/rust.json"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "rayos",
+        "required": ["task"],
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "The RayOS task to run",
+            "enum": ["build-kernel", "build-app", "run", "clean"]
+          },
+          "arch": {
+            "type": "string",
+            "description": "Target architecture",
+            "enum": ["x86_64", "aarch64"]
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "rayos-rustc",
+        "owner": "rayos",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": [
+          {
+            "regexp": "^error\\[E\\d+\\]: (.+)$",
+            "message": 1
+          },
+          {
+            "regexp": "^\\s+-->\\s+(.+):(\\d+):(\\d+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          }
+        ]
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "rayos.build",
+          "when": "workspaceFolderCount > 0"
+        },
+        {
+          "command": "rayos.run",
+          "when": "workspaceFolderCount > 0"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "rayos.buildApp",
+          "when": "resourceExtname == .rs",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "rayos.build",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b",
+        "when": "editorTextFocus && resourceExtname == .rs"
+      },
+      {
+        "command": "rayos.run",
+        "key": "f5",
+        "when": "!inDebugMode"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "typescript": "^5.0.0"
+  }
+}

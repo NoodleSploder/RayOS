@@ -3,6 +3,11 @@
 #
 # This script builds and runs RayOS with the ui_shell feature enabled
 # and displays the graphical output.
+#
+# For a real Linux VM (requires Linux guest artifacts), use:
+#   ./scripts/run-ui-shell-vmm.sh
+#
+# This script uses dev_scanout to provide a test surface for development.
 
 set -euo pipefail
 
@@ -10,8 +15,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/build}"
 mkdir -p "$WORK_DIR"
 
-# Set features - include ui_shell and serial_debug
-RAYOS_KERNEL_FEATURES="ui_shell,serial_debug"
+# Set features - include ui_shell, serial_debug, and dev_scanout for testing
+RAYOS_KERNEL_FEATURES="ui_shell,serial_debug,dev_scanout"
 export RAYOS_KERNEL_FEATURES
 
 # Disable headless to show the window

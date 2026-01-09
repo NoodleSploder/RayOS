@@ -1,0 +1,143 @@
+{
+  "RayOS App Struct": {
+    "prefix": "rayos-app",
+    "body": [
+      "/// ${1:AppName} application state.",
+      "pub struct ${1:AppName} {",
+      "    ${2:// Add your app state here}",
+      "}",
+      "",
+      "impl ${1:AppName} {",
+      "    /// App metadata.",
+      "    pub const DESCRIPTOR: AppDescriptor = AppDescriptor::new(b\"${1:AppName}\", b\"1.0.0\")",
+      "        .with_author(b\"${3:Your Name}\")",
+      "        .with_description(b\"${4:Description}\")",
+      "        .with_app_id(b\"com.${5:example}.${6:appname}\")",
+      "        .with_size(${7:400}, ${8:300});",
+      "",
+      "    /// Create a new instance.",
+      "    pub fn new() -> Self {",
+      "        Self {",
+      "            $0",
+      "        }",
+      "    }",
+      "}",
+      "",
+      "impl App for ${1:AppName} {",
+      "    fn descriptor() -> AppDescriptor {",
+      "        Self::DESCRIPTOR",
+      "    }",
+      "",
+      "    fn on_init(&mut self, _ctx: &mut AppContext) {",
+      "        // Initialize your app here",
+      "    }",
+      "",
+      "    fn on_frame(&mut self, ctx: &mut AppContext) {",
+      "        ctx.clear(0x2A2A4E);",
+      "        ctx.draw_text(20, 20, b\"${1:AppName}\", 0xFFFFFF);",
+      "    }",
+      "",
+      "    fn on_event(&mut self, ctx: &mut AppContext, event: AppEvent) {",
+      "        match event {",
+      "            AppEvent::CloseRequested => ctx.close(),",
+      "            _ => {}",
+      "        }",
+      "    }",
+      "}"
+    ],
+    "description": "Create a new RayOS app with App trait implementation"
+  },
+  "RayOS App Descriptor": {
+    "prefix": "rayos-descriptor",
+    "body": [
+      "pub const DESCRIPTOR: AppDescriptor = AppDescriptor::new(b\"${1:AppName}\", b\"${2:1.0.0}\")",
+      "    .with_author(b\"${3:Author}\")",
+      "    .with_description(b\"${4:Description}\")",
+      "    .with_app_id(b\"${5:com.example.app}\")",
+      "    .with_size(${6:400}, ${7:300})",
+      "    .with_min_size(${8:200}, ${9:150});"
+    ],
+    "description": "Create an AppDescriptor constant"
+  },
+  "RayOS on_frame": {
+    "prefix": "rayos-frame",
+    "body": [
+      "fn on_frame(&mut self, ctx: &mut AppContext) {",
+      "    // Clear background",
+      "    ctx.clear(0x${1:2A2A4E});",
+      "",
+      "    // Draw content",
+      "    ctx.draw_text(${2:20}, ${3:20}, b\"${4:Hello}\", 0x${5:FFFFFF});",
+      "    $0",
+      "}"
+    ],
+    "description": "Implement on_frame lifecycle method"
+  },
+  "RayOS on_event": {
+    "prefix": "rayos-event",
+    "body": [
+      "fn on_event(&mut self, ctx: &mut AppContext, event: AppEvent) {",
+      "    match event {",
+      "        AppEvent::MouseDown { x, y, button: MouseButton::Left } => {",
+      "            ${1:// Handle left click}",
+      "        }",
+      "        AppEvent::KeyDown { scancode, key } => {",
+      "            ${2:// Handle key press}",
+      "        }",
+      "        AppEvent::CloseRequested => {",
+      "            ctx.close();",
+      "        }",
+      "        _ => {}",
+      "    }",
+      "}"
+    ],
+    "description": "Implement on_event lifecycle method"
+  },
+  "RayOS Button": {
+    "prefix": "rayos-button",
+    "body": [
+      "// Button at (${1:x}, ${2:y}) size ${3:100}x${4:30}",
+      "let btn_hovered = ctx.is_hovered(${1:x}, ${2:y}, ${3:100}, ${4:30});",
+      "let btn_color = if btn_hovered { 0x446699 } else { 0x335577 };",
+      "ctx.fill_rect(${1:x}, ${2:y}, ${3:100}, ${4:30}, btn_color);",
+      "ctx.draw_rect(${1:x}, ${2:y}, ${3:100}, ${4:30}, 0x6688AA);",
+      "ctx.draw_text(${1:x} + 10, ${2:y} + 8, b\"${5:Button}\", 0xFFFFFF);"
+    ],
+    "description": "Draw a button with hover state"
+  },
+  "RayOS Import": {
+    "prefix": "rayos-use",
+    "body": [
+      "use crate::ui::app_sdk::{App, AppCapabilities, AppContext, AppDescriptor, AppEvent, MouseButton};"
+    ],
+    "description": "Import RayOS App SDK types"
+  },
+  "RayOS Fill Rect": {
+    "prefix": "ctx-fill",
+    "body": [
+      "ctx.fill_rect(${1:x}, ${2:y}, ${3:width}, ${4:height}, 0x${5:FFFFFF});"
+    ],
+    "description": "Fill a rectangle"
+  },
+  "RayOS Draw Text": {
+    "prefix": "ctx-text",
+    "body": [
+      "ctx.draw_text(${1:x}, ${2:y}, b\"${3:text}\", 0x${4:FFFFFF});"
+    ],
+    "description": "Draw text"
+  },
+  "RayOS Draw Rect": {
+    "prefix": "ctx-rect",
+    "body": [
+      "ctx.draw_rect(${1:x}, ${2:y}, ${3:width}, ${4:height}, 0x${5:FFFFFF});"
+    ],
+    "description": "Draw a rectangle outline"
+  },
+  "RayOS Clear": {
+    "prefix": "ctx-clear",
+    "body": [
+      "ctx.clear(0x${1:2A2A4E});"
+    ],
+    "description": "Clear the content area"
+  }
+}

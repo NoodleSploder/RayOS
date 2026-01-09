@@ -26,6 +26,8 @@ static LAST_CLICK_Y: AtomicI32 = AtomicI32::new(0);
 static INPUT_INITIALIZED: AtomicBool = AtomicBool::new(false);
 /// Current cursor type
 static CURRENT_CURSOR: AtomicU32 = AtomicU32::new(0);
+/// Cursor needs redraw (position or type changed)
+static CURSOR_DIRTY: AtomicBool = AtomicBool::new(true);
 
 // ===== Drag State =====
 
@@ -242,6 +244,7 @@ pub fn handle_mouse_move(x: i32, y: i32) {
 
     MOUSE_X.store(x, Ordering::Relaxed);
     MOUSE_Y.store(y, Ordering::Relaxed);
+    CURSOR_DIRTY.store(true, Ordering::Relaxed);
 
     // Handle active drag
     let drag_id = DRAG_WINDOW_ID.load(Ordering::Relaxed);
@@ -530,6 +533,11 @@ fn end_drag() {
     }
 }
 
+/// Check if cursor needs to be redrawn
+pub fn cursor_needs_update() -> bool {
+    CURSOR_DIRTY.load(Ordering::Relaxed)
+}
+
 /// Called each frame to update cursor display
 pub fn update_cursor() {
     let x = MOUSE_X.load(Ordering::Relaxed);
@@ -537,6 +545,7 @@ pub fn update_cursor() {
     let cursor_type = current_cursor();
 
     renderer::cursor_show(x, y, cursor_type);
+    CURSOR_DIRTY.store(false, Ordering::Relaxed);
 }
 
 // ===== Text Input Handling =====
@@ -695,6 +704,11 @@ pub fn handle_key_for_mouse(ascii: u8, shift: bool) -> bool {
         return false;
     }
 
+    // Don't consume keys for mouse control when text input is active
+    if TEXT_INPUT_ACTIVE.load(Ordering::Relaxed) {
+        return false;
+    }
+
     let step = if shift { MOUSE_STEP_FAST } else { MOUSE_STEP };
 
     match ascii {
@@ -764,6 +778,11 @@ pub fn handle_key_for_mouse(ascii: u8, shift: bool) -> bool {
 /// Set 1 scancodes: Up=0x48, Down=0x50, Left=0x4B, Right=0x4D
 pub fn handle_scancode_for_mouse(scancode: u8, shift: bool) -> bool {
     if !INPUT_INITIALIZED.load(Ordering::Acquire) {
+        return false;
+    }
+
+    // Don't consume keys for mouse control when text input is active
+    if TEXT_INPUT_ACTIVE.load(Ordering::Relaxed) {
         return false;
     }
 

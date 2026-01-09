@@ -18,23 +18,28 @@
 | Keyboard Input | Text input handling |
 | Linux VM | Running as managed guest |
 | Local AI | In-kernel LLM inference |
+| Process Explorer | Graphical process/system monitor |
+| System Log | In-kernel event journal for diagnostics |
+| Widget Library | Button, Label, TextInput widgets |
+| Layout System | VStack, HStack, Grid containers |
+| VM Window | Linux desktop as native window with input routing |
+| Linux Graphics | Resolution tracking, FPS overlay, bilinear scaling |
+| App SDK | AppDescriptor, AppContext, lifecycle hooks, example apps |
+| VS Code Extension | Build commands, snippets, .rayapp syntax, QEMU integration |
+| Windows VM | Windows subsystem with UEFI, TPM, Hyper-V enlightenments |
+| Package Format | .rayapp package structure, loader, and shell commands |
 
 ### In Progress 🟡
 
 | Feature | Target | Notes |
 |---------|--------|-------|
-| Widget Library | Q1 2026 | Button, Label, TextInput |
-| Layout System | Q1 2026 | VStack, HStack, Grid |
-| VM Window | Q1 2026 | Linux desktop as native window |
+| App Store | Q4 2026 | App discovery and installation |
 
 ### Planned 📋
 
 | Feature | Target | Notes |
 |---------|--------|-------|
-| App SDK | Q2 2026 | Stable API for apps |
-| VS Code Extension | Q2 2026 | Development tooling |
-| Windows VM | Q3 2026 | Windows subsystem |
-| Package Format | Q4 2026 | .rayapp distribution |
+| App Store | Q4 2026 | App discovery and installation |
 
 ---
 

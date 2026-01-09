@@ -78,6 +78,7 @@ mod persistent_log;        // Phase 21 Task 4: Persistent Logging System
 mod watchdog;              // Phase 21 Task 4: Watchdog Timer & Hang Detection
 mod boot_marker;           // Phase 21 Task 5: Boot Markers & Golden State
 mod recovery_policy;       // Phase 21 Task 5: Recovery Policy & Coordinator
+mod syslog;                // In-kernel event journal
 
 #[cfg(feature = "ui_shell")]
 mod ui;                    // Phase 21.1: Native UI Framework
@@ -276,7 +277,10 @@ use libm::{expf, sqrtf};
 
 mod acpi;
 mod guest_driver_template;
-mod guest_surface;
+pub mod guest_surface;
+pub mod windows_vm;
+pub mod rayapp_package;
+pub mod rayapp_loader;
 mod pci;
 mod rayapp;
 mod rayapp_clipboard;
@@ -5894,7 +5898,7 @@ static BOOT_INFO_PHYS: AtomicU64 = AtomicU64::new(0);
 static BOOT_UNIX_SECONDS_AT_BOOT: AtomicU64 = AtomicU64::new(0);
 static BOOT_TIME_VALID: AtomicU64 = AtomicU64::new(0);
 
-static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
+pub static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
 
 fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
     // Howard Hinnant's civil_from_days algorithm.
@@ -5970,8 +5974,8 @@ fn append_4digits(out: &mut [u8], i: &mut usize, v: u32) {
     }
 }
 
-static IRQ_TIMER_COUNT: AtomicU64 = AtomicU64::new(0);
-static IRQ_KBD_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static IRQ_TIMER_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static IRQ_KBD_COUNT: AtomicU64 = AtomicU64::new(0);
 
 static LAST_SCANCODE: AtomicU64 = AtomicU64::new(0);
 static LAST_ASCII: AtomicU64 = AtomicU64::new(0);
@@ -6026,10 +6030,10 @@ pub static SYSTEM1_RUNNING: AtomicBool = AtomicBool::new(false);
 pub static SYSTEM1_ENQUEUED: AtomicU64 = AtomicU64::new(0);
 pub static SYSTEM1_DROPPED: AtomicU64 = AtomicU64::new(0);
 pub static SYSTEM1_PROCESSED: AtomicU64 = AtomicU64::new(0);
-static SYSTEM1_LAST_RAY_ID: AtomicU64 = AtomicU64::new(0);
-static SYSTEM1_LAST_OP: AtomicU64 = AtomicU64::new(0);
-static SYSTEM1_LAST_PRIO: AtomicU64 = AtomicU64::new(0);
-static SYSTEM1_LAST_ARG: AtomicU64 = AtomicU64::new(0);
+pub static SYSTEM1_LAST_RAY_ID: AtomicU64 = AtomicU64::new(0);
+pub static SYSTEM1_LAST_OP: AtomicU64 = AtomicU64::new(0);
+pub static SYSTEM1_LAST_PRIO: AtomicU64 = AtomicU64::new(0);
+pub static SYSTEM1_LAST_ARG: AtomicU64 = AtomicU64::new(0);
 
 static SYSTEM2_LAST_HASH: AtomicU64 = AtomicU64::new(0);
 static SYSTEM2_LAST_OP: AtomicU64 = AtomicU64::new(0);
@@ -6054,7 +6058,7 @@ pub static HOST_BRIDGE_CONNECTED: AtomicBool = AtomicBool::new(false);
 //
 // States (u8):
 // 0 unavailable, 1 starting, 2 available (running hidden), 3 running (presented), 4 stopping
-static LINUX_DESKTOP_STATE: AtomicU8 = AtomicU8::new(0);
+pub static LINUX_DESKTOP_STATE: AtomicU8 = AtomicU8::new(0);
 
 const CONDUCTOR_TARGET_DEPTH: usize = 8;
 const CONDUCTOR_MAX_SUBMITS_PER_TICK: usize = 2;
@@ -7614,7 +7618,7 @@ fn hhdm_offset() -> u64 {
 }
 
 #[inline(always)]
-fn hhdm_phys_limit() -> u64 {
+pub fn hhdm_phys_limit() -> u64 {
     HHDM_PHYS_LIMIT.load(Ordering::Relaxed)
 }
 
@@ -7677,7 +7681,7 @@ fn pt_index(virt: u64) -> usize {
 }
 
 #[inline(always)]
-fn phys_as_ptr<T>(phys: u64) -> *const T {
+pub fn phys_as_ptr<T>(phys: u64) -> *const T {
     phys_to_virt(phys) as *const T
 }
 
@@ -8457,9 +8461,16 @@ extern "C" fn timer_interrupt_handler() {
 
 #[no_mangle]
 extern "C" fn keyboard_interrupt_handler() {
-    // Read scancode from PS/2 data port.
-    let sc = unsafe { inb(0x60) };
-    keyboard_handle_scancode(sc);
+    // Check if there's actually data in the i8042 output buffer before reading.
+    // This prevents processing stale/garbage data if another code path (e.g., the
+    // VMM's host_drain_i8042_scancodes) already consumed the scancode.
+    let status = unsafe { inb(0x64) };
+    if (status & 0x01) != 0 {
+        // Data is available - read and process the scancode
+        let sc = unsafe { inb(0x60) };
+        keyboard_handle_scancode(sc);
+    }
+    // Always send EOI even if no data was processed
     unsafe {
         if LAPIC_MMIO != 0 {
             lapic_eoi();
@@ -8473,7 +8484,7 @@ extern "C" fn keyboard_interrupt_handler() {
 // Mouse packet state
 static MOUSE_PACKET_IDX: AtomicU32 = AtomicU32::new(0);
 static mut MOUSE_PACKET: [u8; 4] = [0; 4];
-static MOUSE_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static MOUSE_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
 static MOUSE_FIRST_IRQ_REPORTED: AtomicBool = AtomicBool::new(false);
 
 #[no_mangle]
@@ -8559,6 +8570,49 @@ fn mouse_handle_packet(status: u8, dx_raw: u8, dy_raw: u8) {
 
             let (x, y) = ui::input::mouse_position();
 
+            // If Linux Desktop window is focused, route mouse to guest VM
+            #[cfg(all(feature = "vmm_hypervisor", feature = "vmm_virtio_input"))]
+            {
+                if ui::shell::is_linux_desktop_focused() {
+                    // Get the Linux Desktop window bounds for coordinate translation
+                    let linux_id = ui::shell::linux_desktop_window_id();
+                    if linux_id != 0 {
+                        let wm = ui::window_manager::get();
+                        if let Some(win) = wm.get_window(linux_id) {
+                            // Calculate relative position within the VM window content area
+                            let content_x = win.x + 1; // border
+                            let content_y = win.y + 25; // title bar
+                            let content_w = win.width.saturating_sub(2);
+                            let content_h = win.height.saturating_sub(26);
+
+                            let rel_x = x - content_x;
+                            let rel_y = y - content_y;
+
+                            // Only route if cursor is inside the content area
+                            if rel_x >= 0 && rel_y >= 0
+                                && (rel_x as u32) < content_w
+                                && (rel_y as u32) < content_h
+                            {
+                                // Scale to guest resolution (assume 32767 max for tablet)
+                                // The guest expects absolute coordinates scaled to its resolution
+                                let guest_x = ((rel_x as u32) * 32767) / content_w.max(1);
+                                let guest_y = ((rel_y as u32) * 32767) / content_h.max(1);
+                                let _ = crate::hypervisor::virtio_input_enqueue_mouse_abs(guest_x, guest_y);
+
+                                // Handle button clicks
+                                if left_btn && !was_left {
+                                    let _ = crate::hypervisor::virtio_input_enqueue_click_left();
+                                }
+                                if right_btn && !was_right {
+                                    let _ = crate::hypervisor::virtio_input_enqueue_click_right();
+                                }
+                            }
+                        }
+                    }
+                    return; // Don't process further in RayOS UI
+                }
+            }
+
             if left_btn && !was_left {
                 ui::input::handle_mouse_button_down(x, y, 0, false);
             } else if !left_btn && was_left {
@@ -8620,6 +8674,12 @@ pub(crate) fn keyboard_handle_scancode(sc: u8) {
         serial_write_str("DEV_SCANOUT: toggle hidden\n");
         // 2 = available (running hidden)
         LINUX_DESKTOP_STATE.store(2, Ordering::Relaxed);
+
+        // Hide the UI window as well
+        #[cfg(feature = "ui_shell")]
+        {
+            ui::shell::hide_linux_desktop();
+        }
         return;
     }
 
@@ -8642,6 +8702,12 @@ pub(crate) fn keyboard_handle_scancode(sc: u8) {
         }
         guest_surface::set_presentation_state(guest_surface::PresentationState::Presented);
 
+        // Show the UI window as well
+        #[cfg(feature = "ui_shell")]
+        {
+            ui::shell::show_linux_desktop();
+        }
+
         // If a scanout is already published (e.g. re-show after hide), emit a
         // deterministic Presented marker immediately instead of waiting for a
         // new SET_SCANOUT.
@@ -8659,6 +8725,27 @@ pub(crate) fn keyboard_handle_scancode(sc: u8) {
     #[cfg(all(feature = "vmm_hypervisor", feature = "vmm_virtio_input"))]
     {
         if guest_surface::presentation_state() == guest_surface::PresentationState::Presented {
+            // Ignore extended scancode prefixes for now (E0/E1 sequences).
+            if sc == 0xE0 || sc == 0xE1 {
+                return;
+            }
+
+            let down = (sc & 0x80) == 0;
+            let code = (sc & 0x7F) as u16;
+            if code != 0 {
+                if crate::hypervisor::virtio_input_enqueue_key_state(code, down) {
+                    return;
+                }
+            }
+            // If virtio routing failed for any reason, fall back to RayOS input handling.
+        }
+    }
+
+    // If the Linux Desktop window is focused in the UI shell, route keyboard input
+    // to the guest via virtio-input. This enables typing in the windowed VM.
+    #[cfg(all(feature = "ui_shell", feature = "vmm_hypervisor", feature = "vmm_virtio_input"))]
+    {
+        if ui::shell::is_linux_desktop_focused() {
             // Ignore extended scancode prefixes for now (E0/E1 sequences).
             if sc == 0xE0 || sc == 0xE1 {
                 return;
@@ -8742,6 +8829,14 @@ fn kbd_buf_pop() -> Option<u8> {
 fn kbd_try_read_byte() -> Option<u8> {
     if let Some(b) = kbd_buf_pop() {
         return Some(b);
+    }
+
+    // Skip polling if UI shell text input is active - let the IRQ handler process keys
+    #[cfg(feature = "ui_shell")]
+    {
+        if ui::shell::is_initialized() && ui::input::is_text_input_active() {
+            return None;
+        }
     }
 
     // Fallback: poll the i8042 output buffer for pending scancodes.
@@ -11420,6 +11515,10 @@ fn test_invalid_opcode() {
 }
 
 fn kernel_main() -> ! {
+    // Initialize system log early for diagnostics
+    syslog::init();
+    syslog::info(syslog::SUBSYSTEM_KERNEL, b"RayOS kernel starting");
+
     // Framebuffer is now initialized by _start from bootloader parameters
 
     // Initialize UI shell if enabled (does initial composite)
@@ -11431,6 +11530,7 @@ fn kernel_main() -> ! {
         let fb_stride = unsafe { FB_STRIDE };
         if fb_addr != 0 && fb_width > 0 && fb_height > 0 {
             ui::shell::ui_shell_init(fb_addr, fb_width, fb_height, fb_stride);
+            syslog::info(syslog::SUBSYSTEM_UI, b"UI shell initialized");
         }
     }
 
@@ -11577,6 +11677,7 @@ fn kernel_main() -> ! {
             0x00_ff_88,
             panel_bg,
         );
+        syslog::info(syslog::SUBSYSTEM_KERNEL, b"System 1: GPU initialized");
     } else {
         draw_text_bg(
             70,
@@ -11585,6 +11686,7 @@ fn kernel_main() -> ! {
             0xaa_aa_aa,
             panel_bg,
         );
+        syslog::warn(syslog::SUBSYSTEM_KERNEL, b"System 1: No PCI GPU found");
     }
     // System 2 starts as a deterministic parser stub integrated with System 1 via the ray queue.
     clear_text_line(70, 330, 48, panel_bg);
@@ -11595,6 +11697,7 @@ fn kernel_main() -> ! {
         0xff_88_00,
         panel_bg,
     );
+    syslog::info(syslog::SUBSYSTEM_KERNEL, b"System 2: LLM engine ready");
 
     // Intent is provided by System 2 in the current kernel build (deterministic NL parser stub).
     clear_text_line(70, 420, 48, panel_bg);
@@ -11605,6 +11708,7 @@ fn kernel_main() -> ! {
         0x00_ff_00,
         panel_bg,
     );
+    syslog::info(syslog::SUBSYSTEM_AI, b"NL parser initialized");
 
     fn linux_state_label(state: u8) -> (&'static str, u32) {
         match state {
@@ -11638,6 +11742,7 @@ fn kernel_main() -> ! {
     render_linux_state(panel_bg, last_linux_state);
 
     SYSTEM1_RUNNING.store(true, Ordering::Relaxed);
+    syslog::info(syslog::SUBSYSTEM_KERNEL, b"System 1 reflex loop running");
 
     // Conductor starts inside the kernel (minimal orchestrator stub for now).
     CONDUCTOR_RUNNING.store(true, Ordering::Relaxed);
@@ -11652,6 +11757,7 @@ fn kernel_main() -> ! {
         0x00_ff_00,
         panel_bg,
     );
+    syslog::info(syslog::SUBSYSTEM_KERNEL, b"Conductor task orchestrator started");
 
     // Host-side Ouroboros runs outside the guest; show a small badge when the host bridge is actually active.
     draw_box(520, 360, 200, 20, panel_bg);
@@ -11681,8 +11787,10 @@ fn kernel_main() -> ! {
             0x00_ff_00,
             panel_bg,
         );
+        syslog::info(syslog::SUBSYSTEM_STORAGE, b"Volume: persistent storage mounted");
     } else {
         draw_text_bg(70, 390, "[!!] Volume: Not Found", 0xff_00_00, panel_bg);
+        syslog::warn(syslog::SUBSYSTEM_STORAGE, b"Volume: persistent storage not found");
     }
 
     // Draw memory info box
@@ -12079,6 +12187,80 @@ fn kernel_main() -> ! {
         (seen_linux && seen_desktop && seen_show)
             || (seen_linux && seen_desktop)
             || (seen_show && seen_desktop)
+    }
+
+    fn is_show_process_explorer(line: &[u8]) -> bool {
+        let s = trim_ascii_spaces(line);
+
+        // Fast path for exact phrases.
+        if eq_ignore_ascii_case(s, b"show process explorer")
+            || eq_ignore_ascii_case(s, b"process explorer")
+            || eq_ignore_ascii_case(s, b"show processes")
+            || eq_ignore_ascii_case(s, b"processes")
+            || eq_ignore_ascii_case(s, b"htop")
+            || eq_ignore_ascii_case(s, b"top")
+        {
+            return true;
+        }
+
+        // Token-aware matching.
+        let mut toks: [&[u8]; 4] = [&[]; 4];
+        let mut nt: usize = 0;
+        let mut i: usize = 0;
+        while i < s.len() {
+            while i < s.len() {
+                let b = s[i];
+                if b == b' ' || b == b'\t' {
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            if i >= s.len() {
+                break;
+            }
+            let start = i;
+            while i < s.len() {
+                let b = s[i];
+                if b == b' ' || b == b'\t' {
+                    break;
+                }
+                i += 1;
+            }
+            if nt < toks.len() {
+                toks[nt] = &s[start..i];
+                nt += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Tolerant token matching.
+        let mut seen_show = false;
+        let mut seen_process = false;
+        let mut seen_explorer = false;
+        let mut t = 0usize;
+        while t < nt {
+            let tok = toks[t];
+            if eq_ignore_ascii_case(tok, b"show") {
+                seen_show = true;
+            } else if eq_ignore_ascii_case(tok, b"process")
+                || eq_ignore_ascii_case(tok, b"processes")
+            {
+                seen_process = true;
+            } else if eq_ignore_ascii_case(tok, b"explorer") {
+                seen_explorer = true;
+            }
+            t += 1;
+        }
+
+        // Accept:
+        // - "show" + "process" + "explorer" in any order
+        // - or just "process" + "explorer"
+        // - or "show" + "process(es)"
+        (seen_process && seen_explorer && seen_show)
+            || (seen_process && seen_explorer)
+            || (seen_show && seen_process)
     }
 
     fn parse_linux_sendtext(line: &[u8]) -> Option<&[u8]> {
@@ -12854,6 +13036,12 @@ fn kernel_main() -> ! {
                                     render_linux_state(panel_bg, cur);
                                 }
                             } else if is_show_linux_desktop(&line_buf[..len]) {
+                                // Show the Linux Desktop window in the UI shell
+                                #[cfg(feature = "ui_shell")]
+                                {
+                                    ui::shell::show_linux_desktop();
+                                }
+
                                 // In the in-kernel VMM/hypervisor path, show/hide is presentation-only.
                                 #[cfg(not(feature = "vmm_hypervisor"))]
                                 {
@@ -12971,6 +13159,17 @@ fn kernel_main() -> ! {
                                 render_chat_log(&chat);
                                 draw_box(140, 560, 590, 20, 0x1a_1a_2e);
                                 draw_text(140, 560, "launching Windows desktop...", 0xff_ff_88);
+                            } else if is_show_process_explorer(&line_buf[..len]) {
+                                // Show the Process Explorer window
+                                #[cfg(feature = "ui_shell")]
+                                {
+                                    ui::shell::show_process_explorer();
+                                }
+                                chat.push_line(
+                                    b"SYS: ",
+                                    b"opening Process Explorer",
+                                );
+                                render_chat_log(&chat);
                             } else if let Some((payload, is_key)) =
                                 parse_send_to_linux(&line_buf[..len])
                             {
@@ -13559,14 +13758,21 @@ fn kernel_main() -> ! {
             }
 
             // If a guest scanout is being presented, blit on frame updates.
-            if ps == guest_surface::PresentationState::Presented {
-                #[cfg(feature = "dev_scanout")]
-                {
-                    // Keep a synthetic scanout ticking so the blit path is visible
-                    // even before the real guest scanout publisher exists.
+            // When UI shell is active, skip direct framebuffer blit - the window compositor handles it.
+            #[cfg(feature = "ui_shell")]
+            let skip_direct_blit = ui::shell::is_initialized();
+            #[cfg(not(feature = "ui_shell"))]
+            let skip_direct_blit = false;
+
+            // Always tick dev_scanout to publish the surface, even if we skip direct blit
+            #[cfg(feature = "dev_scanout")]
+            {
+                if ps == guest_surface::PresentationState::Presented {
                     dev_scanout::tick_if_presented();
                 }
+            }
 
+            if ps == guest_surface::PresentationState::Presented && !skip_direct_blit {
                 let fs = guest_surface::frame_seq();
                 if ps != last_presentation_state {
                     // Entering Presented: render the current scanout immediately
