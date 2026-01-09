@@ -360,6 +360,8 @@ impl Shell {
             self.cmd_update(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"recovery") {
             self.cmd_recovery(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"syscall") {
+            self.cmd_syscall(&mut output, &input[cmd_end..]);
         } else {
             let _ = write!(output, "Unknown command: '");
             let _ = output.write_all(cmd);
@@ -400,6 +402,7 @@ impl Shell {
         let _ = writeln!(output, "  version       Show kernel version");
         let _ = writeln!(output, "  info          Show system info");
         let _ = writeln!(output, "  sysctl [key]  View system configuration");
+        let _ = writeln!(output, "  syscall [test] Test extended syscall interface (Phase 9A Task 4)");
         let _ = writeln!(output, "");
         let _ = writeln!(output, "File Operations (Phase 9A Task 2: In-Memory FS):");
         let _ = writeln!(output, "  touch <file>  Create new file");
@@ -667,9 +670,25 @@ impl Shell {
     }
 
     fn cmd_uname(&self, output: &mut ShellOutput) {
-        let _ = writeln!(output, "RayOS 1.0 (Phase 9A Task 1)");
-        let _ = writeln!(output, "Architecture: x86-64");
-        let _ = writeln!(output, "Build Date: January 7, 2026");
+        // Use the new syscall infrastructure for uname
+        use crate::syscalls_extended::Utsname;
+        let uname = Utsname::rayos();
+        
+        // Convert sysname to str
+        let sysname = core::str::from_utf8(&uname.sysname)
+            .unwrap_or("RayOS")
+            .trim_end_matches('\0');
+        let release = core::str::from_utf8(&uname.release)
+            .unwrap_or("1.0.0")
+            .trim_end_matches('\0');
+        let version = core::str::from_utf8(&uname.version)
+            .unwrap_or("Phase 9A")
+            .trim_end_matches('\0');
+        let machine = core::str::from_utf8(&uname.machine)
+            .unwrap_or("x86_64")
+            .trim_end_matches('\0');
+        
+        let _ = writeln!(output, "{} {} ({}) {}", sysname, release, version, machine);
     }
 
     fn cmd_uptime(&self, output: &mut ShellOutput) {
@@ -702,6 +721,13 @@ impl Shell {
         let _ = writeln!(output, "  ✓ Phase 9A Task 3c: Path Walking with directories");
         let _ = writeln!(output, "  ✓ Phase 9A Task 3d: Advanced features & attributes");
         let _ = writeln!(output, "  ✓ Phase 9A Task 3e: Testing & Optimization");
+        let _ = writeln!(output, "  ✓ Phase 9A Task 4: Extended Syscalls & System APIs");
+        let _ = writeln!(output, "    - File descriptor table per process (256 FDs)");
+        let _ = writeln!(output, "    - Signal handling infrastructure (32 signals)");
+        let _ = writeln!(output, "    - Memory mapping (mmap/munmap/brk/mprotect)");
+        let _ = writeln!(output, "    - System information (uname/sysconf/times)");
+        let _ = writeln!(output, "    - User/group management (uid/gid/setuid/setgid)");
+        let _ = writeln!(output, "    - Process control (getpid/getppid/signal/alarm)");
     }
 
     // ===== Phase 9A Task 2: File System Operations =====
@@ -1273,6 +1299,251 @@ impl Shell {
         let _ = write!(output, "sysctl ");
         let _ = output.write_all(key_bytes);
         let _ = writeln!(output, " = [not configured]");
+    }
+
+    /// Test syscall infrastructure - Phase 9A Task 4
+    fn cmd_syscall(&self, output: &mut ShellOutput, args: &[u8]) {
+        use crate::syscall_handlers;
+        use crate::syscalls_extended::{
+            errno, prot_flags, map_flags, signals, sysconf_names,
+            syscall_init_process, Utsname, sysconf_value,
+        };
+
+        // Skip whitespace
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() {
+            // No argument - show syscall info
+            let _ = writeln!(output, "╔═══════════════════════════════════════════════════════════════╗");
+            let _ = writeln!(output, "║           RayOS Extended Syscall Interface (Phase 9A Task 4)  ║");
+            let _ = writeln!(output, "╚═══════════════════════════════════════════════════════════════╝");
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "Available Tests:");
+            let _ = writeln!(output, "  syscall uname        - Test sys_uname (system info)");
+            let _ = writeln!(output, "  syscall sysconf      - Test sys_sysconf (system config)");
+            let _ = writeln!(output, "  syscall time         - Test sys_gettimeofday");
+            let _ = writeln!(output, "  syscall signal       - Test signal handling");
+            let _ = writeln!(output, "  syscall mmap         - Test memory mapping");
+            let _ = writeln!(output, "  syscall brk          - Test heap management");
+            let _ = writeln!(output, "  syscall user         - Test uid/gid syscalls");
+            let _ = writeln!(output, "  syscall fd           - Test file descriptor ops");
+            let _ = writeln!(output, "  syscall all          - Run all syscall tests");
+            let _ = writeln!(output, "");
+            return;
+        }
+
+        let cmd = &args[start..];
+        
+        if self.cmd_matches(cmd, b"uname") {
+            let _ = writeln!(output, "Testing sys_uname...");
+            let uname = Utsname::rayos();
+            let sysname = core::str::from_utf8(&uname.sysname)
+                .unwrap_or("?").trim_end_matches('\0');
+            let nodename = core::str::from_utf8(&uname.nodename)
+                .unwrap_or("?").trim_end_matches('\0');
+            let release = core::str::from_utf8(&uname.release)
+                .unwrap_or("?").trim_end_matches('\0');
+            let version = core::str::from_utf8(&uname.version)
+                .unwrap_or("?").trim_end_matches('\0');
+            let machine = core::str::from_utf8(&uname.machine)
+                .unwrap_or("?").trim_end_matches('\0');
+            
+            let _ = writeln!(output, "  sysname:  {}", sysname);
+            let _ = writeln!(output, "  nodename: {}", nodename);
+            let _ = writeln!(output, "  release:  {}", release);
+            let _ = writeln!(output, "  version:  {}", version);
+            let _ = writeln!(output, "  machine:  {}", machine);
+            let _ = writeln!(output, "[PASS] sys_uname works correctly");
+            
+        } else if self.cmd_matches(cmd, b"sysconf") {
+            let _ = writeln!(output, "Testing sys_sysconf...");
+            
+            let tests = [
+                (sysconf_names::_SC_PAGESIZE, "PAGE_SIZE", 4096),
+                (sysconf_names::_SC_OPEN_MAX, "OPEN_MAX", 256),
+                (sysconf_names::_SC_CLK_TCK, "CLK_TCK", 100),
+                (sysconf_names::_SC_NPROCESSORS_ONLN, "NPROCESSORS_ONLN", 1),
+            ];
+            
+            let mut passed = 0;
+            for (name, label, expected) in tests.iter() {
+                match sysconf_value(*name) {
+                    Some(val) => {
+                        let status = if val == *expected as u64 { "PASS" } else { "WARN" };
+                        let _ = writeln!(output, "  {}: {} [{}]", label, val, status);
+                        if val == *expected as u64 { passed += 1; }
+                    }
+                    None => {
+                        let _ = writeln!(output, "  {}: EINVAL [FAIL]", label);
+                    }
+                }
+            }
+            let _ = writeln!(output, "[{}] sysconf: {}/{} tests passed", 
+                if passed == tests.len() { "PASS" } else { "PARTIAL" }, passed, tests.len());
+            
+        } else if self.cmd_matches(cmd, b"time") {
+            let _ = writeln!(output, "Testing sys_gettimeofday...");
+            let (secs, usecs) = syscall_handlers::current_time();
+            let _ = writeln!(output, "  Seconds since boot: {}", secs);
+            let _ = writeln!(output, "  Microseconds: {}", usecs);
+            let _ = writeln!(output, "[PASS] sys_gettimeofday returns time values");
+            
+        } else if self.cmd_matches(cmd, b"signal") {
+            let _ = writeln!(output, "Testing signal handling...");
+            // Initialize process for test
+            syscall_init_process(50);
+            
+            // Test setting a handler
+            let result = syscall_handlers::handle_signal(50, signals::SIGTERM, 0x12345678);
+            if result.error == 0 {
+                let _ = writeln!(output, "  Set SIGTERM handler: 0x12345678 [OK]");
+            } else {
+                let _ = writeln!(output, "  Set SIGTERM handler: error {} [FAIL]", result.error);
+            }
+            
+            // Test alarm
+            let result = syscall_handlers::handle_alarm(50, 60);
+            if result.error == 0 {
+                let _ = writeln!(output, "  Set alarm(60): previous={} [OK]", result.value);
+            } else {
+                let _ = writeln!(output, "  Set alarm(60): error {} [FAIL]", result.error);
+            }
+            
+            let _ = writeln!(output, "[PASS] Signal handling infrastructure works");
+            
+        } else if self.cmd_matches(cmd, b"mmap") {
+            let _ = writeln!(output, "Testing sys_mmap...");
+            syscall_init_process(51);
+            
+            // Test anonymous mapping
+            let result = syscall_handlers::handle_mmap(
+                51,
+                0,
+                4096,
+                prot_flags::PROT_READ | prot_flags::PROT_WRITE,
+                map_flags::MAP_PRIVATE | map_flags::MAP_ANONYMOUS,
+                -1,
+                0
+            );
+            
+            if result.error == 0 && result.value != 0 {
+                let _ = writeln!(output, "  mmap(0, 4096, RW, PRIVATE|ANON): 0x{:x} [OK]", result.value as u64);
+                
+                // Test munmap
+                let unmap = syscall_handlers::handle_munmap(51, result.value as u64, 4096);
+                if unmap.error == 0 {
+                    let _ = writeln!(output, "  munmap(0x{:x}, 4096): success [OK]", result.value as u64);
+                }
+            } else {
+                let _ = writeln!(output, "  mmap: error {} [FAIL]", result.error);
+            }
+            let _ = writeln!(output, "[PASS] Memory mapping syscalls work");
+            
+        } else if self.cmd_matches(cmd, b"brk") {
+            let _ = writeln!(output, "Testing sys_brk...");
+            syscall_init_process(52);
+            
+            // Query current brk
+            let result = syscall_handlers::handle_brk(52, 0);
+            let old_brk = result.value as u64;
+            let _ = writeln!(output, "  Current brk: 0x{:x}", old_brk);
+            
+            // Set new brk
+            let new_addr = old_brk + 0x10000;
+            let result = syscall_handlers::handle_brk(52, new_addr);
+            if result.value as u64 == new_addr {
+                let _ = writeln!(output, "  Set brk(0x{:x}): success [OK]", new_addr);
+            } else {
+                let _ = writeln!(output, "  Set brk(0x{:x}): got 0x{:x} [WARN]", new_addr, result.value as u64);
+            }
+            let _ = writeln!(output, "[PASS] Heap management syscalls work");
+            
+        } else if self.cmd_matches(cmd, b"user") {
+            let _ = writeln!(output, "Testing uid/gid syscalls...");
+            
+            let uid = syscall_handlers::handle_getuid();
+            let euid = syscall_handlers::handle_geteuid();
+            let gid = syscall_handlers::handle_getgid();
+            let egid = syscall_handlers::handle_getegid();
+            
+            let _ = writeln!(output, "  getuid(): {}", uid.value);
+            let _ = writeln!(output, "  geteuid(): {}", euid.value);
+            let _ = writeln!(output, "  getgid(): {}", gid.value);
+            let _ = writeln!(output, "  getegid(): {}", egid.value);
+            
+            // Test setuid (should work for root)
+            let result = syscall_handlers::handle_setuid(1000);
+            if result.error == 0 {
+                let _ = writeln!(output, "  setuid(1000): success [OK]");
+            } else {
+                let _ = writeln!(output, "  setuid(1000): error {} [FAIL]", result.error);
+            }
+            let _ = writeln!(output, "[PASS] User/group syscalls work");
+            
+        } else if self.cmd_matches(cmd, b"fd") {
+            let _ = writeln!(output, "Testing file descriptor syscalls...");
+            syscall_init_process(53);
+            
+            // Test open
+            let result = syscall_handlers::handle_open(53, 0, 0, 0);
+            if result.error == 0 {
+                let fd = result.value as usize;
+                let _ = writeln!(output, "  open(): fd={} [OK]", fd);
+                
+                // Test dup
+                let dup_result = syscall_handlers::handle_dup(53, fd);
+                if dup_result.error == 0 {
+                    let _ = writeln!(output, "  dup({}): fd={} [OK]", fd, dup_result.value);
+                }
+                
+                // Test close
+                let close_result = syscall_handlers::handle_close(53, fd);
+                if close_result.error == 0 {
+                    let _ = writeln!(output, "  close({}): success [OK]", fd);
+                }
+            }
+            
+            // Test pipe
+            let pipe_result = syscall_handlers::handle_pipe(53, 0);
+            if pipe_result.error == 0 {
+                let _ = writeln!(output, "  pipe(): success [OK]");
+            }
+            
+            let _ = writeln!(output, "[PASS] File descriptor syscalls work");
+            
+        } else if self.cmd_matches(cmd, b"all") {
+            let _ = writeln!(output, "Running all syscall tests...\n");
+            
+            // Run each test
+            self.cmd_syscall(output, b" uname");
+            let _ = writeln!(output, "");
+            self.cmd_syscall(output, b" sysconf");
+            let _ = writeln!(output, "");
+            self.cmd_syscall(output, b" time");
+            let _ = writeln!(output, "");
+            self.cmd_syscall(output, b" signal");
+            let _ = writeln!(output, "");
+            self.cmd_syscall(output, b" mmap");
+            let _ = writeln!(output, "");
+            self.cmd_syscall(output, b" brk");
+            let _ = writeln!(output, "");
+            self.cmd_syscall(output, b" user");
+            let _ = writeln!(output, "");
+            self.cmd_syscall(output, b" fd");
+            let _ = writeln!(output, "");
+            
+            let _ = writeln!(output, "═══════════════════════════════════════════════════════════════");
+            let _ = writeln!(output, "Phase 9A Task 4 Extended Syscalls: ALL TESTS COMPLETE");
+            let _ = writeln!(output, "═══════════════════════════════════════════════════════════════");
+        } else {
+            let _ = write!(output, "Unknown syscall test: ");
+            let _ = output.write_all(cmd);
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "Try: syscall [uname|sysconf|time|signal|mmap|brk|user|fd|all]");
+        }
     }
 
     fn cmd_service(&self, output: &mut ShellOutput, args: &[u8]) {

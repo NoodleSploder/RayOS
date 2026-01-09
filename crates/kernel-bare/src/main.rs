@@ -319,6 +319,8 @@ mod a11y_integration;
 mod network_stack;
 mod socket_api;
 mod virtio_net_driver;
+mod syscalls_extended;     // Phase 9A Task 4: Extended Syscall Types
+mod syscall_handlers;      // Phase 9A Task 4: Syscall Handler Implementations
 mod http_protocol;
 mod content_streaming;
 mod dns_discovery;
@@ -3612,247 +3614,286 @@ fn sys_setsid(_args: &SyscallArgs) -> SyscallResult {
 
 /// SYS_LSEEK - Seek within file
 fn sys_lseek(args: &SyscallArgs) -> SyscallResult {
-    let _fd = args.arg0;        // File descriptor
-    let _offset = args.arg1;    // Offset
-    let _whence = args.arg2;    // SEEK_SET, SEEK_CUR, SEEK_END
+    let fd = args.arg0 as usize;
+    let offset = args.arg1 as i64;
+    let whence = args.arg2 as u32;
 
-    // Stub: File seeking not implemented
-    // In a real implementation, would:
-    // 1. Look up file descriptor
-    // 2. Update file position
-    // 3. Return new position
+    // Get current process PID
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
 
-    SyscallResult::error(9)  // EBADF - bad file descriptor
+    let result = syscall_handlers::handle_lseek(pid, fd, offset, whence);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_STAT - File statistics
 fn sys_stat(args: &SyscallArgs) -> SyscallResult {
-    let _path = args.arg0;      // const char *path
-    let _stat_buf = args.arg1;  // struct stat *
+    let path = args.arg0;
+    let stat_buf = args.arg1;
 
-    // Stub: File stat not implemented
-    // Real implementation would read file metadata
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
 
-    SyscallResult::error(2)  // ENOENT - file not found
+    let result = syscall_handlers::handle_stat(pid, path, stat_buf);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_FSTAT - File statistics by FD
 fn sys_fstat(args: &SyscallArgs) -> SyscallResult {
-    let _fd = args.arg0;        // File descriptor
-    let _stat_buf = args.arg1;  // struct stat *
+    let fd = args.arg0 as usize;
+    let stat_buf = args.arg1;
 
-    // Stub: File stat not implemented
-    SyscallResult::error(9)  // EBADF
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
+
+    let result = syscall_handlers::handle_fstat(pid, fd, stat_buf);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_CHMOD - Change file permissions
 fn sys_chmod(args: &SyscallArgs) -> SyscallResult {
-    let _path = args.arg0;      // const char *path
-    let _mode = args.arg1;      // mode_t mode
+    let path = args.arg0;
+    let mode = args.arg1 as u32;
 
-    // Stub: Permission changes not implemented
-    SyscallResult::error(2)  // ENOENT
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
+
+    let result = syscall_handlers::handle_chmod(pid, path, mode);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_UNLINK - Delete file
 fn sys_unlink(args: &SyscallArgs) -> SyscallResult {
-    let _path = args.arg0;  // const char *path
+    let path = args.arg0;
 
-    // Would call fs_delete_file or similar
-    SyscallResult::error(2)  // ENOENT
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
+
+    let result = syscall_handlers::handle_unlink(pid, path);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_MKDIR - Create directory
 fn sys_mkdir(args: &SyscallArgs) -> SyscallResult {
-    let _path = args.arg0;  // const char *path
-    let _mode = args.arg1;  // mode_t mode
+    let path = args.arg0;
+    let mode = args.arg1 as u32;
 
-    // Would call fs_mkdir
-    SyscallResult::error(2)  // ENOENT
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
+
+    let result = syscall_handlers::handle_mkdir(pid, path, mode);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_RMDIR - Remove directory
 fn sys_rmdir(args: &SyscallArgs) -> SyscallResult {
-    let _path = args.arg0;  // const char *path
+    let path = args.arg0;
 
-    // Would call fs_rmdir
-    SyscallResult::error(2)  // ENOENT
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
+
+    let result = syscall_handlers::handle_rmdir(pid, path);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_MMAP - Memory map
 fn sys_mmap(args: &SyscallArgs) -> SyscallResult {
-    let _addr = args.arg0;      // void *addr - desired address (0 = auto)
-    let _length = args.arg1;    // size_t length
-    let _prot = args.arg2;      // int prot - PROT_READ, PROT_WRITE, PROT_EXEC
-    let _flags = args.arg3;     // int flags - MAP_SHARED, MAP_PRIVATE, MAP_ANON
-    let _fd = args.arg4;        // int fd
-    let _offset = args.arg5;    // off_t offset
+    let addr = args.arg0;
+    let length = args.arg1;
+    let prot = args.arg2 as u32;
+    let flags = args.arg3 as u32;
+    let fd = args.arg4 as i32;
+    let offset = args.arg5;
 
-    // Stub: Memory mapping not implemented
-    // Real implementation would:
-    // 1. Allocate virtual memory
-    // 2. Link to file backing if provided
-    // 3. Return mapped address
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
 
-    SyscallResult::ok(0x1000)  // Return fake address
+    let result = syscall_handlers::handle_mmap(pid, addr, length, prot, flags, fd, offset);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_MUNMAP - Unmap memory
 fn sys_munmap(args: &SyscallArgs) -> SyscallResult {
-    let _addr = args.arg0;      // void *addr
-    let _length = args.arg1;    // size_t length
+    let addr = args.arg0;
+    let length = args.arg1;
 
-    // Stub: Memory unmapping not implemented
-    SyscallResult::ok(0)
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
+
+    let result = syscall_handlers::handle_munmap(pid, addr, length);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_BRK - Heap management
 fn sys_brk(args: &SyscallArgs) -> SyscallResult {
-    let _addr = args.arg0;  // void *addr - new break point (0 = query)
+    let addr = args.arg0;
 
-    // Stub: Heap management not implemented
-    // Real implementation would adjust process heap
-    SyscallResult::ok(0x2000)  // Return fake break point
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
+
+    let result = syscall_handlers::handle_brk(pid, addr);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_MPROTECT - Change memory protection
 fn sys_mprotect(args: &SyscallArgs) -> SyscallResult {
-    let _addr = args.arg0;      // void *addr
-    let _length = args.arg1;    // size_t length
-    let _prot = args.arg2;      // int prot - PROT_READ, PROT_WRITE, PROT_EXEC
+    let addr = args.arg0;
+    let length = args.arg1;
+    let prot = args.arg2 as u32;
 
-    // Stub: Memory protection changes not implemented
-    SyscallResult::ok(0)
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
+
+    let result = syscall_handlers::handle_mprotect(pid, addr, length, prot);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_SIGNAL - Register signal handler
-fn sys_signal(_args: &SyscallArgs) -> SyscallResult {
-    // Stub: Signal handling not implemented
-    SyscallResult::ok(0)
+fn sys_signal(args: &SyscallArgs) -> SyscallResult {
+    let sig = args.arg0 as u32;
+    let handler = args.arg1;
+
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
+
+    let result = syscall_handlers::handle_signal(pid, sig, handler);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_PAUSE - Wait for signal
 fn sys_pause(_args: &SyscallArgs) -> SyscallResult {
-    // Stub: Signal handling not implemented
-    // Would block process until signal arrives
-    SyscallResult::error(4)  // EINTR
+    let result = syscall_handlers::handle_pause();
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_ALARM - Set alarm timer
 fn sys_alarm(args: &SyscallArgs) -> SyscallResult {
-    let _seconds = args.arg0;  // unsigned int seconds
+    let seconds = args.arg0 as u32;
 
-    // Stub: Timer not implemented
-    // Real implementation would:
-    // 1. Set timer for seconds
-    // 2. Deliver SIGALRM when expired
-    // 3. Return remaining time from previous alarm
+    let pid = if let Some(pm) = get_process_manager() {
+        pm.current_pid as u32
+    } else {
+        1
+    };
 
-    SyscallResult::ok(0)
+    let result = syscall_handlers::handle_alarm(pid, seconds);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_UNAME - System information
 fn sys_uname(args: &SyscallArgs) -> SyscallResult {
-    let _utsname_ptr = args.arg0;  // struct utsname *
+    let utsname_ptr = args.arg0;
 
-    // Stub: System information not filled
-    // Real implementation would fill:
-    // - sysname: "RayOS"
-    // - release: "1.0"
-    // - version: build date
-    // - machine: "x86_64"
-    // - etc.
-
-    SyscallResult::ok(0)
+    let result = syscall_handlers::handle_uname(utsname_ptr);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_GETRUSAGE - Resource usage
 fn sys_getrusage(args: &SyscallArgs) -> SyscallResult {
-    let _who = args.arg0;              // int who - RUSAGE_SELF, RUSAGE_CHILDREN
-    let _usage_ptr = args.arg1;        // struct rusage *
+    let who = args.arg0 as i32;
+    let usage_ptr = args.arg1;
 
-    // Stub: Resource usage tracking not implemented
-    SyscallResult::ok(0)
+    let result = syscall_handlers::handle_getrusage(who, usage_ptr);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_TIMES - Process times
 fn sys_times(args: &SyscallArgs) -> SyscallResult {
-    let _tms_ptr = args.arg0;  // struct tms *
+    let tms_ptr = args.arg0;
 
-    // Stub: Process timing not implemented
-    // Real implementation would return:
-    // - User CPU time
-    // - System CPU time
-    // - Children user time
-    // - Children system time
-
-    SyscallResult::ok(100)  // Return fake tick count
+    let result = syscall_handlers::handle_times(tms_ptr);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_SYSCONF - System configuration
 fn sys_sysconf(args: &SyscallArgs) -> SyscallResult {
-    let name = args.arg0 as i32;  // int name - _SC_* constants
+    let name = args.arg0 as i32;
 
-    // Return common configuration values
-    match name {
-        1 => SyscallResult::ok(1024),           // _SC_ARG_MAX
-        2 => SyscallResult::ok(256),            // _SC_CHILD_MAX
-        4 => SyscallResult::ok(256),            // _SC_CLK_TCK
-        5 => SyscallResult::ok(256),            // _SC_NGROUPS_MAX
-        6 => SyscallResult::ok(256),            // _SC_OPEN_MAX
-        _ => SyscallResult::error(22),          // EINVAL
-    }
+    let result = syscall_handlers::handle_sysconf(name);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_GETTIMEOFDAY - Get time
 fn sys_gettimeofday(args: &SyscallArgs) -> SyscallResult {
-    let _tv_ptr = args.arg0;   // struct timeval *
-    let _tz_ptr = args.arg1;   // struct timezone *
+    let tv_ptr = args.arg0;
+    let tz_ptr = args.arg1;
 
-    // Stub: Time not implemented
-    // Real implementation would get system time
-    SyscallResult::ok(0)
+    let result = syscall_handlers::handle_gettimeofday(tv_ptr, tz_ptr);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_GETUID - Get user ID
 fn sys_getuid(_args: &SyscallArgs) -> SyscallResult {
-    // For now, return root (UID 0)
-    SyscallResult::ok(0)
+    let result = syscall_handlers::handle_getuid();
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_GETEUID - Get effective user ID
 fn sys_geteuid(_args: &SyscallArgs) -> SyscallResult {
-    // Return effective UID (also 0 for now)
-    SyscallResult::ok(0)
+    let result = syscall_handlers::handle_geteuid();
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_GETGID - Get group ID
 fn sys_getgid(_args: &SyscallArgs) -> SyscallResult {
-    // Return group 0
-    SyscallResult::ok(0)
+    let result = syscall_handlers::handle_getgid();
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_GETEGID - Get effective group ID
 fn sys_getegid(_args: &SyscallArgs) -> SyscallResult {
-    // Return effective group (0)
-    SyscallResult::ok(0)
+    let result = syscall_handlers::handle_getegid();
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_SETUID - Set user ID
 fn sys_setuid(args: &SyscallArgs) -> SyscallResult {
-    let _uid = args.arg0;  // uid_t uid
-
-    // Stub: User management not implemented
-    // Would verify permission and change UID
-    SyscallResult::ok(0)
+    let uid = args.arg0 as u32;
+    let result = syscall_handlers::handle_setuid(uid);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 /// SYS_SETGID - Set group ID
 fn sys_setgid(args: &SyscallArgs) -> SyscallResult {
-    let _gid = args.arg0;  // gid_t gid
-
-    // Stub: Group management not implemented
-    SyscallResult::ok(0)
+    let gid = args.arg0 as u32;
+    let result = syscall_handlers::handle_setgid(gid);
+    SyscallResult { value: result.value, error: result.error }
 }
 
 fn serial_init() {
