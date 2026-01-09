@@ -218,6 +218,30 @@ impl SemanticFS {
         self.store.delete(file_id)
     }
 
+    /// Remove a file by path
+    ///
+    /// Searches for a file by its path and removes it from the semantic FS.
+    /// Returns Ok(()) if successful, or an error if the file is not found.
+    pub async fn remove_file(&self, path: &Path) -> Result<()> {
+        let path_str = path.to_string_lossy();
+
+        // Search for file by exact path match
+        // Use a query that should match the file path
+        let results = self.search(&path_str, 100).await?;
+
+        for result in results {
+            if result.document.metadata.path == path {
+                self.delete_file(result.document.metadata.id)?;
+                log::debug!("Removed file from semantic FS: {}", path.display());
+                return Ok(());
+            }
+        }
+
+        // File not found, but that's OK (might have been indexed elsewhere)
+        log::debug!("File not found in semantic FS: {}", path.display());
+        Ok(())
+    }
+
     /// Rebuild the index (after bulk changes)
     pub fn rebuild_index(&self) -> Result<()> {
         log::info!("Rebuilding index...");

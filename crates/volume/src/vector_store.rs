@@ -139,6 +139,20 @@ impl VectorStore {
         Ok(documents)
     }
 
+    /// Get all file IDs in the store
+    pub fn all_ids(&self) -> Result<Vec<FileId>> {
+        let mut ids = Vec::new();
+        for item in self.db.iter() {
+            let (key, _) = item?;
+            if key.len() == 8 {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&key);
+                ids.push(FileId(u64::from_le_bytes(bytes)));
+            }
+        }
+        Ok(ids)
+    }
+
     /// Get all embeddings as a matrix (for GPU processing)
     pub fn get_embedding_matrix(&self) -> Result<(Vec<FileId>, Vec<Vec<f32>>)> {
         let documents = self.iter()?;

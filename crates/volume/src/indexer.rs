@@ -2,12 +2,21 @@
 //!
 //! This module implements the indexing layer that enables sub-millisecond
 //! nearest neighbor search across millions of embeddings.
+//!
+//! ## GPU Acceleration
+//!
+//! When compiled with the `gpu` feature, this module can optionally use
+//! GPU compute shaders to perform parallel similarity search across all
+//! vectors simultaneously, achieving massive speedups for large datasets.
 
 use crate::types::{Document, Embedding, FileId, SearchQuery, SearchResult, Query};
 use crate::vector_store::VectorStore;
 use anyhow::Result;
 use parking_lot::RwLock;
 use std::sync::Arc;
+
+#[cfg(feature = "gpu")]
+use crate::gpu_search::GpuSearchEngine;
 
 /// Cosine similarity between two vectors
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
@@ -46,8 +55,9 @@ impl Default for IndexParams {
 
 /// The HNSW Indexer for fast similarity search
 ///
-/// Currently uses brute-force search. HNSW will be integrated when
-/// the API stabilizes or we implement our own HNSW.
+/// When the `gpu` feature is enabled and a GPU is available, search operations
+/// will be accelerated using compute shaders. Otherwise, falls back to CPU-based
+/// brute-force or approximate search.
 pub struct HNSWIndexer {
     /// Cached embeddings for search
     cache: Arc<RwLock<Vec<(FileId, Vec<f32>)>>>,
@@ -55,6 +65,12 @@ pub struct HNSWIndexer {
     params: IndexParams,
     /// Embedding dimension
     dimension: usize,
+    /// GPU search engine (optional, requires `gpu` feature)
+    #[cfg(feature = "gpu")]
+    gpu_engine: Arc<RwLock<Option<GpuSearchEngine>>>,
+    /// Whether to prefer GPU search when available
+    #[cfg(feature = "gpu")]
+    use_gpu: bool,
 }
 
 impl HNSWIndexer {
@@ -68,13 +84,61 @@ impl HNSWIndexer {
 
         log::info!("Creating indexer: dim={}, M={}, ef_construction={}",
                    dimension, m, ef_construction);
-        log::warn!("Using brute-force search (HNSW coming soon)");
+
+        #[cfg(feature = "gpu")]
+        {
+            log::info!("GPU acceleration enabled (will initialize on first search)");
+        }
+
+        #[cfg(not(feature = "gpu"))]
+        {
+            log::warn!("GPU acceleration not available (compile with --features gpu)");
+        }
 
         Self {
             cache: Arc::new(RwLock::new(Vec::new())),
             params,
             dimension,
+            #[cfg(feature = "gpu")]
+            gpu_engine: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "gpu")]
+            use_gpu: true,
         }
+    }
+
+    /// Enable or disable GPU acceleration (only available with `gpu` feature)
+    #[cfg(feature = "gpu")]
+    pub fn set_gpu_enabled(&mut self, enabled: bool) {
+        self.use_gpu = enabled;
+        log::info!("GPU search {}", if enabled { "enabled" } else { "disabled" });
+    }
+
+    /// Check if GPU search is available and ready
+    #[cfg(feature = "gpu")]
+    pub fn gpu_ready(&self) -> bool {
+        self.gpu_engine.read().as_ref().map(|e| e.is_ready()).unwrap_or(false)
+    }
+
+    /// Initialize GPU search engine asynchronously
+    #[cfg(feature = "gpu")]
+    pub async fn init_gpu(&self) -> Result<()> {
+        log::info!("Initializing GPU search engine...");
+
+        let engine = GpuSearchEngine::new().await?;
+
+        // Upload current vectors to GPU
+        let cache = self.cache.read();
+        if !cache.is_empty() {
+            let mut engine = engine;
+            engine.upload_vectors(&cache, self.dimension)?;
+            *self.gpu_engine.write() = Some(engine);
+            log::info!("GPU search ready with {} vectors", cache.len());
+        } else {
+            *self.gpu_engine.write() = Some(engine);
+            log::info!("GPU search initialized (no vectors yet)");
+        }
+
+        Ok(())
     }
 
     /// Build the index from a vector store
@@ -95,6 +159,20 @@ impl HNSWIndexer {
         }
 
         let count = cache_data.len();
+
+        // Upload to GPU if available
+        #[cfg(feature = "gpu")]
+        {
+            let mut gpu_guard = self.gpu_engine.write();
+            if let Some(ref mut engine) = *gpu_guard {
+                if let Err(e) = engine.upload_vectors(&cache_data, self.dimension) {
+                    log::warn!("Failed to upload vectors to GPU: {e}");
+                } else {
+                    log::info!("Uploaded {} vectors to GPU", count);
+                }
+            }
+        }
+
         *self.cache.write() = cache_data;
 
         log::info!("Successfully indexed {} documents", count);
@@ -103,6 +181,10 @@ impl HNSWIndexer {
     }
 
     /// Search for similar vectors using optimized approximate search
+    ///
+    /// When GPU acceleration is available (compiled with `--features gpu` and
+    /// GPU initialized), this uses compute shaders for parallel similarity.
+    /// Otherwise falls back to CPU-based search.
     pub fn search(
         &self,
         query_embedding: &Embedding,
@@ -116,7 +198,24 @@ impl HNSWIndexer {
             return Ok(Vec::new());
         }
 
-        // For small datasets (<1000), use exact search
+        // Try GPU search first if available
+        #[cfg(feature = "gpu")]
+        if self.use_gpu {
+            let gpu_guard = self.gpu_engine.read();
+            if let Some(ref engine) = *gpu_guard {
+                if engine.is_ready() {
+                    log::debug!("Using GPU-accelerated search for {} vectors", cache.len());
+                    match engine.search(&query_embedding.vector, k) {
+                        Ok(results) => return Ok(results),
+                        Err(e) => {
+                            log::warn!("GPU search failed, falling back to CPU: {e}");
+                        }
+                    }
+                }
+            }
+        }
+
+        // CPU fallback: for small datasets (<1000), use exact search
         if cache.len() < 1000 {
             return self.exact_search(&cache, query_embedding, k);
         }
@@ -285,6 +384,9 @@ impl HNSWIndexer {
         // De-dupe: file watchers may re-index the same path many times.
         cache.retain(|(id, _)| *id != doc.metadata.id);
         cache.push((doc.metadata.id, doc.embedding.vector.clone()));
+
+        // Note: GPU buffer is not updated incrementally; call build_index to sync
+
         Ok(())
     }
 
@@ -292,17 +394,33 @@ impl HNSWIndexer {
     pub fn stats(&self) -> IndexStats {
         let cache = self.cache.read();
 
+        #[cfg(feature = "gpu")]
+        let gpu_stats = {
+            let gpu_guard = self.gpu_engine.read();
+            gpu_guard.as_ref().map(|e| e.stats())
+        };
+
         IndexStats {
             total_vectors: cache.len(),
             dimension: self.dimension,
             m: self.params.m,
             ef_construction: self.params.ef_construction,
+            #[cfg(feature = "gpu")]
+            gpu_ready: self.gpu_ready(),
+            #[cfg(feature = "gpu")]
+            gpu_memory_bytes: gpu_stats.map(|s| s.memory_bytes).unwrap_or(0),
         }
     }
 
     /// Clear the index
     pub fn clear(&self) {
         self.cache.write().clear();
+
+        #[cfg(feature = "gpu")]
+        {
+            // Clear GPU state by dropping the engine
+            *self.gpu_engine.write() = None;
+        }
     }
 }
 
@@ -312,6 +430,25 @@ pub struct IndexStats {
     pub dimension: usize,
     pub m: usize,
     pub ef_construction: usize,
+    /// Whether GPU acceleration is ready (always false without `gpu` feature)
+    #[cfg(feature = "gpu")]
+    pub gpu_ready: bool,
+    /// GPU memory usage in bytes (always 0 without `gpu` feature)
+    #[cfg(feature = "gpu")]
+    pub gpu_memory_bytes: usize,
+}
+
+#[cfg(not(feature = "gpu"))]
+impl IndexStats {
+    /// Check if GPU is ready (stub for non-GPU builds)
+    pub fn gpu_ready(&self) -> bool {
+        false
+    }
+
+    /// Get GPU memory usage (stub for non-GPU builds)
+    pub fn gpu_memory_bytes(&self) -> usize {
+        0
+    }
 }
 
 #[cfg(test)]

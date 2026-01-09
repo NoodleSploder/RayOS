@@ -73,7 +73,7 @@ pub struct FileMetadata {
 }
 
 /// Type of file content
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FileType {
     Text,
     Code,
@@ -189,6 +189,71 @@ pub struct Epiphany {
     pub source_files: Vec<FileId>,
     pub validation_status: ValidationStatus,
     pub embedding: Option<Embedding>,
+    /// The speculative connection that generated this epiphany
+    pub connection: Option<SpeculativeConnection>,
+    /// Scores for this epiphany
+    pub scores: Option<EpiphanyScores>,
+}
+
+/// A speculative connection between distant concepts
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpeculativeConnection {
+    /// Source file/concept
+    pub source: FileId,
+    /// Target file/concept
+    pub target: FileId,
+    /// Type of inferred relationship
+    pub relation_type: RelationType,
+    /// Semantic distance (higher = more novel connection)
+    pub semantic_distance: f32,
+    /// Confidence in this connection
+    pub confidence: f32,
+    /// Natural language description of the connection
+    pub description: String,
+}
+
+/// Types of relationships that can be inferred
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum RelationType {
+    /// Similar content/concepts
+    SimilarTo,
+    /// One references/uses the other
+    References,
+    /// Same pattern appears in both
+    SharedPattern,
+    /// Could solve a problem in the other
+    CouldSolve,
+    /// Temporal correlation
+    TemporallyRelated,
+    /// Authored by same entity
+    SameAuthor,
+    /// Part of same project/domain
+    SameDomain,
+    /// Causal relationship suspected
+    MayCause,
+    /// Generic learned connection
+    Learned,
+}
+
+/// Scores for evaluating an epiphany
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct EpiphanyScores {
+    /// How coherent/sensible is this connection (0-1)
+    pub coherence: f32,
+    /// How novel/surprising is this connection (0-1)
+    pub novelty: f32,
+    /// How useful might this be (0-1)
+    pub utility: f32,
+    /// Combined score
+    pub combined: f32,
+}
+
+impl EpiphanyScores {
+    /// Compute combined score (weighted average)
+    pub fn compute_combined(&mut self) {
+        // Novelty is slightly weighted up - we want surprising connections
+        self.combined = self.coherence * 0.3 + self.novelty * 0.4 + self.utility * 0.3;
+    }
 }
 
 /// Validation status of an epiphany
