@@ -318,6 +318,7 @@ mod text_to_speech;
 mod a11y_integration;
 mod network_stack;
 mod socket_api;
+mod virtio_net_driver;
 mod http_protocol;
 mod content_streaming;
 mod dns_discovery;

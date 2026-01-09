@@ -8246,11 +8246,81 @@ impl Shell {
                 let _ = writeln!(output, "=== Packet Loss ===");
                 let _ = writeln!(output, "Loss Rate: 0%");
                 let _ = writeln!(output, "Lost Packets: 0");
+            } else if self.cmd_matches(cmd, b"driver") {
+                use crate::virtio_net_driver;
+                
+                let _ = writeln!(output, "=== VirtIO Network Driver ===");
+                
+                // Initialize driver
+                if virtio_net_driver::net_driver_init() {
+                    let _ = writeln!(output, "Driver Status: Initialized");
+                } else {
+                    let _ = writeln!(output, "Driver Status: Failed");
+                }
+                
+                // Link status
+                if virtio_net_driver::net_driver_is_link_up() {
+                    let _ = writeln!(output, "Link Status: UP");
+                } else {
+                    let _ = writeln!(output, "Link Status: DOWN");
+                }
+                
+                // MAC address
+                let mac = virtio_net_driver::net_driver_get_mac();
+                let _ = writeln!(output, "MAC Address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                
+                // Statistics
+                let stats = virtio_net_driver::net_driver_get_stats();
+                let _ = writeln!(output, "TX Packets: {}", stats.tx_packets);
+                let _ = writeln!(output, "RX Packets: {}", stats.rx_packets);
+                let _ = writeln!(output, "TX Bytes: {}", stats.tx_bytes);
+                let _ = writeln!(output, "RX Bytes: {}", stats.rx_bytes);
+                let _ = writeln!(output, "TX Errors: {}", stats.tx_errors);
+                let _ = writeln!(output, "RX Errors: {}", stats.rx_errors);
+            } else if self.cmd_matches(cmd, b"send") {
+                use crate::virtio_net_driver;
+                
+                let _ = writeln!(output, "=== Send Test Packets ===");
+                
+                // Initialize
+                virtio_net_driver::net_driver_init();
+                
+                // Send UDP packet
+                let dst_mac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+                let src_ip = [192, 168, 1, 100];
+                let dst_ip = [192, 168, 1, 1];
+                
+                match virtio_net_driver::net_driver_send_udp(
+                    dst_mac, src_ip, dst_ip, 5000, 53, b"DNS query test"
+                ) {
+                    Ok(()) => { let _ = writeln!(output, "Sent UDP packet to 192.168.1.1:53"); }
+                    Err(e) => { let _ = writeln!(output, "UDP send failed: {:?}", e); }
+                }
+                
+                // Send TCP SYN
+                match virtio_net_driver::net_driver_send_tcp(
+                    dst_mac, src_ip, dst_ip, 8080, 80, 1000, 0, 0x02, &[]
+                ) {
+                    Ok(()) => { let _ = writeln!(output, "Sent TCP SYN to 192.168.1.1:80"); }
+                    Err(e) => { let _ = writeln!(output, "TCP send failed: {:?}", e); }
+                }
+                
+                // Send ARP request
+                match virtio_net_driver::net_driver_send_arp([192, 168, 1, 1], src_ip) {
+                    Ok(()) => { let _ = writeln!(output, "Sent ARP request for 192.168.1.1"); }
+                    Err(e) => { let _ = writeln!(output, "ARP send failed: {:?}", e); }
+                }
+                
+                let stats = virtio_net_driver::net_driver_get_stats();
+                let _ = writeln!(output, "Total TX packets: {}", stats.tx_packets);
             } else if self.cmd_matches(cmd, b"help") {
                 let _ = writeln!(output, "Network Statistics Commands:");
                 let _ = writeln!(output, "  netstat          Show socket statistics");
                 let _ = writeln!(output, "  netstat sockets  Demo socket API operations");
                 let _ = writeln!(output, "  netstat arp      Show ARP table");
+                let _ = writeln!(output, "  netstat driver   Show VirtIO network driver status");
+                let _ = writeln!(output, "  netstat send     Send test packets (UDP/TCP/ARP)");
                 let _ = writeln!(output, "  netstat flows    Show active flows");
                 let _ = writeln!(output, "  netstat latency  Show latency stats");
                 let _ = writeln!(output, "  netstat loss     Show packet loss");
