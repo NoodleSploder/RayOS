@@ -8152,16 +8152,89 @@ impl Shell {
     }
 
     fn cmd_netstat(&self, output: &mut ShellOutput, args: &[u8]) {
+        use crate::socket_api;
+        
         if args.is_empty() {
-            let _ = writeln!(output, "Network Monitoring & Telemetry");
-            let _ = writeln!(output, "================================");
-            let _ = writeln!(output, "Total Packets: 0");
-            let _ = writeln!(output, "Total Bytes: 0");
-            let _ = writeln!(output, "Active Flows: 0");
-            let _ = writeln!(output, "Average RTT: 0us");
+            let _ = writeln!(output, "Socket & Network Statistics");
+            let _ = writeln!(output, "============================");
+            
+            // Initialize socket table if needed
+            socket_api::socket_init();
+            
+            let _ = writeln!(output, "Proto  Local Address          State");
+            let _ = writeln!(output, "-----  ---------------------  -----------");
+            let _ = writeln!(output, "(no active sockets)");
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "Use 'netstat sockets' to test socket operations");
         } else {
             let cmd = args.split(|&c| c == b' ').next().unwrap_or(b"");
-            if self.cmd_matches(cmd, b"flows") {
+            if self.cmd_matches(cmd, b"sockets") {
+                // Demo socket operations
+                socket_api::socket_init();
+                
+                let _ = writeln!(output, "=== Socket API Demo ===");
+                
+                // Create TCP socket
+                if let Some(tcp_fd) = socket_api::socket_create(
+                    socket_api::SocketType::Stream,
+                    socket_api::SocketDomain::Inet
+                ) {
+                    let _ = writeln!(output, "Created TCP socket: fd={}", tcp_fd);
+                    
+                    // Bind to port 8080
+                    let addr = socket_api::SocketAddr::any(8080);
+                    if socket_api::socket_bind(tcp_fd, addr).is_ok() {
+                        let _ = writeln!(output, "  Bound to 0.0.0.0:8080");
+                    }
+                    
+                    // Listen
+                    if socket_api::socket_listen(tcp_fd, 5).is_ok() {
+                        let _ = writeln!(output, "  Listening (backlog=5)");
+                    }
+                    
+                    // Close
+                    let _ = socket_api::socket_close(tcp_fd);
+                    let _ = writeln!(output, "  Closed");
+                }
+                
+                // Create UDP socket
+                if let Some(udp_fd) = socket_api::socket_create(
+                    socket_api::SocketType::Datagram,
+                    socket_api::SocketDomain::Inet
+                ) {
+                    let _ = writeln!(output, "Created UDP socket: fd={}", udp_fd);
+                    
+                    // Bind to port 5353
+                    let addr = socket_api::SocketAddr::any(5353);
+                    if socket_api::socket_bind(udp_fd, addr).is_ok() {
+                        let _ = writeln!(output, "  Bound to 0.0.0.0:5353");
+                    }
+                    
+                    // Close
+                    let _ = socket_api::socket_close(udp_fd);
+                    let _ = writeln!(output, "  Closed");
+                }
+                
+                let _ = writeln!(output, "Socket API demo complete");
+            } else if self.cmd_matches(cmd, b"arp") {
+                socket_api::socket_init();
+                
+                let _ = writeln!(output, "=== ARP Table ===");
+                
+                // Add some demo entries
+                socket_api::arp_insert([192, 168, 1, 1], [0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03]);
+                socket_api::arp_insert([192, 168, 1, 254], [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+                
+                let _ = writeln!(output, "IP Address        MAC Address");
+                let _ = writeln!(output, "192.168.1.1       aa:bb:cc:01:02:03");
+                let _ = writeln!(output, "192.168.1.254     00:11:22:33:44:55");
+                
+                // Lookup test
+                if let Some(mac) = socket_api::arp_lookup([192, 168, 1, 1]) {
+                    let _ = writeln!(output, "Lookup 192.168.1.1: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+                        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+                }
+            } else if self.cmd_matches(cmd, b"flows") {
                 let _ = writeln!(output, "=== Active Flows ===");
                 let _ = writeln!(output, "No active flows");
             } else if self.cmd_matches(cmd, b"latency") {
@@ -8173,16 +8246,14 @@ impl Shell {
                 let _ = writeln!(output, "=== Packet Loss ===");
                 let _ = writeln!(output, "Loss Rate: 0%");
                 let _ = writeln!(output, "Lost Packets: 0");
-            } else if self.cmd_matches(cmd, b"overhead") {
-                let _ = writeln!(output, "=== Encryption Overhead ===");
-                let _ = writeln!(output, "Overhead: 0 bytes");
-                let _ = writeln!(output, "Percentage: 0%");
             } else if self.cmd_matches(cmd, b"help") {
                 let _ = writeln!(output, "Network Statistics Commands:");
+                let _ = writeln!(output, "  netstat          Show socket statistics");
+                let _ = writeln!(output, "  netstat sockets  Demo socket API operations");
+                let _ = writeln!(output, "  netstat arp      Show ARP table");
                 let _ = writeln!(output, "  netstat flows    Show active flows");
                 let _ = writeln!(output, "  netstat latency  Show latency stats");
                 let _ = writeln!(output, "  netstat loss     Show packet loss");
-                let _ = writeln!(output, "  netstat overhead Show encryption overhead");
             }
         }
     }

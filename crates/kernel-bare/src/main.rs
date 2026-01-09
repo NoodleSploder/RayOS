@@ -317,6 +317,7 @@ mod accessibility;
 mod text_to_speech;
 mod a11y_integration;
 mod network_stack;
+mod socket_api;
 mod http_protocol;
 mod content_streaming;
 mod dns_discovery;
