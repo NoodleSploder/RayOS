@@ -7,6 +7,7 @@ mod shell;                 // Phase 9A Task 1: Shell & Utilities
 mod init;                  // Phase 9B Task 2: System Services & Init
 mod service_lifecycle;     // Phase 9B Task 2: Service Lifecycle & Health Monitoring
 mod logging;               // Phase 9B Task 3: Observability & Logging
+mod crash_recovery;        // Phase 9B Task 3: Crash Recovery & Last-Known-Good
 mod recovery;              // Phase 9B Task 5: Update & Recovery
 mod security;              // Phase 10 Task 2: Security Hardening & Measured Boot
 mod policy_enforcement;    // Phase 10 Task 3: Process Sandboxing & Capability Enforcement
