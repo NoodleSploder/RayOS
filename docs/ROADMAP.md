@@ -77,7 +77,7 @@ Core architectural components for RayOS as a cognitive substrate. See [SENTIENT_
 
 | Task | Status | Description |
 |------|--------|-------------|
-| Vector Store (Hippocampus) | 🟡 Partial | HNSW index for semantic memory (RAG infra exists) |
+| Vector Store (Hippocampus) | ✅ Done | HNSW index for semantic memory with O(log n) ANN search |
 | GPU-Accelerated Similarity | ✅ Done | WGSL compute shader for parallel cosine similarity |
 | Multi-Modal Embedder | ✅ Done | Text, code, image, audio → vectors with modality-aware features |
 | Content Ingestion Pipeline | ✅ Done | Automatic embedding on file events with debouncing and batching |

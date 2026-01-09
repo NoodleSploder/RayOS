@@ -43,6 +43,9 @@ uuid = { version = "1.6", features = ["v4"] }
 notify = "6.1"
 walkdir = "2.4"
 
+# Random number generation
+fastrand = "2.0"
+
 # Text processing
 unicode-segmentation = "1.11"
 regex = "1.10"

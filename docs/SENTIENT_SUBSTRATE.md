@@ -318,7 +318,7 @@ System 1 (GPU compute shaders) naturally interfaces with the geometric logic eng
 | Logic as Geometry | 🟡 Partial | Access control geometry implemented; BVH/RT core research ongoing |
 | Access Control Geometry | ✅ Implemented | Permissions as GPU geometric hit tests |
 | Unified Pipeline | ✅ Implemented | Single dispatch for perception, logic, and semantic stages |
-| Vector Store | 🟡 Partial | RAG infrastructure exists |
+| Vector Store | ✅ Implemented | HNSW index with O(log n) ANN search |
 | GPU Similarity Search | ✅ Implemented | WGSL compute shader for parallel cosine similarity |
 | Multi-Modal Embedder | ✅ Implemented | Text, code, image, audio embedding with modality features |
 | Content Ingestion | ✅ Implemented | File watching, debouncing, batching, filtering |

@@ -54,6 +54,7 @@ pub mod embedder;
 pub mod epiphany;
 pub mod fs;
 pub mod gpu_search;
+pub mod hnsw;
 pub mod indexer;
 pub mod ingestion;
 pub mod multimodal;
@@ -68,6 +69,7 @@ pub use epiphany::{
     DreamScheduler, DreamConfig, DreamStats, PromotionEngine,
 };
 pub use fs::SemanticFS;
+pub use hnsw::{HnswIndex, HnswConfig, HnswStats, DistanceMetric, SearchResult as HnswSearchResult};
 pub use indexer::HNSWIndexer;
 pub use ingestion::{IngestionPipeline, IngestionConfig, IngestionMetrics, IngestionEvent, IngestionEventKind};
 pub use multimodal::{MultiModalEmbedder, Modality, CodeLanguage, ImageFeatures, AudioFeatures};
@@ -81,7 +83,7 @@ pub use relationship_graph::{
     GraphStats, InferenceEngine, InferenceConfig, GraphQuery,
 };
 pub use types::*;
-pub use vector_store::VectorStore;
+pub use vector_store::{VectorStore, SemanticSearchResult};
 
 #[cfg(feature = "gpu")]
 pub use gpu_search::GpuSearchEngine;
