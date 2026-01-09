@@ -1,0 +1,195 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    PHASE 21: FOUNDATION COMPLETION ROADMAP                   ║
+║                                                                              ║
+║              Three Critical Milestones → Six Implementation Tasks             ║
+║                     ~120 minutes, ~4,800 lines of code                       ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+MILESTONE 1: RayOS-Native Linux Desktop
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Goal: Make `show linux desktop` work without VNC client dependency         │
+│ Problem: Requires host `gvncviewer` or equivalent                          │
+│ Solution: Validate in-OS virtio-gpu scanout → PresentationBridge           │
+│ Impact: Standalone RayOS desktop without host tools                        │
+│                                                                             │
+│ Task 1: linux_presentation.rs (800 lines)                                  │
+│ ├─ PresentationBridge: surface → RayOS window mapping                      │
+│ ├─ SurfaceCache: active surfaces + frame buffers                           │
+│ ├─ Methods: create_surface, update_frame, present, hide, destroy           │
+│ ├─ Markers: RAYOS_PRESENTATION:*                                           │
+│ └─ Tests: test-vmm-linux-desktop-native-show-hide-show-headless.sh        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+MILESTONE 2: Installer & Boot Manager (Standalone OS)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Goal: Build minimal USB installer + boot manager for bare hardware         │
+│ Problem: RayOS only runs under QEMU                                        │
+│ Solution: USB installer + boot discovery → multi-installation support      │
+│ Impact: RayOS becomes a real installable operating system                  │
+│                                                                             │
+│ Task 2: crates/installer (900 lines)                                       │
+│ ├─ InstallerBoot: USB detection + boot mode identification                 │
+│ ├─ PartitionManager: disk enumeration, creation, formatting                │
+│ ├─ Methods: detect_usb_boot, enumerate_disks, create_partition             │
+│ ├─ Safety: 2-stage confirmation, prevent self-destruction                  │
+│ ├─ Markers: RAYOS_INSTALLER:*                                              │
+│ └─ Tests: test-installer-usb-boot-headless.sh                              │
+│                                                                             │
+│ Task 3: boot_manager.rs (900 lines)                                        │
+│ ├─ BootMenu: discoverable boot entries                                     │
+│ ├─ BootEntry: installation target (disk + partition + config)              │
+│ ├─ RecoveryEntry: last-known-good snapshots                                │
+│ ├─ Methods: enumerate_installations, display_menu, boot_recovery           │
+│ ├─ Recovery: 3× failure → auto-fallback to golden state                    │
+│ ├─ Markers: RAYOS_BOOTMGR:*                                                │
+│ └─ Tests: test-bootmgr-install-verify-headless.sh                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+MILESTONE 3: Observability & Crash Recovery (Reliability)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Goal: Add persistent logging, watchdog, recovery from hangs               │
+│ Problem: No durable logs, no watchdog, no recovery                         │
+│ Solution: PersistentLog + Watchdog + BootMarker + Recovery                 │
+│ Impact: Self-healing system, safe experimentation, production readiness    │
+│                                                                             │
+│ Task 4: persistent_log.rs + watchdog.rs (800 lines)                        │
+│ ├─ PersistentLog: circular buffer backed to USB/SSD                        │
+│ │  ├─ Methods: write, flush, get_last_n, rotate, export                   │
+│ │  └─ Storage: 128 MB partition with CRC32 per entry                       │
+│ ├─ Watchdog: timer-based hang detection + auto-reboot                      │
+│ │  ├─ Methods: start, kick, on_timeout, set_policy                         │
+│ │  └─ Policy: 30-sec default, armed at boot                                │
+│ ├─ Markers: RAYOS_LOG:*, RAYOS_WATCHDOG:*                                  │
+│ └─ Tests: test-persistent-log-write-headless.sh                            │
+│           test-watchdog-hang-recovery-headless.sh                           │
+│                                                                             │
+│ Task 5: boot_marker.rs + recovery_policy.rs (700 lines)                    │
+│ ├─ BootMarker: track boot progress (Kernel→Subsystems→Shell→Golden)        │
+│ ├─ MarkerStorage: persist markers to disk                                  │
+│ ├─ Recovery Logic: 3× failure → load last golden → boot                    │
+│ ├─ Methods: mark_stage, mark_golden, trigger_recovery, validate_chain      │
+│ ├─ Markers: RAYOS_BOOT_MARKER:*                                            │
+│ └─ Tests: test-recovery-golden-fallback-headless.sh                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+TASK 6: CLI Integration (600 lines)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Goal: Wire all features into RayOS shell with user-friendly commands       │
+│                                                                             │
+│ New Commands (20+):                                                        │
+│ ├─ install*              (start, --list-disks, --to, --verify)            │
+│ ├─ bootmgr*              (list, set-default, set-timeout, recovery)       │
+│ ├─ recovery*             (status, snapshot, list, restore)                │
+│ ├─ log*                  (show, export, level, clear)                     │
+│ └─ watchdog*             (status, arm, disarm, kick, policy)              │
+│                                                                             │
+│ Features:                                                                  │
+│ ├─ 2-stage confirmation for critical ops (install, recovery)               │
+│ ├─ Deterministic markers for every operation                               │
+│ ├─ Help subcommand for all features                                        │
+│ └─ Safe defaults (networks OFF, watchdog ON, recovery enabled)             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+EXECUTION TIMELINE
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Phase 21A (Day 1-2): Task 1 + Task 2                                       │
+│  └─ PresentationBridge (presentation logic)                                 │
+│  └─ Installer Foundation (USB detection + partition mgmt)                   │
+│                                                                             │
+│ Phase 21B (Day 2-3): Task 3 + Task 4                                       │
+│  └─ Boot Manager (discovery + boot selection)                               │
+│  └─ Logging & Watchdog (durable logs + hang recovery)                       │
+│                                                                             │
+│ Phase 21C (Day 3-4): Task 5 + Task 6                                       │
+│  └─ Boot Markers & Recovery (golden state tracking)                         │
+│  └─ CLI Integration (20+ shell commands)                                    │
+│                                                                             │
+│ Phase 21D (Day 4): Testing & Validation                                    │
+│  └─ Run 6 headless smoke tests                                              │
+│  └─ Verify no pre-existing test regressions                                 │
+│  └─ Commit Phase 21 work                                                    │
+│  └─ Create Phase 21 Final Report                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+KEY SUCCESS CRITERIA
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ ✓ 0 compilation errors                                                     │
+│ ✓ 0 pre-existing test regressions                                          │
+│ ✓ 6 headless smoke tests passing                                           │
+│ ✓ `show linux desktop` works without VNC client                            │
+│ ✓ `install` command successfully installs RayOS to USB                     │
+│ ✓ `bootmgr` menu appears and boots installed image                         │
+│ ✓ `log show` displays persistent kernel logs                               │
+│ ✓ Watchdog armed by default, reboots on timeout                            │
+│ ✓ `recovery restore <id>` recovers from snapshot                           │
+│ ✓ 3× boot failure → automatic fallback to recovery                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+DETERMINISTIC MARKERS (40+)
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ RAYOS_PRESENTATION:SURFACE_CREATE:<id>:<w>x<h>                             │
+│ RAYOS_PRESENTATION:FIRST_FRAME:<id>                                        │
+│ RAYOS_PRESENTATION:PRESENTED:<id>                                          │
+│ RAYOS_PRESENTATION:HIDDEN:<id>                                             │
+│                                                                             │
+│ RAYOS_INSTALLER:BOOT:USB                                                   │
+│ RAYOS_INSTALLER:DISK_DETECTED:<device>:<size>                              │
+│ RAYOS_INSTALLER:PARTITION_CREATED:<id>:<size>                              │
+│ RAYOS_INSTALLER:INSTALL_COMPLETE:<device>                                  │
+│                                                                             │
+│ RAYOS_BOOTMGR:DISCOVERED:<n>_installations                                 │
+│ RAYOS_BOOTMGR:SELECTED:<installation_id>                                   │
+│ RAYOS_BOOTMGR:BOOT_SUCCESS                                                 │
+│ RAYOS_BOOTMGR:RECOVERY_FALLBACK:<reason>                                   │
+│                                                                             │
+│ RAYOS_LOG:INIT:<backing_device>:<capacity>                                 │
+│ RAYOS_LOG:WRITTEN:<n>_entries                                              │
+│ RAYOS_LOG:ROTATED:<file_id>                                                │
+│                                                                             │
+│ RAYOS_WATCHDOG:ARMED:<timeout_sec>                                         │
+│ RAYOS_WATCHDOG:KICK:<count>                                                │
+│ RAYOS_WATCHDOG:TIMEOUT:<hang_reason>                                       │
+│ RAYOS_WATCHDOG:REBOOT_RECOVERY                                             │
+│                                                                             │
+│ RAYOS_BOOT_MARKER:KERNEL_LOADED                                            │
+│ RAYOS_BOOT_MARKER:SUBSYSTEMS_READY                                         │
+│ RAYOS_BOOT_MARKER:SHELL_READY                                              │
+│ RAYOS_BOOT_MARKER:GOLDEN                                                   │
+│ RAYOS_BOOT_MARKER:FAILURE_COUNT:<n>                                        │
+│ RAYOS_BOOT_MARKER:RECOVERY_TRIGGERED                                       │
+│                                                                             │
+│ RAYOS_CRASH:ARTIFACT_SAVED:<type>                                          │
+│ ... and more                                                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+RISK MITIGATION
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Risk                         │ Mitigation                                   │
+│──────────────────────────────┼─────────────────────────────────────────────│
+│ Installer overwrites disk    │ 2-stage confirm + refuse existing RayOS     │
+│ Boot fails to find installs  │ Enumerate all disks + manual menu           │
+│ Log fills partition          │ Rotate logs + 80% capacity warning           │
+│ Watchdog false reboot        │ Kick from main loop + idle detection         │
+│ VNC client absent            │ Graceful fallback + print instructions       │
+│ Snapshot corrupted           │ Validate checksum + keep 3 rolling copies    │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+WHAT THIS ENABLES
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Phase 21 Completion allows:                                                │
+│                                                                             │
+│ 1. Ship RayOS on USB                                                       │
+│ 2. Install RayOS on laptops without QEMU                                   │
+│ 3. Self-healing (watchdog + recovery)                                      │
+│ 4. Post-mortem debugging (persistent logs)                                 │
+│ 5. Deterministic testing (boot markers + CI automation)                    │
+│ 6. Product demonstration (native desktop, no host tools)                   │
+│                                                                             │
+│ This transforms RayOS from "research prototype" to "feasible standalone OS" │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Phase 21 is READY TO IMPLEMENT.
+
+Created: January 8, 2026
+Status: PLANNING COMPLETE ✅
+Next: Begin Task 1 (PresentationBridge implementation)

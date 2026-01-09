@@ -35,7 +35,7 @@ VIRTIO_MMIO_DEVICES="$(python3 "$ROOT_DIR/scripts/tools/vmm_mmio_map.py" --featu
 echo "$BASE_CMDLINE $VIRTIO_MMIO_DEVICES" > "$CMDLINE_FILE"
 
 # Enable the in-kernel VMM + Linux guest + virtio-gpu (+ virtio-input for interactive pointer/keys).
-export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_linux_guest,vmm_virtio_gpu,vmm_virtio_input}"
+export RAYOS_KERNEL_FEATURES="${RAYOS_KERNEL_FEATURES:-vmm_hypervisor,vmm_linux_guest,vmm_linux_desktop_autostart,vmm_virtio_gpu,vmm_virtio_input}"
 
 export RAYOS_LINUX_GUEST_KERNEL_SRC="$KERNEL"
 export RAYOS_LINUX_GUEST_INITRD_SRC="$INITRD"

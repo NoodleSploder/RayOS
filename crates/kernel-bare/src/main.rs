@@ -79,6 +79,9 @@ mod watchdog;              // Phase 21 Task 4: Watchdog Timer & Hang Detection
 mod boot_marker;           // Phase 21 Task 5: Boot Markers & Golden State
 mod recovery_policy;       // Phase 21 Task 5: Recovery Policy & Coordinator
 
+#[cfg(feature = "ui_shell")]
+mod ui;                    // Phase 21.1: Native UI Framework
+
 // ===== Minimal stubs for bring-up (to be replaced with real implementations) =====
 #[inline(always)]
 fn init_boot_info(boot_info_phys: u64) {
@@ -149,6 +152,9 @@ fn init_idt() {
 
         idt_set_gate(KEYBOARD_VECTOR, isr_keyboard as *const () as u64);
         serial_write_str("    ✓ Keyboard Interrupt (IRQ1, vector 33) handler registered\n");
+
+        idt_set_gate(MOUSE_VECTOR, isr_mouse as *const () as u64);
+        serial_write_str("    ✓ Mouse Interrupt (IRQ12, vector 44) handler registered\n");
 
         lidt();
     }
@@ -242,6 +248,11 @@ fn init_interrupts() {
     pic_unmask_irq1();
     serial_write_str("    ✓ Keyboard IRQ1 unmasked\n");
 
+    // Initialize PS/2 mouse
+    ps2_mouse_init();
+    pic_unmask_irq12();
+    serial_write_str("    ✓ Mouse IRQ12 unmasked\n");
+
     pit_init_hz(100);
     serial_write_str("    ✓ PIT timer initialized (100 Hz)\n");
 
@@ -260,7 +271,7 @@ use core::result::Result::{self, Err, Ok};
 use core::arch::{asm, global_asm};
 use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use libm::{expf, sqrtf};
 
 mod acpi;
@@ -4197,10 +4208,10 @@ impl ChatLog {
 
 // Feature-gated so "LLM inside RayOS" is the default, but the host bridge can
 // still be enabled for richer replies.
-const HOST_AI_ENABLED: bool = cfg!(feature = "host_ai");
+pub const HOST_AI_ENABLED: bool = cfg!(feature = "host_ai");
 // Avoid double replies if host_ai is enabled.
-const LOCAL_AI_ENABLED: bool = cfg!(feature = "local_ai") && !HOST_AI_ENABLED;
-const LOCAL_LLM_ENABLED: bool = cfg!(feature = "local_llm") && !HOST_AI_ENABLED;
+pub const LOCAL_AI_ENABLED: bool = cfg!(feature = "local_ai") && !HOST_AI_ENABLED;
+pub const LOCAL_LLM_ENABLED: bool = cfg!(feature = "local_llm") && !HOST_AI_ENABLED;
 
 const RAYOS_VERSION_TEXT: &[u8] = b"RayOS Kernel v0.1";
 const PIT_HZ: u64 = 100;
@@ -6011,10 +6022,10 @@ static RAYQ_HEAD: AtomicUsize = AtomicUsize::new(0);
 static RAYQ_TAIL: AtomicUsize = AtomicUsize::new(0);
 static mut RAYQ: [LogicRay; RAY_QUEUE_SIZE] = [LogicRay::empty(); RAY_QUEUE_SIZE];
 
-static SYSTEM1_RUNNING: AtomicBool = AtomicBool::new(false);
-static SYSTEM1_ENQUEUED: AtomicU64 = AtomicU64::new(0);
-static SYSTEM1_DROPPED: AtomicU64 = AtomicU64::new(0);
-static SYSTEM1_PROCESSED: AtomicU64 = AtomicU64::new(0);
+pub static SYSTEM1_RUNNING: AtomicBool = AtomicBool::new(false);
+pub static SYSTEM1_ENQUEUED: AtomicU64 = AtomicU64::new(0);
+pub static SYSTEM1_DROPPED: AtomicU64 = AtomicU64::new(0);
+pub static SYSTEM1_PROCESSED: AtomicU64 = AtomicU64::new(0);
 static SYSTEM1_LAST_RAY_ID: AtomicU64 = AtomicU64::new(0);
 static SYSTEM1_LAST_OP: AtomicU64 = AtomicU64::new(0);
 static SYSTEM1_LAST_PRIO: AtomicU64 = AtomicU64::new(0);
@@ -6027,14 +6038,14 @@ static SYSTEM2_LAST_COUNT: AtomicU64 = AtomicU64::new(0);
 static SYSTEM2_ENQUEUED: AtomicU64 = AtomicU64::new(0);
 static SYSTEM2_DROPPED: AtomicU64 = AtomicU64::new(0);
 
-static CONDUCTOR_RUNNING: AtomicBool = AtomicBool::new(false);
+pub static CONDUCTOR_RUNNING: AtomicBool = AtomicBool::new(false);
 static CONDUCTOR_SUBMITTED: AtomicU64 = AtomicU64::new(0);
 static CONDUCTOR_DROPPED: AtomicU64 = AtomicU64::new(0);
 static CONDUCTOR_LAST_TICK: AtomicU64 = AtomicU64::new(0);
 
 // Host-bridge (Conductor/ai_bridge) presence indicator.
 // We consider the bridge "connected" once we have received at least one AI reply line over COM1.
-static HOST_BRIDGE_CONNECTED: AtomicBool = AtomicBool::new(false);
+pub static HOST_BRIDGE_CONNECTED: AtomicBool = AtomicBool::new(false);
 
 // Linux subsystem lifecycle (host-driven today).
 // Updated from:
@@ -6158,7 +6169,7 @@ fn conductor_tick(tick: u64) {
 }
 
 #[inline(always)]
-fn rayq_depth() -> usize {
+pub fn rayq_depth() -> usize {
     let head = RAYQ_HEAD.load(Ordering::Acquire);
     let tail = RAYQ_TAIL.load(Ordering::Acquire);
     head.wrapping_sub(tail) & (RAY_QUEUE_SIZE - 1)
@@ -7577,6 +7588,7 @@ fn system2_parse_to_rays(input: &[u8], out: &mut [LogicRay; 4]) -> usize {
 
 const TIMER_VECTOR: u8 = 32;
 const KEYBOARD_VECTOR: u8 = 33;
+const MOUSE_VECTOR: u8 = 44;  // IRQ12 = vector 32 + 12
 const SPURIOUS_VECTOR: u8 = 0xFF;
 
 // CPU exception vectors we care about for fault containment.
@@ -7820,9 +7832,41 @@ isr_keyboard:
 "#
 );
 
+global_asm!(
+    r#"
+    .global isr_mouse
+isr_mouse:
+    sub rsp, 8
+    push rax
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push r8
+    push r9
+    push r10
+    push r11
+
+    call mouse_interrupt_handler
+
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rax
+    add rsp, 8
+    iretq
+"#
+);
+
 extern "C" {
     fn isr_timer();
     fn isr_keyboard();
+    fn isr_mouse();
     fn isr_page_fault();
     fn isr_general_protection();
     fn isr_double_fault();
@@ -8285,6 +8329,89 @@ fn pic_unmask_irq1() {
     }
 }
 
+fn pic_unmask_irq12() {
+    unsafe {
+        // IRQ12 is on the slave PIC (bit 4)
+        // Also need to unmask IRQ2 on master (cascade)
+        let master_mask = inb(0x21);
+        outb(0x21, master_mask & !0x04);  // Unmask IRQ2 (cascade)
+        let slave_mask = inb(0xA1);
+        outb(0xA1, slave_mask & !0x10);   // Unmask IRQ12 (bit 4)
+    }
+}
+
+/// Initialize PS/2 mouse
+fn ps2_mouse_init() {
+    // Helper: wait for controller input buffer to be empty
+    #[inline(always)]
+    fn ps2_wait_write() {
+        for _ in 0..10000 {
+            if unsafe { inb(0x64) } & 0x02 == 0 {
+                return;
+            }
+        }
+    }
+
+    // Helper: wait for controller output buffer to have data
+    #[inline(always)]
+    fn ps2_wait_read() {
+        for _ in 0..10000 {
+            if unsafe { inb(0x64) } & 0x01 != 0 {
+                return;
+            }
+        }
+    }
+
+    // Helper: flush output buffer
+    #[inline(always)]
+    fn ps2_flush_output() {
+        for _ in 0..16 {
+            if unsafe { inb(0x64) } & 0x01 != 0 {
+                let _ = unsafe { inb(0x60) };
+            } else {
+                break;
+            }
+        }
+    }
+
+    // Flush any pending data
+    ps2_flush_output();
+
+    // Enable auxiliary device (mouse)
+    ps2_wait_write();
+    unsafe { outb(0x64, 0xA8) };  // Enable auxiliary port
+
+    // Get compaq status byte
+    ps2_wait_write();
+    unsafe { outb(0x64, 0x20) };  // Read command byte
+    ps2_wait_read();
+    let status = unsafe { inb(0x60) };
+
+    // Enable IRQ12 in controller
+    ps2_wait_write();
+    unsafe { outb(0x64, 0x60) };  // Write command byte
+    ps2_wait_write();
+    unsafe { outb(0x60, status | 0x02) };  // Set bit 1 (enable IRQ12)
+
+    // Send command to mouse: Set defaults
+    ps2_wait_write();
+    unsafe { outb(0x64, 0xD4) };  // Next byte goes to mouse
+    ps2_wait_write();
+    unsafe { outb(0x60, 0xF6) };  // Set defaults
+    ps2_wait_read();
+    let _ = unsafe { inb(0x60) };  // ACK
+
+    // Send command to mouse: Enable data reporting
+    ps2_wait_write();
+    unsafe { outb(0x64, 0xD4) };  // Next byte goes to mouse
+    ps2_wait_write();
+    unsafe { outb(0x60, 0xF4) };  // Enable data reporting
+    ps2_wait_read();
+    let _ = unsafe { inb(0x60) };  // ACK
+
+    serial_write_str("    ✓ PS/2 Mouse initialized\n");
+}
+
 fn pic_mask_all() {
     unsafe {
         outb(0x21, 0xFF);
@@ -8342,6 +8469,111 @@ extern "C" fn keyboard_interrupt_handler() {
     }
 }
 
+// ===== PS/2 Mouse Support =====
+// Mouse packet state
+static MOUSE_PACKET_IDX: AtomicU32 = AtomicU32::new(0);
+static mut MOUSE_PACKET: [u8; 4] = [0; 4];
+static MOUSE_IRQ_COUNT: AtomicU64 = AtomicU64::new(0);
+static MOUSE_FIRST_IRQ_REPORTED: AtomicBool = AtomicBool::new(false);
+
+#[no_mangle]
+extern "C" fn mouse_interrupt_handler() {
+    let count = MOUSE_IRQ_COUNT.fetch_add(1, Ordering::Relaxed);
+
+    // Report first mouse IRQ
+    if count == 0 && !MOUSE_FIRST_IRQ_REPORTED.swap(true, Ordering::Relaxed) {
+        serial_write_str("[MOUSE] First IRQ12 received!\n");
+    }
+
+    // Read byte from PS/2 data port
+    let byte = unsafe { inb(0x60) };
+
+    // Handle mouse packet (3 bytes for standard PS/2 mouse)
+    let idx = MOUSE_PACKET_IDX.load(Ordering::Relaxed);
+
+    unsafe {
+        MOUSE_PACKET[idx as usize] = byte;
+    }
+
+    if idx == 0 {
+        // First byte must have bit 3 set (always 1 in PS/2 mouse)
+        if byte & 0x08 != 0 {
+            MOUSE_PACKET_IDX.store(1, Ordering::Relaxed);
+        }
+        // Otherwise discard and wait for sync
+    } else if idx == 1 {
+        MOUSE_PACKET_IDX.store(2, Ordering::Relaxed);
+    } else {
+        // Complete packet received
+        MOUSE_PACKET_IDX.store(0, Ordering::Relaxed);
+
+        let packet = unsafe { MOUSE_PACKET };
+        mouse_handle_packet(packet[0], packet[1], packet[2]);
+    }
+
+    unsafe {
+        if LAPIC_MMIO != 0 {
+            lapic_eoi();
+        } else {
+            pic_eoi(12);
+        }
+    }
+}
+
+fn mouse_handle_packet(status: u8, dx_raw: u8, dy_raw: u8) {
+    // Parse PS/2 mouse packet
+    let left_btn = (status & 0x01) != 0;
+    let right_btn = (status & 0x02) != 0;
+    let _middle_btn = (status & 0x04) != 0;
+
+    // Sign-extend the delta values
+    let dx = if status & 0x10 != 0 {
+        dx_raw as i32 - 256
+    } else {
+        dx_raw as i32
+    };
+    let dy = if status & 0x20 != 0 {
+        dy_raw as i32 - 256
+    } else {
+        dy_raw as i32
+    };
+
+    // Check for overflow
+    if status & 0xC0 != 0 {
+        return; // Overflow, discard packet
+    }
+
+    // Route to UI shell if active
+    #[cfg(feature = "ui_shell")]
+    {
+        if ui::shell::is_initialized() {
+            // Apply delta (PS/2 Y is inverted)
+            ui::input::handle_mouse_delta(dx, -dy);
+
+            // Handle button state changes
+            static LAST_LEFT: AtomicBool = AtomicBool::new(false);
+            static LAST_RIGHT: AtomicBool = AtomicBool::new(false);
+
+            let was_left = LAST_LEFT.swap(left_btn, Ordering::Relaxed);
+            let was_right = LAST_RIGHT.swap(right_btn, Ordering::Relaxed);
+
+            let (x, y) = ui::input::mouse_position();
+
+            if left_btn && !was_left {
+                ui::input::handle_mouse_button_down(x, y, 0, false);
+            } else if !left_btn && was_left {
+                ui::input::handle_mouse_button_up(x, y, 0);
+            }
+
+            if right_btn && !was_right {
+                ui::input::handle_mouse_button_down(x, y, 1, false);
+            } else if !right_btn && was_right {
+                ui::input::handle_mouse_button_up(x, y, 1);
+            }
+        }
+    }
+}
+
 pub(crate) fn keyboard_handle_scancode(sc: u8) {
     IRQ_KBD_COUNT.fetch_add(1, Ordering::Relaxed);
     LAST_SCANCODE.store(sc as u64, Ordering::Relaxed);
@@ -8362,6 +8594,18 @@ pub(crate) fn keyboard_handle_scancode(sc: u8) {
             CAPS_LOCK.store(cur ^ 1, Ordering::Relaxed);
         }
         _ => {}
+    }
+
+    // UI Shell: Handle arrow keys and other scancodes for mouse control
+    #[cfg(feature = "ui_shell")]
+    {
+        if ui::shell::is_initialized() {
+            let shift = SHIFT_DOWN.load(Ordering::Relaxed) != 0;
+            if ui::input::handle_scancode_for_mouse(sc, shift) {
+                // Key was consumed for mouse control
+                return;
+            }
+        }
     }
 
     // If the Linux desktop is currently presented, keep a deterministic escape hatch
@@ -8440,6 +8684,21 @@ pub(crate) fn keyboard_handle_scancode(sc: u8) {
         let shift = SHIFT_DOWN.load(Ordering::Relaxed) != 0;
         let caps = CAPS_LOCK.load(Ordering::Relaxed) != 0;
         if let Some(ch) = scancode_set1_to_ascii(sc, shift, caps) {
+            // UI Shell: Check if this key should go to text input
+            #[cfg(feature = "ui_shell")]
+            {
+                if ui::shell::is_initialized() {
+                    // Text input takes priority
+                    if ui::input::handle_key_for_text_input(ch) {
+                        return;
+                    }
+                    // Then mouse control
+                    if ui::input::handle_key_for_mouse(ch, shift) {
+                        return;
+                    }
+                }
+            }
+
             kbd_buf_push(ch);
             LAST_ASCII.store(ch as u64, Ordering::Relaxed);
 
@@ -10955,6 +11214,7 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
     unsafe {
         idt_set_gate(TIMER_VECTOR, isr_timer as *const () as u64);
         idt_set_gate(KEYBOARD_VECTOR, isr_keyboard as *const () as u64);
+        idt_set_gate(MOUSE_VECTOR, isr_mouse as *const () as u64);
 
         idt_set_gate(UD_VECTOR, isr_invalid_opcode as *const () as u64);
         idt_set_gate(PF_VECTOR, isr_page_fault as *const () as u64);
@@ -10994,6 +11254,7 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
 
             pic_mask_all();
             lapic_enable();
+            ps2_mouse_init();  // Initialize PS/2 mouse controller
             if ioapic_phys != 0 {
                 let dest = lapic_id();
                 serial_write_str("  LAPIC id=0x");
@@ -11001,20 +11262,28 @@ extern "C" fn kernel_after_paging(rsdp_phys: u64) -> ! {
                 serial_write_str("\n");
                 ioapic_set_redir(irq0_gsi, TIMER_VECTOR, dest, irq0_flags);
                 ioapic_set_redir(irq1_gsi, KEYBOARD_VECTOR, dest, irq1_flags);
+                // Also set up IRQ12 for mouse (GSI 12 typically)
+                ioapic_set_redir(12, MOUSE_VECTOR, dest, 0);
             } else {
                 pic_remap_and_unmask_irq0();
                 pic_unmask_irq1();
+                ps2_mouse_init();
+                pic_unmask_irq12();
             }
         } else {
             // Fallback: PIC timer
             serial_write_str("  MADT not found; using PIC timer\n");
             pic_remap_and_unmask_irq0();
             pic_unmask_irq1();
+            ps2_mouse_init();
+            pic_unmask_irq12();
         }
     } else {
         serial_write_str("  RSDP missing; using PIC timer\n");
         pic_remap_and_unmask_irq0();
         pic_unmask_irq1();
+        ps2_mouse_init();
+        pic_unmask_irq12();
     }
 
     pit_init_hz(100);
@@ -11153,11 +11422,25 @@ fn test_invalid_opcode() {
 fn kernel_main() -> ! {
     // Framebuffer is now initialized by _start from bootloader parameters
 
+    // Initialize UI shell if enabled (does initial composite)
+    #[cfg(feature = "ui_shell")]
+    {
+        let fb_addr = unsafe { FB_BASE as u64 };
+        let fb_width = unsafe { FB_WIDTH };
+        let fb_height = unsafe { FB_HEIGHT };
+        let fb_stride = unsafe { FB_STRIDE };
+        if fb_addr != 0 && fb_width > 0 && fb_height > 0 {
+            ui::shell::ui_shell_init(fb_addr, fb_width, fb_height, fb_stride);
+        }
+    }
+
+    // Panel background color for legacy UI
+    let panel_bg = 0x2a_2a_4eu32;
+
     // Clear screen to dark blue
     clear_screen(0x1a_1a_2e);
 
     // Draw kernel banner
-    let panel_bg = 0x2a_2a_4e;
     draw_box(30, 30, 700, 450, panel_bg);
     draw_text_bg(50, 50, "RayOS Kernel v0.1 - LIVE!", 0xff_ff_ff, panel_bg);
 
@@ -11335,6 +11618,15 @@ fn kernel_main() -> ! {
     }
 
     fn render_linux_state(panel_bg: u32, state: u8) {
+        // Skip legacy rendering when UI shell is active
+        #[cfg(feature = "ui_shell")]
+        {
+            if ui::shell::is_initialized() {
+                let _ = (panel_bg, state);  // suppress unused warnings
+                return;
+            }
+        }
+
         // This sits with the other subsystem status lines.
         clear_text_line(70, 450, 48, panel_bg);
         let (label, color) = linux_state_label(state);
@@ -11421,6 +11713,15 @@ fn kernel_main() -> ! {
     // Chat transcript area.
     draw_text_bg(50, 590, "Transcript:", 0xaa_aa_aa, 0x1a_1a_2e);
     draw_box(50, 610, 680, 180, 0x1a_1a_2e);
+
+    // Re-composite UI shell to overwrite legacy rendering (if enabled)
+    #[cfg(feature = "ui_shell")]
+    {
+        if ui::shell::is_initialized() {
+            ui::compositor::mark_dirty();
+            ui::compositor::composite();
+        }
+    }
 
     // Bicameral interactive loop:
     // - Default: free-form text is fed to System 2, which enqueues rays.
@@ -12360,6 +12661,12 @@ fn kernel_main() -> ! {
     }
 
     loop {
+        // UI shell tick (if enabled)
+        #[cfg(feature = "ui_shell")]
+        {
+            ui::shell::ui_shell_tick();
+        }
+
         // Drain available keyboard input without blocking.
         while let Some(b) = kbd_try_read_byte() {
             #[cfg(feature = "dev_scanout")]
@@ -13312,6 +13619,20 @@ fn kernel_main() -> ! {
             // Run a small slice of Conductor orchestration in thread context.
             conductor_tick(tick);
 
+            // Skip legacy UI rendering when UI shell is active
+            #[cfg(feature = "ui_shell")]
+            {
+                if ui::shell::is_initialized() {
+                    // Still update linux state tracking but don't render
+                    let cur = LINUX_DESKTOP_STATE.load(Ordering::Relaxed);
+                    if cur != last_linux_state {
+                        last_linux_state = cur;
+                    }
+                    // Skip the legacy framebuffer rendering below
+                    continue;
+                }
+            }
+
             // Keyboard scancode (hex)
             let sc = LAST_SCANCODE.load(Ordering::Relaxed) as usize;
             draw_box(210, 520, 200, 20, 0x1a_1a_2e);
@@ -13467,6 +13788,14 @@ fn kernel_main() -> ! {
 }
 
 fn render_input_line(buf: &[u8], len: usize) {
+    // Skip legacy rendering when UI shell is active
+    #[cfg(feature = "ui_shell")]
+    {
+        if ui::shell::is_initialized() {
+            return;
+        }
+    }
+
     // Render the current line buffer into the framebuffer 'Typed:' line.
     draw_box(110, 540, 620, 20, 0x1a_1a_2e);
     let mut x = 110;
@@ -13546,6 +13875,14 @@ fn render_ai_text_line(text: &[u8]) {
 }
 
 fn render_chat_log(chat: &ChatLog) {
+    // Skip legacy rendering when UI shell is active
+    #[cfg(feature = "ui_shell")]
+    {
+        if ui::shell::is_initialized() {
+            return;
+        }
+    }
+
     // Clear transcript box.
     draw_box(50, 610, 680, 180, 0x1a_1a_2e);
 

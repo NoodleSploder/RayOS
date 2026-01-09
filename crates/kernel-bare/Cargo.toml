@@ -88,6 +88,12 @@ vmm_linux_desktop_autostart = []
 # Debug-only: extremely verbose virtio-blk MMIO access tracing.
 vmm_trace_virtio_blk_mmio = []
 
+# Phase 21.1: Enable the native UI shell (window manager, compositor).
+ui_shell = []
+
+# Serial debug output for various subsystems.
+serial_debug = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"

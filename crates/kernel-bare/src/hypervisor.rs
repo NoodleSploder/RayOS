@@ -3303,6 +3303,115 @@ unsafe fn ensure_virtio_gpu_host_visible_shm_ready() -> bool {
     true
 }
 
+// Unified framebuffer for scatter-gather backing.
+// When guest sends multiple memory entries in ATTACH_BACKING, we copy them
+// into this contiguous buffer so the GPU model can read a single address.
+// Max supported: 1024x768x4 = 3,145,728 bytes
+// We use a static BSS buffer to guarantee contiguity.
+#[cfg(feature = "vmm_virtio_gpu")]
+const VIRTIO_GPU_UNIFIED_FB_SIZE: usize = 1024 * 768 * 4; // 3 MB
+
+#[cfg(feature = "vmm_virtio_gpu")]
+#[repr(align(4096))]
+struct UnifiedFbBuffer([u8; VIRTIO_GPU_UNIFIED_FB_SIZE]);
+
+#[cfg(feature = "vmm_virtio_gpu")]
+static mut VIRTIO_GPU_UNIFIED_FB: UnifiedFbBuffer = UnifiedFbBuffer([0u8; VIRTIO_GPU_UNIFIED_FB_SIZE]);
+
+#[cfg(feature = "vmm_virtio_gpu")]
+static mut VIRTIO_GPU_UNIFIED_FB_READY: bool = false;
+
+#[cfg(feature = "vmm_virtio_gpu")]
+unsafe fn ensure_virtio_gpu_unified_fb_ready() -> bool {
+    if VIRTIO_GPU_UNIFIED_FB_READY {
+        return true;
+    }
+    // No allocation needed - it's a static buffer
+    VIRTIO_GPU_UNIFIED_FB_READY = true;
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:UNIFIED_FB_READY\n");
+    true
+}
+
+/// Get the physical address of the unified framebuffer.
+/// Returns contiguous memory starting at this address.
+#[cfg(feature = "vmm_virtio_gpu")]
+fn virtio_gpu_unified_fb_phys() -> Option<u64> {
+    unsafe {
+        if !ensure_virtio_gpu_unified_fb_ready() {
+            return None;
+        }
+        // Convert virtual address to physical
+        let virt = VIRTIO_GPU_UNIFIED_FB.0.as_ptr() as u64;
+        Some(crate::virt_to_phys(virt))
+    }
+}
+
+/// Copy scattered guest pages into the unified framebuffer.
+/// entries: slice of (host_phys_addr, length) pairs from ATTACH_BACKING.
+/// Returns the unified framebuffer's physical address.
+#[cfg(feature = "vmm_virtio_gpu")]
+unsafe fn virtio_gpu_copy_scatter_to_unified(
+    entries: &[(u64, u32)],
+) -> Option<u64> {
+    if !ensure_virtio_gpu_unified_fb_ready() {
+        return None;
+    }
+
+    let dest_base = VIRTIO_GPU_UNIFIED_FB.0.as_mut_ptr();
+    let mut dest_offset: usize = 0;
+
+    for &(src_phys, length) in entries {
+        let len = length as usize;
+        if dest_offset + len > VIRTIO_GPU_UNIFIED_FB_SIZE {
+            crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:UNIFIED_FB_OVERFLOW\n");
+            break;
+        }
+
+        let src_ptr = crate::phys_to_virt(src_phys) as *const u8;
+        core::ptr::copy_nonoverlapping(
+            src_ptr,
+            dest_base.add(dest_offset),
+            len,
+        );
+        dest_offset += len;
+    }
+
+    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:UNIFIED_FB_COPIED bytes=");
+    crate::serial_write_hex_u64(dest_offset as u64);
+    crate::serial_write_str("\n");
+
+    virtio_gpu_unified_fb_phys()
+}
+
+// Storage for scatter-gather entries so we can re-copy on FLUSH.
+#[cfg(feature = "vmm_virtio_gpu")]
+const MAX_SG_ENTRIES: usize = 768;
+
+#[cfg(feature = "vmm_virtio_gpu")]
+static mut VIRTIO_GPU_SG_ENTRIES: [(u64, u32); MAX_SG_ENTRIES] = [(0, 0); MAX_SG_ENTRIES];
+
+#[cfg(feature = "vmm_virtio_gpu")]
+static mut VIRTIO_GPU_SG_ENTRY_COUNT: usize = 0;
+
+/// Store scatter-gather list for later copying on FLUSH.
+#[cfg(feature = "vmm_virtio_gpu")]
+unsafe fn virtio_gpu_store_sg_list(entries: &[(u64, u32)]) {
+    VIRTIO_GPU_SG_ENTRY_COUNT = core::cmp::min(entries.len(), MAX_SG_ENTRIES);
+    for i in 0..VIRTIO_GPU_SG_ENTRY_COUNT {
+        VIRTIO_GPU_SG_ENTRIES[i] = entries[i];
+    }
+}
+
+/// Copy from stored scatter-gather list to unified framebuffer.
+/// Called on RESOURCE_FLUSH to sync guest framebuffer to host.
+#[cfg(feature = "vmm_virtio_gpu")]
+pub unsafe fn virtio_gpu_sync_framebuffer() {
+    if VIRTIO_GPU_SG_ENTRY_COUNT == 0 {
+        return;
+    }
+    let _ = virtio_gpu_copy_scatter_to_unified(&VIRTIO_GPU_SG_ENTRIES[..VIRTIO_GPU_SG_ENTRY_COUNT]);
+}
+
 #[cfg(feature = "vmm_virtio_gpu")]
 fn virtio_gpu_shm_handler(
     _regs: &mut GuestRegs,
@@ -8309,6 +8418,13 @@ unsafe fn handle_virtio_gpu_chain(header: VirtqDesc, descs: &[VirtqDesc]) -> u32
         cmd_type = u32::from_le_bytes([hdr_buf[0], hdr_buf[1], hdr_buf[2], hdr_buf[3]]);
     }
 
+    // On RESOURCE_FLUSH or TRANSFER_TO_HOST_2D, sync scattered guest pages to unified buffer
+    if cmd_type == crate::virtio_gpu_proto::VIRTIO_GPU_CMD_RESOURCE_FLUSH
+        || cmd_type == crate::virtio_gpu_proto::VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D
+    {
+        virtio_gpu_sync_framebuffer();
+    }
+
     let written = if cmd_type == crate::virtio_gpu_proto::VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING
         && (req.flags & VIRTQ_DESC_F_WRITE) == 0
         && (req.len as usize) < (core::mem::size_of::<crate::virtio_gpu_proto::VirtioGpuResourceAttachBackingHdr>()
@@ -8341,13 +8457,55 @@ unsafe fn handle_virtio_gpu_chain(header: VirtqDesc, descs: &[VirtqDesc]) -> u32
                     // Translate embedded backing GPA -> host phys so the model points
                     // at CPU-visible memory.
                     let entry_off = core::mem::size_of::<crate::virtio_gpu_proto::VirtioGpuResourceAttachBackingHdr>();
-                    if total_len >= entry_off + core::mem::size_of::<crate::virtio_gpu_proto::VirtioGpuMemEntry>() {
-                        let entry_ptr = scratch_ptr.add(entry_off)
+                    let entry_size = core::mem::size_of::<crate::virtio_gpu_proto::VirtioGpuMemEntry>();
+                    // Read nr_entries from the header
+                    let hdr_ptr = scratch_ptr as *mut crate::virtio_gpu_proto::VirtioGpuResourceAttachBackingHdr;
+                    let nr_entries = core::ptr::read_unaligned(hdr_ptr).nr_entries as usize;
+
+                    crate::serial_write_str("RAYOS_VMM:VIRTIO_GPU:ATTACH_BACKING:nr_entries=");
+                    crate::serial_write_hex_u64(nr_entries as u64);
+                    crate::serial_write_str("\n");
+
+                    // Collect and translate all entries, then copy to unified framebuffer
+                    const MAX_ENTRIES: usize = 768; // Support up to 3MB framebuffer
+                    let mut entries: [(u64, u32); MAX_ENTRIES] = [(0, 0); MAX_ENTRIES];
+                    let mut valid_entries: usize = 0;
+                    let mut total_backing_len: u64 = 0;
+
+                    for i in 0..nr_entries {
+                        if i >= MAX_ENTRIES {
+                            break;
+                        }
+                        let entry_ptr_i = scratch_ptr.add(entry_off + i * entry_size)
                             as *mut crate::virtio_gpu_proto::VirtioGpuMemEntry;
-                        let mut entry = core::ptr::read_unaligned(entry_ptr);
+                        if (entry_off + (i + 1) * entry_size) > total_len {
+                            break;
+                        }
+                        let entry = core::ptr::read_unaligned(entry_ptr_i);
                         if let Some(backing_phys) = guest_gpa_to_phys(entry.addr) {
-                            entry.addr = backing_phys;
-                            core::ptr::write_unaligned(entry_ptr, entry);
+                            entries[valid_entries] = (backing_phys, entry.length);
+                            total_backing_len += entry.length as u64;
+                            valid_entries += 1;
+                        }
+                    }
+
+                    // Store SG list for re-sync on FLUSH, then do initial copy
+                    if valid_entries > 0 {
+                        virtio_gpu_store_sg_list(&entries[..valid_entries]);
+                        if let Some(unified_phys) = virtio_gpu_copy_scatter_to_unified(&entries[..valid_entries]) {
+                            // Rewrite the first entry to point to unified buffer with total length
+                            let first_entry_ptr = scratch_ptr.add(entry_off)
+                                as *mut crate::virtio_gpu_proto::VirtioGpuMemEntry;
+                            let unified_entry = crate::virtio_gpu_proto::VirtioGpuMemEntry {
+                                addr: unified_phys,
+                                length: total_backing_len as u32,
+                                padding: 0,
+                            };
+                            core::ptr::write_unaligned(first_entry_ptr, unified_entry);
+                            // Set nr_entries to 1 since we've unified everything
+                            let mut hdr = core::ptr::read_unaligned(hdr_ptr);
+                            hdr.nr_entries = 1;
+                            core::ptr::write_unaligned(hdr_ptr, hdr);
                         }
                     }
 

@@ -121,7 +121,7 @@ RayOS implements a **native hypervisor** that runs Linux (and potentially Window
    if presentation_state == Presented && (sc == 0x58 || sc == 0x29) {
        set_presentation_state(Hidden);
    }
-   
+
    // Show: F11 or backtick when Hidden
    if presentation_state != Presented && (sc == 0x57 || sc == 0x29) {
        set_presentation_state(Presented);
