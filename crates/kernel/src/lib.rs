@@ -3,6 +3,7 @@
 /// A GPU-native, AI-centric operating system kernel implementing
 /// the Bicameral Architecture: System 1 (Reflex) + System 2 (Cognitive)
 
+pub mod geometry_logic;
 pub mod types;
 pub mod hal;
 pub mod system1;
