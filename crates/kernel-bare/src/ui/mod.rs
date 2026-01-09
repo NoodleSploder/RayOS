@@ -26,6 +26,7 @@ pub mod app_sdk;
 pub mod example_apps;
 pub mod font;
 pub mod animation;
+pub mod surface_manager;
 
 // Re-export key types
 pub use renderer::{COLOR_ACCENT, COLOR_BACKGROUND, COLOR_TEXT, COLOR_WINDOW_BG, CursorType};
