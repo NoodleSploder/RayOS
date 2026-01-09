@@ -28,18 +28,21 @@
 | VS Code Extension | Build commands, snippets, .rayapp syntax, QEMU integration |
 | Windows VM | Windows subsystem with UEFI, TPM, Hyper-V enlightenments |
 | Package Format | .rayapp package structure, loader, and shell commands |
+| App Store | App discovery, browsing, and installation from catalog |
 
 ### In Progress 🟡
 
 | Feature | Target | Notes |
 |---------|--------|-------|
-| App Store | Q4 2026 | App discovery and installation |
+| Standalone Deployment | Q3 2026 | Installer, update mechanism, recovery mode |
 
 ### Planned 📋
 
 | Feature | Target | Notes |
 |---------|--------|-------|
-| App Store | Q4 2026 | App discovery and installation |
+| Font Rendering | Q4 2026 | Upgrade from 8x16 bitmap fonts |
+| Animations | Q4 2026 | Window transitions and effects |
+| Multi-monitor | 2027 | Hardware support for multiple displays |
 
 ---
 
