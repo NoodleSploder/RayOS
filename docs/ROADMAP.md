@@ -29,20 +29,61 @@
 | Windows VM | Windows subsystem with UEFI, TPM, Hyper-V enlightenments |
 | Package Format | .rayapp package structure, loader, and shell commands |
 | App Store | App discovery, browsing, and installation from catalog |
+| Standalone Deployment | Installer, update mechanism, recovery mode |
+| Font Rendering | Scalable fonts with 9 sizes, anti-aliasing, glyph cache |
+| Animations | Window transitions with easing, fade, scale, and pop effects |
 
-### In Progress 🟡
+### Completed ✅ (Phase 2)
 
-| Feature | Target | Notes |
-|---------|--------|-------|
-| Standalone Deployment | Q3 2026 | Installer, update mechanism, recovery mode |
+| Feature | Completed | Notes |
+|---------|-----------|-------|
+| Reflex Learning | 2026 | HabitLearner detects patterns, System 2 approves/rejects |
 
 ### Planned 📋
 
 | Feature | Target | Notes |
 |---------|--------|-------|
-| Font Rendering | Q4 2026 | Upgrade from 8x16 bitmap fonts |
-| Animations | Q4 2026 | Window transitions and effects |
 | Multi-monitor | 2027 | Hardware support for multiple displays |
+
+---
+
+## Sentient Substrate 🧠
+
+Core architectural components for RayOS as a cognitive substrate. See [SENTIENT_SUBSTRATE.md](SENTIENT_SUBSTRATE.md) for full design.
+
+### Bicameral Kernel
+
+| Task | Status | Description |
+|------|--------|-------------|
+| System 2: Resident LLM | ✅ Done | LLM inference integrated in kernel |
+| System 1: Reflex Engine | ✅ Done | Pattern matching, reflexes, attention signals |
+| System 1: GPU Compute Shaders | ✅ Done | GPU reflex pattern matching with WGSL compute shader |
+| Attention Buffer Protocol | ✅ Done | System 1 sends attention signals to System 2 via ray queue |
+| Reflex Learning | ✅ Done | HabitLearner + System 2 approval/rejection API |
+| Perceptual Upward Signals | ✅ Done | System 1 notifies System 2 of anomalies/intent |
+| Downward Control Commands | ✅ Done | Full System 2 control API (add/remove/enable/disable/priority/suppress) |
+
+### Logic as Geometry
+
+| Task | Status | Description |
+|------|--------|-------------|
+| RT Core Logic Encoding | 📋 Research | Encode conditionals as ray-geometry intersections |
+| BVH Decision Trees | 📋 Research | Map decision trees to bounding volume hierarchies |
+| Access Control Geometry | ✅ Done | GPU compute shader for geometric permission hit tests |
+| Ray-Based State Access | 📋 Research | Variables as spatial structures |
+| Unified Perception/Logic Pipeline | 📋 Planned | Same RT cores for vision and decisions |
+
+### Neural File System
+
+| Task | Status | Description |
+|------|--------|-------------|
+| Vector Store (Hippocampus) | 🟡 Partial | HNSW index for semantic memory (RAG infra exists) |
+| GPU-Accelerated Similarity | ✅ Done | WGSL compute shader for parallel cosine similarity |
+| Multi-Modal Embedder | ✅ Done | Text, code, image, audio → vectors with modality-aware features |
+| Content Ingestion Pipeline | ✅ Done | Automatic embedding on file events with debouncing and batching |
+| Epiphany Buffer | ✅ Done | Connection discovery, dream scheduling, scoring, promotion |
+| Semantic Query Interface | ✅ Done | Natural language parsing, query expansion, multi-factor ranking |
+| Relationship Inference | ✅ Done | Automatic concept linking with knowledge graph and inference engine |
 
 ---
 
@@ -76,19 +117,27 @@ Production-ready installation:
 - Update mechanism
 - Recovery mode
 
+### M5: Sentient Substrate Alpha (2027)
+
+Cognitive architecture foundation:
+- Bicameral Kernel with GPU reflexes
+- Neural File System with semantic search
+- Logic as Geometry proof-of-concept
+
 ---
 
 ## Technical Debt
 
 | Item | Priority | Notes |
 |------|----------|-------|
-| Font rendering | Low | Currently 8x16 bitmap |
-| Animations | Low | Window transitions |
 | Multi-monitor | Medium | Future hardware support |
+| Subpixel rendering | Low | LCD subpixel optimization for fonts |
+| GPU acceleration | Low | Hardware-accelerated compositing |
 
 ---
 
 ## See Also
 
+- [Sentient Substrate](SENTIENT_SUBSTRATE.md) - Core cognitive architecture
 - [Framework Roadmap](development/FRAMEWORK_ROADMAP.md) - Detailed app framework plans
 - [App Development](development/APP_DEVELOPMENT.md) - Building apps for RayOS
