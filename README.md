@@ -31,6 +31,8 @@ RayOS is an experimental, Rust-based, UEFI-bootable operating system implementin
 | **Windows Subsystem** | 🟡 In development |
 | **Local AI (LLM)** | ✅ In-kernel inference |
 | **App Framework** | 🟡 API design phase |
+| **Neural File System** | ✅ Semantic storage with GPU similarity search |
+| **Bicameral Architecture** | ✅ System 1 GPU reflexes + System 2 LLM reasoning |
 
 ### What Works Today
 
@@ -40,6 +42,9 @@ RayOS is an experimental, Rust-based, UEFI-bootable operating system implementin
 - System Status and AI Assistant windows
 - Linux desktop presented as native RayOS window
 - Local AI responses via built-in LLM
+- **Neural File System** with semantic search and automatic embeddings
+- **GPU Reflex Engine** for sub-millisecond pattern matching
+- **Geometric Access Control** using ray-geometry intersection tests
 
 ---
 
@@ -95,6 +100,8 @@ cd RayOS
 ├────────────────────┬────────────────────────────────────────┤
 │  System 1 (GPU)    │   System 2 (LLM)                       │
 │  Real-time reflex  │   Cognitive reasoning                  │
+│  Pattern matching  │   Natural language                     │
+│  Geometric ACL     │   Decision making                      │
 └────────────────────┴────────────────────────────────────────┘
          │                        │
          └───────────┬────────────┘
@@ -110,6 +117,12 @@ cd RayOS
 │ Native  │   │   Linux     │   │  Windows    │
 │   UI    │   │   Guest     │   │   Guest     │
 └─────────┘   └─────────────┘   └─────────────┘
+                     │
+                     ▼
+            ┌─────────────────┐
+            │  Neural FS      │
+            │ (Semantic Store)│
+            └─────────────────┘
 ```
 
 ### Core Components
@@ -118,9 +131,12 @@ cd RayOS
 |-----------|-------------|
 | **Bootloader** | UEFI bootloader for x86_64/aarch64 |
 | **Kernel** | Bare-metal Rust kernel with bicameral design |
+| **System 1** | GPU compute shaders for reflexes, pattern matching, geometric logic |
+| **System 2** | Resident LLM for reasoning and natural language |
 | **UI Framework** | Native windowing, compositing, input |
 | **Conductor** | Task orchestration and scheduling |
 | **VMM** | In-kernel hypervisor for guest VMs |
+| **Neural FS** | Semantic file system with vector embeddings |
 
 ---
 
@@ -131,11 +147,20 @@ RayOS/
 ├── crates/                    # Rust workspace
 │   ├── kernel-bare/          # Main kernel
 │   │   └── src/ui/           # UI Framework
+│   ├── kernel/               # Kernel library
+│   │   ├── src/system1/      # GPU reflexes & pattern matching
+│   │   ├── src/system2/      # LLM reasoning
+│   │   └── src/geometry_logic/ # Logic as geometry (ACL)
 │   ├── bootloader/           # UEFI bootloader
-│   ├── volume/               # Storage management
+│   ├── volume/               # Neural File System
+│   │   ├── src/gpu_search.rs # GPU similarity search
+│   │   ├── src/multimodal.rs # Multi-modal embedder
+│   │   └── src/epiphany.rs   # Connection discovery
 │   └── cortex/               # AI/LLM components
 ├── scripts/                   # Build and test scripts
 ├── docs/                      # Documentation
+│   ├── ROADMAP.md            # Development roadmap
+│   ├── SENTIENT_SUBSTRATE.md # Bicameral architecture design
 │   ├── development/          # Developer guides
 │   └── phases/               # Historical phase reports
 └── build/                     # Build artifacts (generated)
@@ -150,6 +175,8 @@ RayOS/
 | [Getting Started](docs/QUICKSTART.md) | First-time setup guide |
 | [Build Guide](docs/BUILD_GUIDE.md) | Detailed build instructions |
 | [System Architecture](docs/SYSTEM_ARCHITECTURE.md) | Technical architecture |
+| [Sentient Substrate](docs/SENTIENT_SUBSTRATE.md) | Bicameral kernel design |
+| [Roadmap](docs/ROADMAP.md) | Development roadmap |
 | [UI Framework](docs/RAYOS_UI_FRAMEWORK.md) | Native UI documentation |
 | [App Development](docs/development/APP_DEVELOPMENT.md) | Building RayOS apps |
 | [Contributing](docs/development/CONTRIBUTING.md) | Contribution guidelines |
