@@ -68,7 +68,7 @@ Core architectural components for RayOS as a cognitive substrate. See [SENTIENT_
 | Task | Status | Description |
 |------|--------|-------------|
 | RT Core Logic Encoding | ✅ Done | Encode conditionals as ray-geometry intersections |
-| BVH Decision Trees | 📋 Research | Map decision trees to bounding volume hierarchies |
+| BVH Decision Trees | ✅ Done | Map decision trees to bounding volume hierarchies |
 | Access Control Geometry | ✅ Done | GPU compute shader for geometric permission hit tests |
 | Ray-Based State Access | 📋 Research | Variables as spatial structures |
 | Unified Perception/Logic Pipeline | ✅ Done | Single GPU pipeline for perception, logic, and semantics |
