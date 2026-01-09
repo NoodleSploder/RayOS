@@ -2811,29 +2811,13 @@ pub fn fs_create_file(path: &str) -> Result<u32, u32> {
         return Err(1);  // Invalid filename
     }
 
-    // Full implementation steps:
-    // 1. Navigate to parent directory (for now assume root)
-    // 2. Check if file already exists (avoid duplicates)
-    // 3. Allocate a new cluster from FAT (placeholder cluster 2)
-    // 4. Create directory entry using FAT32FileSystem helper
-    // 5. Write directory entry to root directory sector
-    // 6. Flush FAT table changes to disk
-    // 7. Flush directory changes to disk
-
-    // Create directory entry structure
-    let _entry_bytes = FAT32FileSystem::create_directory_entry(filename, 2, 0, false);
-
-    // TODO: Implement disk I/O
-    // write_root_directory_entry(&entry_bytes)?;
-    // flush_fat_table()?;
-    //
-    // Current limitation: requires mutable block device reference
-    // Workaround: entries are created and validated, but not yet persisted
-    // The entry_bytes buffer is ready to write once filesystem has block device access
-
-    // For now: return success without persisting to disk
-    // The entry structure is created correctly and can be validated
-    Ok(0)
+    // Use in-memory filesystem
+    let result = memfs_create_file(path);
+    if result == 0 {
+        Ok(0)
+    } else {
+        Err(result)
+    }
 }
 
 /// Read file contents from filesystem
@@ -2852,89 +2836,42 @@ pub fn fs_read_file(path: &str, buffer: &mut [u8]) -> Result<u32, u32> {
         return Err(2);  // No buffer provided
     }
 
-    // Full implementation steps:
-    // 1. Find file in root directory using find_file_in_root()
-    //    - Get starting cluster and file size
-    // 2. If file not found, return error
-    // 3. Calculate clusters needed for file (ceil(file_size / bytes_per_cluster))
-    // 4. Read cluster chain from FAT:
-    //    - Start with starting cluster
-    //    - For each cluster:
-    //      - Read cluster data using read_cluster()
-    //      - Copy to buffer (up to buffer size)
-    //      - Call next_cluster_in_chain() to get next cluster
-    // 5. Stop when:
-    //    - Buffer is full
-    //    - End of file reached (FAT entry = 0x0FFFFFFF)
-    // 6. Return total bytes read
-
-    // TODO: Implement with disk I/O:
-    // - Call FAT32FileSystem helper methods to read FAT and clusters
-    // - Handle partial reads
-    // - Copy data to user buffer
-
-    // For now: placeholder
-    // Real implementation would read file contents and copy to buffer
-    Ok(0)  // 0 bytes read (placeholder)
+    // Use in-memory filesystem
+    let bytes_read = memfs_read(path, buffer);
+    if bytes_read > 0 || memfs_exists(path) {
+        Ok(bytes_read)
+    } else {
+        Err(3)  // File not found
+    }
 }
 
 /// Write data to a file
 /// Returns number of bytes written or error code
-pub fn fs_write_file(_path: &str, data: &[u8]) -> Result<u32, u32> {
-    // TODO: Implement actual file writing
-    // 1. Find file in filesystem
-    // 2. Get current file size and starting cluster
-    // 3. Calculate clusters needed for new data
-    // 4. Allocate additional clusters if needed
-    // 5. Write data to cluster chain:
-    //    - For each cluster:
-    //      - Write up to cluster_size bytes of data
-    //      - Update FAT entry to point to next cluster
-    // 6. Update file size in directory entry
-    // 7. Flush FAT and directory changes
-
-    // Full implementation steps:
-    // 1. Find file in root directory:
-    //    - Use find_file_in_root() to locate file
-    //    - If not found, return error
-    // 2. Get current file size and starting cluster from directory entry
-    // 3. Calculate clusters needed:
-    //    - new_clusters = ceil((current_size + write_data.len()) / bytes_per_cluster)
-    //    - additional = new_clusters - current_clusters
-    // 4. Allocate additional clusters:
-    //    - Call allocate_cluster() for each new cluster
-    //    - Link new cluster to end of chain using link_clusters()
-    // 5. Write data cluster by cluster:
-    //    - For each cluster in chain:
-    //      - Calculate bytes to write (min of remaining data and cluster_size)
-    //      - Call write_cluster() to write data
-    //      - Update cluster position for next iteration
-    // 6. Update directory entry:
-    //    - Recalculate high/low cluster words
-    //    - Update file size field
-    //    - Call write_directory_entry()
-    // 7. Flush FAT and directory changes
-
-    // TODO: Implement with disk I/O:
-    // - Use FAT32FileSystem methods to allocate clusters
-    // - Use block device to write cluster data
-    // - Update directory entries with new size
-
-    let bytes_written = data.len() as u32;
-    Ok(bytes_written)  // Placeholder: return data length
+pub fn fs_write_file(path: &str, data: &[u8]) -> Result<u32, u32> {
+    // Use in-memory filesystem
+    let bytes_written = memfs_write(path, data);
+    if bytes_written > 0 || data.is_empty() {
+        Ok(bytes_written)
+    } else {
+        // File might not exist, try to create and write
+        if memfs_create_file(path) == 0 {
+            Ok(memfs_write(path, data))
+        } else {
+            Err(1)  // Failed to write
+        }
+    }
 }
 
 /// Delete a file from the filesystem
 /// Returns success or error code
-pub fn fs_delete_file(_path: &str) -> Result<(), u32> {
-    // TODO: Implement actual file deletion
-    // 1. Find file in filesystem
-    // 2. Get starting cluster from directory entry
-    // 3. Walk FAT chain and free all clusters
-    // 4. Mark directory entry as unused (0xE5 in first byte)
-    // 5. Flush FAT and directory changes
-
-    Ok(())
+pub fn fs_delete_file(path: &str) -> Result<(), u32> {
+    // Use in-memory filesystem
+    let result = memfs_delete(path);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(result)
+    }
 }
 
 /// Create a directory
@@ -2948,29 +2885,13 @@ pub fn fs_mkdir(path: &str) -> Result<(), u32> {
         return Err(1);  // Invalid directory name
     }
 
-    // Full implementation steps:
-    // 1. Navigate to parent (for now assume root)
-    // 2. Check if directory already exists
-    // 3. Allocate cluster for new directory (placeholder: cluster 3)
-    // 4. Create . and .. entries in new directory
-    // 5. Create directory entry in parent using FAT32FileSystem helper
-    // 6. Write entries to disk
-    // 7. Flush FAT and directory changes
-
-    // Create directory entry structure
-    let _entry_bytes = FAT32FileSystem::create_directory_entry(dirname, 3, 0, true);
-
-    // TODO: Implement disk I/O
-    // write_root_directory_entry(&entry_bytes)?;
-    // create_dot_entries(cluster_3)?;
-    // flush_fat_table()?;
-    //
-    // Current limitation: requires mutable block device reference
-    // The directory entry is created and formatted correctly
-
-    // For now: return success without persisting to disk
-    // Real implementation would write entry_bytes to root directory
-    Ok(())
+    // Use in-memory filesystem
+    let result = memfs_create_dir(path);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(result)
+    }
 }
 
 /// List directory contents (root directory only for now)
@@ -2982,25 +2903,12 @@ pub fn fs_list_dir(path: &str) -> Result<u32, u32> {
         return Err(2);  // Not supported (non-root directories)
     }
 
-    // Full implementation steps:
-    // 1. Get root directory starting sector:
-    //    root_sector = reserved_sectors + (fat_size * num_fats)
-    // 2. Calculate entries per sector: bytes_per_sector / 32
-    // 3. For each root directory sector:
-    //    - Read sector from disk
-    //    - Parse each 32-byte entry
-    //    - For each valid entry (first byte != 0x00 and != 0xE5):
-    //      - Extract filename (8.3 format)
-    //      - Extract attributes (0x10 = directory)
-    //      - Extract size and cluster
-    //      - Format and display
-    // 4. Count total valid entries
-    //
-    // TODO: Implement with block device access
-    // This requires shell integration to display the results
-    // For now, return placeholder count
-
-    Ok(0)  // Placeholder: 0 entries listed
+    // Use in-memory filesystem - count entries
+    let mut count = 0u32;
+    memfs_list_files(|_name, _is_dir, _size| {
+        count += 1;
+    });
+    Ok(count)
 }
 
 /// Remove a directory (must be empty)
@@ -3014,18 +2922,16 @@ pub fn fs_rmdir(path: &str) -> Result<(), u32> {
         return Err(1);  // Invalid directory name
     }
 
-    // Full implementation steps:
-    // 1. Find directory in parent (root)
-    // 2. Verify it only contains . and .. entries (is empty)
-    // 3. Get cluster number from directory entry
-    // 4. Free the cluster in FAT (mark as free: 0x00000000)
-    // 5. Remove directory entry from parent
-    // 6. Flush FAT and parent directory changes
-    //
-    // TODO: Implement with block device access
-    // Requires scanning directory cluster for . and .. entries only
-
-    Ok(())
+    // Use in-memory filesystem
+    if !memfs_is_dir(path) {
+        return Err(2);  // Not a directory
+    }
+    let result = memfs_delete(path);
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(result)
+    }
 }
 
 /// Copy file source to destination
@@ -3041,37 +2947,24 @@ pub fn fs_copy_file(source: &str, dest: &str) -> Result<u32, u32> {
         return Err(2);  // Source and destination are the same
     }
 
-    // Full implementation steps:
-    // 1. Open source file for reading:
-    //    - Find file in root directory
-    //    - Get starting cluster and file size
-    // 2. Create destination file:
-    //    - Create directory entry
-    //    - Allocate initial cluster
-    // 3. Copy data cluster by cluster:
-    //    - Read cluster from source
-    //    - Allocate new cluster for destination
-    //    - Write data to destination cluster
-    //    - Link clusters in FAT chain
-    // 4. Update destination file metadata:
-    //    - Set file size to match source
-    //    - Set creation/modification timestamps
-    // 5. Flush FAT and directory changes
-    //
-    // TODO: Implement with block device access
-    // Requires file reading capability (Phase earlier in implementation)
-
-    Ok(0)  // Placeholder: 0 bytes copied
+    // Use in-memory filesystem
+    let result = memfs_copy(source, dest);
+    if result == 0 {
+        Ok(memfs_size(dest))
+    } else {
+        Err(result)
+    }
 }
 
 /// Get file size
 /// Returns file size or error code
-pub fn fs_file_size(_path: &str) -> Result<u32, u32> {
-    // TODO: Implement file size query
-    // 1. Find file in filesystem
-    // 2. Return file_size field from directory entry
-
-    Ok(0)
+pub fn fs_file_size(path: &str) -> Result<u32, u32> {
+    // Use in-memory filesystem
+    if memfs_exists(path) {
+        Ok(memfs_size(path))
+    } else {
+        Err(1)  // Not found
+    }
 }
 
 /// Helper: Check if path exists and what type (file, dir, or none)
@@ -7009,6 +6902,398 @@ fn volume_log_s2(input: &[u8]) {
     if n != 0 {
         volume_log_append(RVOL_KIND_S2, &tmp[..n]);
     }
+}
+
+//=============================================================================
+// In-Memory FAT32-like Filesystem for Phase 9A Task 2
+//=============================================================================
+// This provides working file system operations for shell commands.
+// Data persists in kernel memory until reboot. Later can be backed by VirtIO.
+
+/// Maximum number of files in the in-memory filesystem
+const MEMFS_MAX_FILES: usize = 128;
+/// Maximum file size (64KB per file)
+const MEMFS_MAX_FILE_SIZE: usize = 65536;
+/// Maximum filename length
+const MEMFS_MAX_NAME_LEN: usize = 64;
+
+/// In-memory file entry
+#[derive(Clone)]
+struct MemFsEntry {
+    /// Filename (null-terminated)
+    name: [u8; MEMFS_MAX_NAME_LEN],
+    /// Is this a directory?
+    is_dir: bool,
+    /// Is this entry in use?
+    in_use: bool,
+    /// File size in bytes
+    size: u32,
+    /// File data (index into MEMFS_DATA)
+    data_index: usize,
+}
+
+impl MemFsEntry {
+    const fn empty() -> Self {
+        Self {
+            name: [0u8; MEMFS_MAX_NAME_LEN],
+            is_dir: false,
+            in_use: false,
+            size: 0,
+            data_index: 0,
+        }
+    }
+}
+
+/// Global in-memory filesystem state
+static MEMFS_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static mut MEMFS_ENTRIES: [MemFsEntry; MEMFS_MAX_FILES] = [const { MemFsEntry::empty() }; MEMFS_MAX_FILES];
+static mut MEMFS_DATA: [[u8; MEMFS_MAX_FILE_SIZE]; MEMFS_MAX_FILES] = [[0u8; MEMFS_MAX_FILE_SIZE]; MEMFS_MAX_FILES];
+
+/// Initialize the in-memory filesystem
+fn memfs_init() {
+    if MEMFS_INITIALIZED.load(Ordering::Relaxed) {
+        return;
+    }
+    // Already zeroed by static initialization
+    MEMFS_INITIALIZED.store(true, Ordering::Relaxed);
+}
+
+/// Convert a path to just the filename (strip directories)
+fn memfs_basename(path: &str) -> &str {
+    // Find last '/' and return everything after it
+    let bytes = path.as_bytes();
+    let mut last_slash = 0;
+    for i in 0..bytes.len() {
+        if bytes[i] == b'/' {
+            last_slash = i + 1;
+        }
+    }
+    if last_slash >= bytes.len() {
+        path
+    } else {
+        // Safe because we're slicing at ASCII '/'
+        &path[last_slash..]
+    }
+}
+
+/// Copy filename to fixed-size buffer
+fn memfs_copy_name(dst: &mut [u8; MEMFS_MAX_NAME_LEN], src: &str) {
+    let src_bytes = src.as_bytes();
+    let copy_len = core::cmp::min(src_bytes.len(), MEMFS_MAX_NAME_LEN - 1);
+    for i in 0..copy_len {
+        dst[i] = src_bytes[i];
+    }
+    for i in copy_len..MEMFS_MAX_NAME_LEN {
+        dst[i] = 0;
+    }
+}
+
+/// Compare filename with entry name
+fn memfs_name_matches(entry_name: &[u8; MEMFS_MAX_NAME_LEN], name: &str) -> bool {
+    let name_bytes = name.as_bytes();
+    if name_bytes.is_empty() {
+        return false;
+    }
+    for i in 0..MEMFS_MAX_NAME_LEN {
+        let entry_byte = entry_name[i];
+        if i >= name_bytes.len() {
+            // Check that entry name is also terminated
+            return entry_byte == 0;
+        }
+        if entry_byte != name_bytes[i] {
+            return false;
+        }
+    }
+    // Entry name is full length (rare)
+    name_bytes.len() == MEMFS_MAX_NAME_LEN
+}
+
+/// Find a file/directory by name
+/// Returns index or usize::MAX if not found
+fn memfs_find(name: &str) -> usize {
+    let basename = memfs_basename(name);
+    if basename.is_empty() {
+        return usize::MAX;
+    }
+    unsafe {
+        for i in 0..MEMFS_MAX_FILES {
+            if MEMFS_ENTRIES[i].in_use && memfs_name_matches(&MEMFS_ENTRIES[i].name, basename) {
+                return i;
+            }
+        }
+    }
+    usize::MAX
+}
+
+/// Find a free entry slot
+/// Returns index or usize::MAX if full
+fn memfs_find_free() -> usize {
+    unsafe {
+        for i in 0..MEMFS_MAX_FILES {
+            if !MEMFS_ENTRIES[i].in_use {
+                return i;
+            }
+        }
+    }
+    usize::MAX
+}
+
+/// Create a new file (empty)
+/// Returns 0 on success, error code on failure
+pub fn memfs_create_file(path: &str) -> u32 {
+    memfs_init();
+    let basename = memfs_basename(path);
+    if basename.is_empty() || basename.len() >= MEMFS_MAX_NAME_LEN {
+        return 1; // Invalid name
+    }
+
+    // Check if already exists
+    if memfs_find(basename) != usize::MAX {
+        return 2; // Already exists
+    }
+
+    // Find free slot
+    let idx = memfs_find_free();
+    if idx == usize::MAX {
+        return 3; // No space
+    }
+
+    unsafe {
+        MEMFS_ENTRIES[idx].in_use = true;
+        MEMFS_ENTRIES[idx].is_dir = false;
+        MEMFS_ENTRIES[idx].size = 0;
+        MEMFS_ENTRIES[idx].data_index = idx;
+        memfs_copy_name(&mut MEMFS_ENTRIES[idx].name, basename);
+        // Clear data
+        for j in 0..MEMFS_MAX_FILE_SIZE {
+            MEMFS_DATA[idx][j] = 0;
+        }
+    }
+    0 // Success
+}
+
+/// Create a new directory
+/// Returns 0 on success, error code on failure
+pub fn memfs_create_dir(path: &str) -> u32 {
+    memfs_init();
+    let basename = memfs_basename(path);
+    if basename.is_empty() || basename.len() >= MEMFS_MAX_NAME_LEN {
+        return 1; // Invalid name
+    }
+
+    // Check if already exists
+    if memfs_find(basename) != usize::MAX {
+        return 2; // Already exists
+    }
+
+    // Find free slot
+    let idx = memfs_find_free();
+    if idx == usize::MAX {
+        return 3; // No space
+    }
+
+    unsafe {
+        MEMFS_ENTRIES[idx].in_use = true;
+        MEMFS_ENTRIES[idx].is_dir = true;
+        MEMFS_ENTRIES[idx].size = 0;
+        MEMFS_ENTRIES[idx].data_index = idx;
+        memfs_copy_name(&mut MEMFS_ENTRIES[idx].name, basename);
+    }
+    0 // Success
+}
+
+/// Delete a file or directory
+/// Returns 0 on success, error code on failure
+pub fn memfs_delete(path: &str) -> u32 {
+    memfs_init();
+    let idx = memfs_find(path);
+    if idx == usize::MAX {
+        return 1; // Not found
+    }
+
+    unsafe {
+        MEMFS_ENTRIES[idx].in_use = false;
+        MEMFS_ENTRIES[idx].size = 0;
+        // Clear data for security
+        for j in 0..MEMFS_MAX_FILE_SIZE {
+            MEMFS_DATA[idx][j] = 0;
+        }
+    }
+    0 // Success
+}
+
+/// Write data to a file (overwrites existing content)
+/// Returns bytes written or 0 on failure
+pub fn memfs_write(path: &str, data: &[u8]) -> u32 {
+    memfs_init();
+    let idx = memfs_find(path);
+    if idx == usize::MAX {
+        return 0; // Not found
+    }
+
+    unsafe {
+        if MEMFS_ENTRIES[idx].is_dir {
+            return 0; // Can't write to directory
+        }
+
+        let write_len = core::cmp::min(data.len(), MEMFS_MAX_FILE_SIZE);
+        let data_idx = MEMFS_ENTRIES[idx].data_index;
+        for i in 0..write_len {
+            MEMFS_DATA[data_idx][i] = data[i];
+        }
+        // Zero remaining
+        for i in write_len..MEMFS_MAX_FILE_SIZE {
+            MEMFS_DATA[data_idx][i] = 0;
+        }
+        MEMFS_ENTRIES[idx].size = write_len as u32;
+        write_len as u32
+    }
+}
+
+/// Append data to a file
+/// Returns bytes written or 0 on failure
+pub fn memfs_append(path: &str, data: &[u8]) -> u32 {
+    memfs_init();
+    let idx = memfs_find(path);
+    if idx == usize::MAX {
+        return 0; // Not found
+    }
+
+    unsafe {
+        if MEMFS_ENTRIES[idx].is_dir {
+            return 0; // Can't write to directory
+        }
+
+        let current_size = MEMFS_ENTRIES[idx].size as usize;
+        let space_left = MEMFS_MAX_FILE_SIZE.saturating_sub(current_size);
+        let write_len = core::cmp::min(data.len(), space_left);
+        
+        if write_len == 0 {
+            return 0; // No space
+        }
+
+        let data_idx = MEMFS_ENTRIES[idx].data_index;
+        for i in 0..write_len {
+            MEMFS_DATA[data_idx][current_size + i] = data[i];
+        }
+        MEMFS_ENTRIES[idx].size = (current_size + write_len) as u32;
+        write_len as u32
+    }
+}
+
+/// Read file contents
+/// Returns bytes read
+pub fn memfs_read(path: &str, buffer: &mut [u8]) -> u32 {
+    memfs_init();
+    let idx = memfs_find(path);
+    if idx == usize::MAX {
+        return 0; // Not found
+    }
+
+    unsafe {
+        if MEMFS_ENTRIES[idx].is_dir {
+            return 0; // Can't read directory
+        }
+
+        let file_size = MEMFS_ENTRIES[idx].size as usize;
+        let read_len = core::cmp::min(core::cmp::min(file_size, buffer.len()), MEMFS_MAX_FILE_SIZE);
+        let data_idx = MEMFS_ENTRIES[idx].data_index;
+        for i in 0..read_len {
+            buffer[i] = MEMFS_DATA[data_idx][i];
+        }
+        read_len as u32
+    }
+}
+
+/// Get file size
+/// Returns size or 0 if not found
+pub fn memfs_size(path: &str) -> u32 {
+    memfs_init();
+    let idx = memfs_find(path);
+    if idx == usize::MAX {
+        return 0;
+    }
+    unsafe { MEMFS_ENTRIES[idx].size }
+}
+
+/// Check if path exists
+pub fn memfs_exists(path: &str) -> bool {
+    memfs_init();
+    memfs_find(path) != usize::MAX
+}
+
+/// Check if path is a directory
+pub fn memfs_is_dir(path: &str) -> bool {
+    memfs_init();
+    let idx = memfs_find(path);
+    if idx == usize::MAX {
+        return false;
+    }
+    unsafe { MEMFS_ENTRIES[idx].is_dir }
+}
+
+/// List all files (for 'ls' command)
+/// Calls callback for each entry
+pub fn memfs_list_files(mut callback: impl FnMut(&str, bool, u32)) {
+    memfs_init();
+    unsafe {
+        for i in 0..MEMFS_MAX_FILES {
+            if MEMFS_ENTRIES[i].in_use {
+                // Convert name to string
+                let mut len = 0;
+                for j in 0..MEMFS_MAX_NAME_LEN {
+                    if MEMFS_ENTRIES[i].name[j] == 0 {
+                        break;
+                    }
+                    len = j + 1;
+                }
+                if let Ok(name) = core::str::from_utf8(&MEMFS_ENTRIES[i].name[..len]) {
+                    callback(name, MEMFS_ENTRIES[i].is_dir, MEMFS_ENTRIES[i].size);
+                }
+            }
+        }
+    }
+}
+
+/// Copy a file
+/// Returns 0 on success, error code on failure
+pub fn memfs_copy(src_path: &str, dst_path: &str) -> u32 {
+    memfs_init();
+    
+    // Find source
+    let src_idx = memfs_find(src_path);
+    if src_idx == usize::MAX {
+        return 1; // Source not found
+    }
+
+    unsafe {
+        if MEMFS_ENTRIES[src_idx].is_dir {
+            return 2; // Can't copy directories
+        }
+
+        // Create destination
+        let result = memfs_create_file(dst_path);
+        if result != 0 && result != 2 {
+            // 2 = already exists, which is OK for copy (overwrite)
+            return 3; // Can't create destination
+        }
+
+        let dst_idx = memfs_find(dst_path);
+        if dst_idx == usize::MAX {
+            return 4; // Destination not found after create
+        }
+
+        // Copy data
+        let src_data_idx = MEMFS_ENTRIES[src_idx].data_index;
+        let dst_data_idx = MEMFS_ENTRIES[dst_idx].data_index;
+        let size = MEMFS_ENTRIES[src_idx].size as usize;
+        
+        for i in 0..size {
+            MEMFS_DATA[dst_data_idx][i] = MEMFS_DATA[src_data_idx][i];
+        }
+        MEMFS_ENTRIES[dst_idx].size = size as u32;
+    }
+    0 // Success
 }
 
 fn parse_u64_dec(bytes: &[u8]) -> Option<u64> {

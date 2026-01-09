@@ -184,6 +184,8 @@ impl Shell {
             self.cmd_cat(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"cp") {
             self.cmd_cp(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"write") {
+            self.cmd_write(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"test") {
             self.cmd_test(&mut output);
         } else if self.cmd_matches(cmd, b"disk") {
@@ -399,11 +401,12 @@ impl Shell {
         let _ = writeln!(output, "  info          Show system info");
         let _ = writeln!(output, "  sysctl [key]  View system configuration");
         let _ = writeln!(output, "");
-        let _ = writeln!(output, "File Operations (Phase 9A Task 3: Read/Write/Path):");
+        let _ = writeln!(output, "File Operations (Phase 9A Task 2: In-Memory FS):");
         let _ = writeln!(output, "  touch <file>  Create new file");
         let _ = writeln!(output, "  mkdir <dir>   Create directory");
-        let _ = writeln!(output, "  rm <file>     Delete file");
+        let _ = writeln!(output, "  rm <file>     Delete file or directory");
         let _ = writeln!(output, "  cat <file>    Display file contents");
+        let _ = writeln!(output, "  write <file> <content>  Write content to file");
         let _ = writeln!(output, "  cp <src> <dst>  Copy file");
         let _ = writeln!(output, "");
         let _ = writeln!(output, "System Integration (Phase 9B):");
@@ -613,13 +616,42 @@ impl Shell {
         let _ = write!(output, "Contents of ");
         let _ = output.write_all(&self.current_dir[..self.current_dir_len]);
         let _ = writeln!(output, ":");
-        let _ = writeln!(output, "TYPE  ATTR  SIZE      NAME");
-        let _ = writeln!(output, "----  ----  --------  --------");
-        let _ = writeln!(output, "DIR   d---  0         boot.bin");
-        let _ = writeln!(output, "FILE  -a--  4096      kernel");
-        let _ = writeln!(output, "DIR   d---  0         system");
-        let _ = writeln!(output, "DIR   d---  0         users");
-        let _ = writeln!(output, "\nAttribute codes: (r)ead-only, (h)idden, (s)ystem, (a)rchive");
+        let _ = writeln!(output, "TYPE  SIZE      NAME");
+        let _ = writeln!(output, "----  --------  --------");
+        
+        // Use in-memory filesystem to list files
+        // Note: We have to capture entries then print, since closures in no_std are limited
+        let mut count = 0u32;
+        
+        // Use the global memfs directly
+        unsafe {
+            for i in 0..crate::MEMFS_MAX_FILES {
+                if crate::MEMFS_ENTRIES[i].in_use {
+                    // Get name length
+                    let mut name_len = 0;
+                    for j in 0..crate::MEMFS_MAX_NAME_LEN {
+                        if crate::MEMFS_ENTRIES[i].name[j] == 0 {
+                            break;
+                        }
+                        name_len = j + 1;
+                    }
+                    
+                    if name_len > 0 {
+                        let type_str = if crate::MEMFS_ENTRIES[i].is_dir { "DIR " } else { "FILE" };
+                        let size = crate::MEMFS_ENTRIES[i].size;
+                        let _ = write!(output, "{}  {:8}  ", type_str, size);
+                        let _ = output.write_all(&crate::MEMFS_ENTRIES[i].name[..name_len]);
+                        let _ = writeln!(output);
+                        count += 1;
+                    }
+                }
+            }
+        }
+        
+        if count == 0 {
+            let _ = writeln!(output, "(empty directory)");
+        }
+        let _ = writeln!(output, "\n{} items", count);
     }
 
     fn cmd_clear(&self, output: &mut ShellOutput) {
@@ -734,11 +766,27 @@ impl Shell {
             end += 1;
         }
 
-        let dirname = &args[start..end];
-        let _ = write!(output, "Creating directory: ");
-        let _ = output.write_all(dirname);
-        let _ = writeln!(output, "");
-        let _ = writeln!(output, "(Directory creation implemented in filesystem layer)");
+        let dirname_bytes = &args[start..end];
+        
+        // Try to convert to UTF-8 string
+        let dirname_str = match core::str::from_utf8(dirname_bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = writeln!(output, "Error: dirname contains invalid UTF-8");
+                return;
+            }
+        };
+        
+        match super::fs_mkdir(dirname_str) {
+            Ok(()) => {
+                let _ = write!(output, "Created directory: ");
+                let _ = output.write_all(dirname_bytes);
+                let _ = writeln!(output);
+            }
+            Err(code) => {
+                let _ = writeln!(output, "Error creating directory (code: {})", code);
+            }
+        }
     }
 
     fn cmd_rm(&self, output: &mut ShellOutput, args: &[u8]) {
@@ -759,11 +807,27 @@ impl Shell {
             end += 1;
         }
 
-        let filename = &args[start..end];
-        let _ = write!(output, "Deleting file: ");
-        let _ = output.write_all(filename);
-        let _ = writeln!(output, "");
-        let _ = writeln!(output, "(File deletion implemented in filesystem layer)");
+        let filename_bytes = &args[start..end];
+        
+        // Try to convert to UTF-8 string
+        let filename_str = match core::str::from_utf8(filename_bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = writeln!(output, "Error: filename contains invalid UTF-8");
+                return;
+            }
+        };
+        
+        match super::fs_delete_file(filename_str) {
+            Ok(()) => {
+                let _ = write!(output, "Deleted: ");
+                let _ = output.write_all(filename_bytes);
+                let _ = writeln!(output);
+            }
+            Err(code) => {
+                let _ = writeln!(output, "Error deleting file (code: {})", code);
+            }
+        }
     }
 
     fn cmd_cat(&self, output: &mut ShellOutput, args: &[u8]) {
@@ -855,13 +919,101 @@ impl Shell {
         }
 
         let destination = &args[end..dest_end];
+        
+        // Convert to strings
+        let source_str = match core::str::from_utf8(source) {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = writeln!(output, "Error: source filename contains invalid UTF-8");
+                return;
+            }
+        };
+        
+        let dest_str = match core::str::from_utf8(destination) {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = writeln!(output, "Error: destination filename contains invalid UTF-8");
+                return;
+            }
+        };
 
-        let _ = write!(output, "Copying ");
-        let _ = output.write_all(source);
-        let _ = write!(output, " to ");
-        let _ = output.write_all(destination);
-        let _ = writeln!(output, "");
-        let _ = writeln!(output, "(File copying implemented in filesystem layer)");
+        match super::fs_copy_file(source_str, dest_str) {
+            Ok(bytes) => {
+                let _ = write!(output, "Copied ");
+                let _ = output.write_all(source);
+                let _ = write!(output, " to ");
+                let _ = output.write_all(destination);
+                let _ = writeln!(output, " ({} bytes)", bytes);
+            }
+            Err(code) => {
+                let _ = writeln!(output, "Error copying file (code: {})", code);
+            }
+        }
+    }
+
+    fn cmd_write(&self, output: &mut ShellOutput, args: &[u8]) {
+        // Parse: write <filename> <content>
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() {
+            let _ = writeln!(output, "Usage: write <filename> <content>");
+            return;
+        }
+
+        // Find end of filename
+        let mut end = start;
+        while end < args.len() && args[end] != b' ' && args[end] != b'\t' && args[end] != 0 {
+            end += 1;
+        }
+
+        let filename = &args[start..end];
+
+        // Find start of content
+        while end < args.len() && (args[end] == b' ' || args[end] == b'\t') {
+            end += 1;
+        }
+
+        if end >= args.len() || args[end] == 0 {
+            let _ = writeln!(output, "Usage: write <filename> <content>");
+            return;
+        }
+
+        // Find end of content (to null terminator or end of args)
+        let mut content_end = end;
+        while content_end < args.len() && args[content_end] != 0 {
+            content_end += 1;
+        }
+
+        let content = &args[end..content_end];
+
+        // Convert filename to string
+        let filename_str = match core::str::from_utf8(filename) {
+            Ok(s) => s,
+            Err(_) => {
+                let _ = writeln!(output, "Error: filename contains invalid UTF-8");
+                return;
+            }
+        };
+
+        // Create file if it doesn't exist
+        if !super::memfs_exists(filename_str) {
+            let _ = super::memfs_create_file(filename_str);
+        }
+
+        // Write content
+        match super::fs_write_file(filename_str, content) {
+            Ok(bytes) => {
+                let _ = write!(output, "Wrote {} bytes to ", bytes);
+                let _ = output.write_all(filename);
+                let _ = writeln!(output);
+            }
+            Err(code) => {
+                let _ = writeln!(output, "Error writing file (code: {})", code);
+            }
+        }
     }
 
     fn cmd_test(&self, output: &mut ShellOutput) {
