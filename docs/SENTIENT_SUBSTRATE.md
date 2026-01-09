@@ -315,7 +315,7 @@ System 1 (GPU compute shaders) naturally interfaces with the geometric logic eng
 | System 2 (LLM) | ✅ Implemented | Resident inference in kernel |
 | System 1 (Reflexes) | ✅ Implemented | GPU compute shader pattern matching, reflexes, attention signals |
 | Bicameral Bridge | ✅ Implemented | Attention buffer protocol with upward/downward signals |
-| Logic as Geometry | 🟡 Partial | Access control geometry implemented; BVH/RT core research ongoing |
+| Logic as Geometry | ✅ Implemented | Conditionals as ray-geometry intersections with GPU compute |
 | Access Control Geometry | ✅ Implemented | Permissions as GPU geometric hit tests |
 | Unified Pipeline | ✅ Implemented | Single dispatch for perception, logic, and semantic stages |
 | Vector Store | ✅ Implemented | HNSW index with O(log n) ANN search |

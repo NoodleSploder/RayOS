@@ -17,13 +17,30 @@
 //! ## Modules
 //!
 //! - `access_control` - Permissions as geometric hit tests
+//! - `logic_encoding` - RT Core logic: conditionals as ray-geometry intersections
 //! - `decision_tree` - BVH-encoded decision trees (planned)
 //! - `state_geometry` - Variables as spatial structures (planned)
 
 pub mod access_control;
+pub mod logic_encoding;
 
 pub use access_control::{
     AccessControlGeometry, AccessQuery, AccessResult, AccessDecision,
     GeometricACL, PrincipalGeometry, ResourceGeometry, PermissionMesh,
     ACLScene, ACLRay, ACLHit, AccessStats,
+};
+
+pub use logic_encoding::{
+    // Core types
+    ConditionGeometry, LogicRay, LogicResult, LogicScene, LogicStats,
+    // Condition types
+    ThresholdOp, CompoundOp, StateVec3,
+    // GPU types
+    GpuCondition,
+    // Builder
+    ConditionBuilder,
+    // Constants
+    MAX_CONDITIONS, MAX_LOGIC_RAYS, MAX_CONDITION_DEPTH,
+    // Shader
+    LOGIC_ENCODING_SHADER,
 };
