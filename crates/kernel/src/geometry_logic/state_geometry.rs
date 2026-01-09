@@ -206,22 +206,22 @@ fn distance_to_var(origin: Vec3, v: StateVar) -> f32 {
 @compute @workgroup_size(256)
 fn state_read_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let req_idx = global_id.x;
-    
+
     if (req_idx >= config.num_reads) {
         return;
     }
-    
+
     let req = read_requests[req_idx];
     let v = find_var(req.var_id);
-    
+
     var result = ReadResult(req.request_id, req.var_id, 0.0, 0u, 0.0, 0u, 0u, 0u);
-    
+
     if (v.id == 0u) {
         // Variable not found
         read_results[req_idx] = result;
         return;
     }
-    
+
     switch (v.var_type) {
         case VAR_SCALAR: {
             result.value = read_scalar(v);
@@ -239,10 +239,10 @@ fn state_read_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
             result.success = 0u;
         }
     }
-    
+
     // Calculate geometric distance (useful for locality analysis)
     result.distance = distance_to_var(Vec3(0.0, 0.0, 0.0), v);
-    
+
     read_results[req_idx] = result;
 }
 "#;
@@ -582,7 +582,7 @@ impl StateGeometry {
     /// Read a scalar value
     pub fn read_scalar(&self, name: &str) -> Option<f32> {
         self.stats.total_reads.fetch_add(1, AtomicOrdering::Relaxed);
-        
+
         self.variables.get(name).and_then(|v| {
             if v.var_type == VarType::Scalar {
                 Some(v.scalar_value)
@@ -595,7 +595,7 @@ impl StateGeometry {
     /// Read an array element
     pub fn read_array(&self, name: &str, index: usize) -> Option<f32> {
         self.stats.total_reads.fetch_add(1, AtomicOrdering::Relaxed);
-        
+
         self.variables.get(name).and_then(|v| {
             if v.var_type == VarType::Array && index < v.values.len() {
                 Some(v.values[index])
@@ -608,7 +608,7 @@ impl StateGeometry {
     /// Read a struct field by name
     pub fn read_field(&self, var_name: &str, field_name: &str) -> Option<f32> {
         self.stats.total_reads.fetch_add(1, AtomicOrdering::Relaxed);
-        
+
         self.variables.get(var_name).and_then(|v| {
             if v.var_type == VarType::Struct {
                 v.field_names.iter()
@@ -623,7 +623,7 @@ impl StateGeometry {
     /// Read a struct field by index
     pub fn read_field_index(&self, name: &str, index: usize) -> Option<f32> {
         self.stats.total_reads.fetch_add(1, AtomicOrdering::Relaxed);
-        
+
         self.variables.get(name).and_then(|v| {
             if v.var_type == VarType::Struct && index < v.values.len() {
                 Some(v.values[index])
@@ -636,7 +636,7 @@ impl StateGeometry {
     /// Write a scalar value
     pub fn write_scalar(&mut self, name: &str, value: f32) -> bool {
         self.stats.total_writes.fetch_add(1, AtomicOrdering::Relaxed);
-        
+
         if let Some(v) = self.variables.get_mut(name) {
             if v.var_type == VarType::Scalar {
                 v.scalar_value = value;
@@ -649,7 +649,7 @@ impl StateGeometry {
     /// Write an array element
     pub fn write_array(&mut self, name: &str, index: usize, value: f32) -> bool {
         self.stats.total_writes.fetch_add(1, AtomicOrdering::Relaxed);
-        
+
         if let Some(v) = self.variables.get_mut(name) {
             if v.var_type == VarType::Array && index < v.values.len() {
                 v.values[index] = value;
@@ -662,7 +662,7 @@ impl StateGeometry {
     /// Write a struct field by name
     pub fn write_field(&mut self, var_name: &str, field_name: &str, value: f32) -> bool {
         self.stats.total_writes.fetch_add(1, AtomicOrdering::Relaxed);
-        
+
         if let Some(v) = self.variables.get_mut(var_name) {
             if v.var_type == VarType::Struct {
                 if let Some(idx) = v.field_names.iter().position(|n| n == field_name) {
@@ -679,7 +679,7 @@ impl StateGeometry {
     /// Push to stack
     pub fn stack_push(&mut self, name: &str, value: f32) -> bool {
         self.stats.total_writes.fetch_add(1, AtomicOrdering::Relaxed);
-        
+
         if let Some(v) = self.variables.get_mut(name) {
             if v.var_type == VarType::Stack && v.stack_top < v.values.len() {
                 v.values[v.stack_top] = value;
@@ -693,7 +693,7 @@ impl StateGeometry {
     /// Pop from stack
     pub fn stack_pop(&mut self, name: &str) -> Option<f32> {
         self.stats.total_reads.fetch_add(1, AtomicOrdering::Relaxed);
-        
+
         if let Some(v) = self.variables.get_mut(name) {
             if v.var_type == VarType::Stack && v.stack_top > 0 {
                 v.stack_top -= 1;
@@ -706,7 +706,7 @@ impl StateGeometry {
     /// Peek stack top
     pub fn stack_peek(&self, name: &str) -> Option<f32> {
         self.stats.total_reads.fetch_add(1, AtomicOrdering::Relaxed);
-        
+
         self.variables.get(name).and_then(|v| {
             if v.var_type == VarType::Stack && v.stack_top > 0 {
                 Some(v.values[v.stack_top - 1])
@@ -818,7 +818,7 @@ impl StateGeometry {
         for var in self.variables.values() {
             let values_offset = all_values.len() as u32;
             let size = var.values.len() as u32;
-            
+
             all_values.extend(&var.values);
 
             gpu_vars.push(GpuStateVar {
@@ -926,7 +926,7 @@ impl StateLayoutBuilder {
 
     fn next_position(&mut self) -> StatePosition {
         let pos = self.cursor;
-        
+
         match self.strategy {
             LayoutStrategy::Linear => {
                 self.cursor.x += self.spacing;
@@ -949,7 +949,7 @@ impl StateLayoutBuilder {
                 self.cursor.x += self.spacing;
             }
         }
-        
+
         pos
     }
 }

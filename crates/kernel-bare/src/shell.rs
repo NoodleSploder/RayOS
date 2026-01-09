@@ -621,11 +621,11 @@ impl Shell {
         let _ = writeln!(output, ":");
         let _ = writeln!(output, "TYPE  SIZE      NAME");
         let _ = writeln!(output, "----  --------  --------");
-        
+
         // Use in-memory filesystem to list files
         // Note: We have to capture entries then print, since closures in no_std are limited
         let mut count = 0u32;
-        
+
         // Use the global memfs directly
         unsafe {
             for i in 0..crate::MEMFS_MAX_FILES {
@@ -638,7 +638,7 @@ impl Shell {
                         }
                         name_len = j + 1;
                     }
-                    
+
                     if name_len > 0 {
                         let type_str = if crate::MEMFS_ENTRIES[i].is_dir { "DIR " } else { "FILE" };
                         let size = crate::MEMFS_ENTRIES[i].size;
@@ -650,7 +650,7 @@ impl Shell {
                 }
             }
         }
-        
+
         if count == 0 {
             let _ = writeln!(output, "(empty directory)");
         }
@@ -673,7 +673,7 @@ impl Shell {
         // Use the new syscall infrastructure for uname
         use crate::syscalls_extended::Utsname;
         let uname = Utsname::rayos();
-        
+
         // Convert sysname to str
         let sysname = core::str::from_utf8(&uname.sysname)
             .unwrap_or("RayOS")
@@ -687,7 +687,7 @@ impl Shell {
         let machine = core::str::from_utf8(&uname.machine)
             .unwrap_or("x86_64")
             .trim_end_matches('\0');
-        
+
         let _ = writeln!(output, "{} {} ({}) {}", sysname, release, version, machine);
     }
 
@@ -793,7 +793,7 @@ impl Shell {
         }
 
         let dirname_bytes = &args[start..end];
-        
+
         // Try to convert to UTF-8 string
         let dirname_str = match core::str::from_utf8(dirname_bytes) {
             Ok(s) => s,
@@ -802,7 +802,7 @@ impl Shell {
                 return;
             }
         };
-        
+
         match super::fs_mkdir(dirname_str) {
             Ok(()) => {
                 let _ = write!(output, "Created directory: ");
@@ -834,7 +834,7 @@ impl Shell {
         }
 
         let filename_bytes = &args[start..end];
-        
+
         // Try to convert to UTF-8 string
         let filename_str = match core::str::from_utf8(filename_bytes) {
             Ok(s) => s,
@@ -843,7 +843,7 @@ impl Shell {
                 return;
             }
         };
-        
+
         match super::fs_delete_file(filename_str) {
             Ok(()) => {
                 let _ = write!(output, "Deleted: ");
@@ -945,7 +945,7 @@ impl Shell {
         }
 
         let destination = &args[end..dest_end];
-        
+
         // Convert to strings
         let source_str = match core::str::from_utf8(source) {
             Ok(s) => s,
@@ -954,7 +954,7 @@ impl Shell {
                 return;
             }
         };
-        
+
         let dest_str = match core::str::from_utf8(destination) {
             Ok(s) => s,
             Err(_) => {
@@ -1336,7 +1336,7 @@ impl Shell {
         }
 
         let cmd = &args[start..];
-        
+
         if self.cmd_matches(cmd, b"uname") {
             let _ = writeln!(output, "Testing sys_uname...");
             let uname = Utsname::rayos();
@@ -1350,24 +1350,24 @@ impl Shell {
                 .unwrap_or("?").trim_end_matches('\0');
             let machine = core::str::from_utf8(&uname.machine)
                 .unwrap_or("?").trim_end_matches('\0');
-            
+
             let _ = writeln!(output, "  sysname:  {}", sysname);
             let _ = writeln!(output, "  nodename: {}", nodename);
             let _ = writeln!(output, "  release:  {}", release);
             let _ = writeln!(output, "  version:  {}", version);
             let _ = writeln!(output, "  machine:  {}", machine);
             let _ = writeln!(output, "[PASS] sys_uname works correctly");
-            
+
         } else if self.cmd_matches(cmd, b"sysconf") {
             let _ = writeln!(output, "Testing sys_sysconf...");
-            
+
             let tests = [
                 (sysconf_names::_SC_PAGESIZE, "PAGE_SIZE", 4096),
                 (sysconf_names::_SC_OPEN_MAX, "OPEN_MAX", 256),
                 (sysconf_names::_SC_CLK_TCK, "CLK_TCK", 100),
                 (sysconf_names::_SC_NPROCESSORS_ONLN, "NPROCESSORS_ONLN", 1),
             ];
-            
+
             let mut passed = 0;
             for (name, label, expected) in tests.iter() {
                 match sysconf_value(*name) {
@@ -1381,21 +1381,21 @@ impl Shell {
                     }
                 }
             }
-            let _ = writeln!(output, "[{}] sysconf: {}/{} tests passed", 
+            let _ = writeln!(output, "[{}] sysconf: {}/{} tests passed",
                 if passed == tests.len() { "PASS" } else { "PARTIAL" }, passed, tests.len());
-            
+
         } else if self.cmd_matches(cmd, b"time") {
             let _ = writeln!(output, "Testing sys_gettimeofday...");
             let (secs, usecs) = syscall_handlers::current_time();
             let _ = writeln!(output, "  Seconds since boot: {}", secs);
             let _ = writeln!(output, "  Microseconds: {}", usecs);
             let _ = writeln!(output, "[PASS] sys_gettimeofday returns time values");
-            
+
         } else if self.cmd_matches(cmd, b"signal") {
             let _ = writeln!(output, "Testing signal handling...");
             // Initialize process for test
             syscall_init_process(50);
-            
+
             // Test setting a handler
             let result = syscall_handlers::handle_signal(50, signals::SIGTERM, 0x12345678);
             if result.error == 0 {
@@ -1403,7 +1403,7 @@ impl Shell {
             } else {
                 let _ = writeln!(output, "  Set SIGTERM handler: error {} [FAIL]", result.error);
             }
-            
+
             // Test alarm
             let result = syscall_handlers::handle_alarm(50, 60);
             if result.error == 0 {
@@ -1411,13 +1411,13 @@ impl Shell {
             } else {
                 let _ = writeln!(output, "  Set alarm(60): error {} [FAIL]", result.error);
             }
-            
+
             let _ = writeln!(output, "[PASS] Signal handling infrastructure works");
-            
+
         } else if self.cmd_matches(cmd, b"mmap") {
             let _ = writeln!(output, "Testing sys_mmap...");
             syscall_init_process(51);
-            
+
             // Test anonymous mapping
             let result = syscall_handlers::handle_mmap(
                 51,
@@ -1428,10 +1428,10 @@ impl Shell {
                 -1,
                 0
             );
-            
+
             if result.error == 0 && result.value != 0 {
                 let _ = writeln!(output, "  mmap(0, 4096, RW, PRIVATE|ANON): 0x{:x} [OK]", result.value as u64);
-                
+
                 // Test munmap
                 let unmap = syscall_handlers::handle_munmap(51, result.value as u64, 4096);
                 if unmap.error == 0 {
@@ -1441,16 +1441,16 @@ impl Shell {
                 let _ = writeln!(output, "  mmap: error {} [FAIL]", result.error);
             }
             let _ = writeln!(output, "[PASS] Memory mapping syscalls work");
-            
+
         } else if self.cmd_matches(cmd, b"brk") {
             let _ = writeln!(output, "Testing sys_brk...");
             syscall_init_process(52);
-            
+
             // Query current brk
             let result = syscall_handlers::handle_brk(52, 0);
             let old_brk = result.value as u64;
             let _ = writeln!(output, "  Current brk: 0x{:x}", old_brk);
-            
+
             // Set new brk
             let new_addr = old_brk + 0x10000;
             let result = syscall_handlers::handle_brk(52, new_addr);
@@ -1460,20 +1460,20 @@ impl Shell {
                 let _ = writeln!(output, "  Set brk(0x{:x}): got 0x{:x} [WARN]", new_addr, result.value as u64);
             }
             let _ = writeln!(output, "[PASS] Heap management syscalls work");
-            
+
         } else if self.cmd_matches(cmd, b"user") {
             let _ = writeln!(output, "Testing uid/gid syscalls...");
-            
+
             let uid = syscall_handlers::handle_getuid();
             let euid = syscall_handlers::handle_geteuid();
             let gid = syscall_handlers::handle_getgid();
             let egid = syscall_handlers::handle_getegid();
-            
+
             let _ = writeln!(output, "  getuid(): {}", uid.value);
             let _ = writeln!(output, "  geteuid(): {}", euid.value);
             let _ = writeln!(output, "  getgid(): {}", gid.value);
             let _ = writeln!(output, "  getegid(): {}", egid.value);
-            
+
             // Test setuid (should work for root)
             let result = syscall_handlers::handle_setuid(1000);
             if result.error == 0 {
@@ -1482,41 +1482,41 @@ impl Shell {
                 let _ = writeln!(output, "  setuid(1000): error {} [FAIL]", result.error);
             }
             let _ = writeln!(output, "[PASS] User/group syscalls work");
-            
+
         } else if self.cmd_matches(cmd, b"fd") {
             let _ = writeln!(output, "Testing file descriptor syscalls...");
             syscall_init_process(53);
-            
+
             // Test open
             let result = syscall_handlers::handle_open(53, 0, 0, 0);
             if result.error == 0 {
                 let fd = result.value as usize;
                 let _ = writeln!(output, "  open(): fd={} [OK]", fd);
-                
+
                 // Test dup
                 let dup_result = syscall_handlers::handle_dup(53, fd);
                 if dup_result.error == 0 {
                     let _ = writeln!(output, "  dup({}): fd={} [OK]", fd, dup_result.value);
                 }
-                
+
                 // Test close
                 let close_result = syscall_handlers::handle_close(53, fd);
                 if close_result.error == 0 {
                     let _ = writeln!(output, "  close({}): success [OK]", fd);
                 }
             }
-            
+
             // Test pipe
             let pipe_result = syscall_handlers::handle_pipe(53, 0);
             if pipe_result.error == 0 {
                 let _ = writeln!(output, "  pipe(): success [OK]");
             }
-            
+
             let _ = writeln!(output, "[PASS] File descriptor syscalls work");
-            
+
         } else if self.cmd_matches(cmd, b"all") {
             let _ = writeln!(output, "Running all syscall tests...\n");
-            
+
             // Run each test
             self.cmd_syscall(output, b" uname");
             let _ = writeln!(output, "");
@@ -1534,7 +1534,7 @@ impl Shell {
             let _ = writeln!(output, "");
             self.cmd_syscall(output, b" fd");
             let _ = writeln!(output, "");
-            
+
             let _ = writeln!(output, "═══════════════════════════════════════════════════════════════");
             let _ = writeln!(output, "Phase 9A Task 4 Extended Syscalls: ALL TESTS COMPLETE");
             let _ = writeln!(output, "═══════════════════════════════════════════════════════════════");
@@ -8424,14 +8424,14 @@ impl Shell {
 
     fn cmd_netstat(&self, output: &mut ShellOutput, args: &[u8]) {
         use crate::socket_api;
-        
+
         if args.is_empty() {
             let _ = writeln!(output, "Socket & Network Statistics");
             let _ = writeln!(output, "============================");
-            
+
             // Initialize socket table if needed
             socket_api::socket_init();
-            
+
             let _ = writeln!(output, "Proto  Local Address          State");
             let _ = writeln!(output, "-----  ---------------------  -----------");
             let _ = writeln!(output, "(no active sockets)");
@@ -8442,64 +8442,64 @@ impl Shell {
             if self.cmd_matches(cmd, b"sockets") {
                 // Demo socket operations
                 socket_api::socket_init();
-                
+
                 let _ = writeln!(output, "=== Socket API Demo ===");
-                
+
                 // Create TCP socket
                 if let Some(tcp_fd) = socket_api::socket_create(
                     socket_api::SocketType::Stream,
                     socket_api::SocketDomain::Inet
                 ) {
                     let _ = writeln!(output, "Created TCP socket: fd={}", tcp_fd);
-                    
+
                     // Bind to port 8080
                     let addr = socket_api::SocketAddr::any(8080);
                     if socket_api::socket_bind(tcp_fd, addr).is_ok() {
                         let _ = writeln!(output, "  Bound to 0.0.0.0:8080");
                     }
-                    
+
                     // Listen
                     if socket_api::socket_listen(tcp_fd, 5).is_ok() {
                         let _ = writeln!(output, "  Listening (backlog=5)");
                     }
-                    
+
                     // Close
                     let _ = socket_api::socket_close(tcp_fd);
                     let _ = writeln!(output, "  Closed");
                 }
-                
+
                 // Create UDP socket
                 if let Some(udp_fd) = socket_api::socket_create(
                     socket_api::SocketType::Datagram,
                     socket_api::SocketDomain::Inet
                 ) {
                     let _ = writeln!(output, "Created UDP socket: fd={}", udp_fd);
-                    
+
                     // Bind to port 5353
                     let addr = socket_api::SocketAddr::any(5353);
                     if socket_api::socket_bind(udp_fd, addr).is_ok() {
                         let _ = writeln!(output, "  Bound to 0.0.0.0:5353");
                     }
-                    
+
                     // Close
                     let _ = socket_api::socket_close(udp_fd);
                     let _ = writeln!(output, "  Closed");
                 }
-                
+
                 let _ = writeln!(output, "Socket API demo complete");
             } else if self.cmd_matches(cmd, b"arp") {
                 socket_api::socket_init();
-                
+
                 let _ = writeln!(output, "=== ARP Table ===");
-                
+
                 // Add some demo entries
                 socket_api::arp_insert([192, 168, 1, 1], [0xAA, 0xBB, 0xCC, 0x01, 0x02, 0x03]);
                 socket_api::arp_insert([192, 168, 1, 254], [0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
-                
+
                 let _ = writeln!(output, "IP Address        MAC Address");
                 let _ = writeln!(output, "192.168.1.1       aa:bb:cc:01:02:03");
                 let _ = writeln!(output, "192.168.1.254     00:11:22:33:44:55");
-                
+
                 // Lookup test
                 if let Some(mac) = socket_api::arp_lookup([192, 168, 1, 1]) {
                     let _ = writeln!(output, "Lookup 192.168.1.1: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
@@ -8519,28 +8519,28 @@ impl Shell {
                 let _ = writeln!(output, "Lost Packets: 0");
             } else if self.cmd_matches(cmd, b"driver") {
                 use crate::virtio_net_driver;
-                
+
                 let _ = writeln!(output, "=== VirtIO Network Driver ===");
-                
+
                 // Initialize driver
                 if virtio_net_driver::net_driver_init() {
                     let _ = writeln!(output, "Driver Status: Initialized");
                 } else {
                     let _ = writeln!(output, "Driver Status: Failed");
                 }
-                
+
                 // Link status
                 if virtio_net_driver::net_driver_is_link_up() {
                     let _ = writeln!(output, "Link Status: UP");
                 } else {
                     let _ = writeln!(output, "Link Status: DOWN");
                 }
-                
+
                 // MAC address
                 let mac = virtio_net_driver::net_driver_get_mac();
                 let _ = writeln!(output, "MAC Address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-                
+
                 // Statistics
                 let stats = virtio_net_driver::net_driver_get_stats();
                 let _ = writeln!(output, "TX Packets: {}", stats.tx_packets);
@@ -8551,24 +8551,24 @@ impl Shell {
                 let _ = writeln!(output, "RX Errors: {}", stats.rx_errors);
             } else if self.cmd_matches(cmd, b"send") {
                 use crate::virtio_net_driver;
-                
+
                 let _ = writeln!(output, "=== Send Test Packets ===");
-                
+
                 // Initialize
                 virtio_net_driver::net_driver_init();
-                
+
                 // Send UDP packet
                 let dst_mac = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
                 let src_ip = [192, 168, 1, 100];
                 let dst_ip = [192, 168, 1, 1];
-                
+
                 match virtio_net_driver::net_driver_send_udp(
                     dst_mac, src_ip, dst_ip, 5000, 53, b"DNS query test"
                 ) {
                     Ok(()) => { let _ = writeln!(output, "Sent UDP packet to 192.168.1.1:53"); }
                     Err(e) => { let _ = writeln!(output, "UDP send failed: {:?}", e); }
                 }
-                
+
                 // Send TCP SYN
                 match virtio_net_driver::net_driver_send_tcp(
                     dst_mac, src_ip, dst_ip, 8080, 80, 1000, 0, 0x02, &[]
@@ -8576,13 +8576,13 @@ impl Shell {
                     Ok(()) => { let _ = writeln!(output, "Sent TCP SYN to 192.168.1.1:80"); }
                     Err(e) => { let _ = writeln!(output, "TCP send failed: {:?}", e); }
                 }
-                
+
                 // Send ARP request
                 match virtio_net_driver::net_driver_send_arp([192, 168, 1, 1], src_ip) {
                     Ok(()) => { let _ = writeln!(output, "Sent ARP request for 192.168.1.1"); }
                     Err(e) => { let _ = writeln!(output, "ARP send failed: {:?}", e); }
                 }
-                
+
                 let stats = virtio_net_driver::net_driver_get_stats();
                 let _ = writeln!(output, "Total TX packets: {}", stats.tx_packets);
             } else if self.cmd_matches(cmd, b"help") {

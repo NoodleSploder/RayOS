@@ -74,6 +74,8 @@ mod api_governance_metrics; // Phase 20 Task 6: Rate Limit Observability & Metri
 mod linux_presentation;    // Phase 21 Task 1: PresentationBridge for native Linux desktop
 mod installer;             // Phase 21 Task 2: Installer Foundation & Partition Manager
 mod boot_manager;          // Phase 21 Task 3: Boot Manager & Recovery
+mod installer_workflow;    // Phase 9B Task 1: Interactive Installer Workflow
+mod boot_config;           // Phase 9B Task 1: Boot Configuration & Chainloading
 mod persistent_log;        // Phase 21 Task 4: Persistent Logging System
 mod watchdog;              // Phase 21 Task 4: Watchdog Timer & Hang Detection
 mod boot_marker;           // Phase 21 Task 5: Boot Markers & Golden State
@@ -7210,7 +7212,7 @@ pub fn memfs_append(path: &str, data: &[u8]) -> u32 {
         let current_size = MEMFS_ENTRIES[idx].size as usize;
         let space_left = MEMFS_MAX_FILE_SIZE.saturating_sub(current_size);
         let write_len = core::cmp::min(data.len(), space_left);
-        
+
         if write_len == 0 {
             return 0; // No space
         }
@@ -7302,7 +7304,7 @@ pub fn memfs_list_files(mut callback: impl FnMut(&str, bool, u32)) {
 /// Returns 0 on success, error code on failure
 pub fn memfs_copy(src_path: &str, dst_path: &str) -> u32 {
     memfs_init();
-    
+
     // Find source
     let src_idx = memfs_find(src_path);
     if src_idx == usize::MAX {
@@ -7330,7 +7332,7 @@ pub fn memfs_copy(src_path: &str, dst_path: &str) -> u32 {
         let src_data_idx = MEMFS_ENTRIES[src_idx].data_index;
         let dst_data_idx = MEMFS_ENTRIES[dst_idx].data_index;
         let size = MEMFS_ENTRIES[src_idx].size as usize;
-        
+
         for i in 0..size {
             MEMFS_DATA[dst_data_idx][i] = MEMFS_DATA[src_data_idx][i];
         }

@@ -420,7 +420,7 @@ pub fn handle_exit(status: i32) -> SyscallResult {
     // Would terminate current process
     // Clean up resources
     let pid = CURRENT_PID.load(Ordering::SeqCst) as u32;
-    
+
     // Close all FDs
     if let Some(table) = get_fd_table(pid) {
         for i in 0..256 {
@@ -431,7 +431,7 @@ pub fn handle_exit(status: i32) -> SyscallResult {
     // Send SIGCHLD to parent
     // Would mark process as zombie
     let _ = status;
-    
+
     SyscallResult::success(0)
 }
 
@@ -813,7 +813,7 @@ pub fn init_cwd() {
 /// Get current working directory
 pub fn handle_getcwd(buf_ptr: u64, size: u64) -> SyscallResult {
     let len = CWD_LEN.load(Ordering::SeqCst) as usize;
-    
+
     if size < (len + 1) as u64 {
         return SyscallResult::error(errno::ERANGE);
     }
@@ -846,7 +846,7 @@ mod tests {
         let result = handle_open(10, 0, fd_flags::O_RDONLY, 0);
         assert_eq!(result.error, 0);
         assert!(result.value >= 3);  // After stdio
-        
+
         let close_result = handle_close(10, result.value as usize);
         assert_eq!(close_result.error, 0);
     }
@@ -877,12 +877,12 @@ mod tests {
     #[test]
     fn test_handle_brk() {
         syscall_init_process(12);
-        
+
         // Query current brk
         let result = handle_brk(12, 0);
         assert_eq!(result.error, 0);
         let old_brk = result.value as u64;
-        
+
         // Set new brk
         let new_addr = old_brk + 0x10000;
         let result = handle_brk(12, new_addr);
@@ -893,11 +893,11 @@ mod tests {
     #[test]
     fn test_handle_signal() {
         syscall_init_process(13);
-        
+
         // Set handler
         let result = handle_signal(13, signals::SIGTERM, 0x1234);
         assert_eq!(result.error, 0);
-        
+
         // Verify old handler was SIG_DFL
         assert_eq!(result.value as u64, SIG_DFL);
     }
@@ -918,7 +918,7 @@ mod tests {
     #[test]
     fn test_handle_dup() {
         syscall_init_process(14);
-        
+
         // Dup stdout (fd 1)
         let result = handle_dup(14, 1);
         assert_eq!(result.error, 0);
@@ -928,7 +928,7 @@ mod tests {
     #[test]
     fn test_handle_pipe() {
         syscall_init_process(15);
-        
+
         let result = handle_pipe(15, 0);
         assert_eq!(result.error, 0);
     }
