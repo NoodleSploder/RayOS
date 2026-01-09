@@ -209,7 +209,7 @@ pub fn format_fat32(desc: &FormatDescriptor, _progress: Option<FormatProgressFn>
 
     // Simulate formatting stages
     // Progress: 0-20% BPB, 20-60% FAT tables, 60-100% root dir
-    
+
     Ok(())
 }
 
