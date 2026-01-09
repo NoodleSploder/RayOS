@@ -824,3 +824,240 @@ pub fn handle_scancode_for_mouse(scancode: u8, shift: bool) -> bool {
         _ => false,
     }
 }
+
+// ============================================================================
+// REFLEX ENGINE INTEGRATION
+// ============================================================================
+
+use crate::system1::{self, InputEvent, InputEventType, ReflexAction};
+
+/// Modifier key bits
+pub const MOD_CTRL: u8 = 0x01;
+pub const MOD_SHIFT: u8 = 0x02;
+pub const MOD_ALT: u8 = 0x04;
+pub const MOD_META: u8 = 0x08;
+
+/// Current modifier state
+static MODIFIERS: AtomicU32 = AtomicU32::new(0);
+
+/// Update modifier state from scancode
+pub fn update_modifiers(scancode: u8, pressed: bool) {
+    let mut mods = MODIFIERS.load(Ordering::Relaxed) as u8;
+
+    match scancode {
+        0x1D | 0x9D => { // Left/Right Ctrl
+            if pressed { mods |= MOD_CTRL; } else { mods &= !MOD_CTRL; }
+        }
+        0x2A | 0x36 => { // Left/Right Shift
+            if pressed { mods |= MOD_SHIFT; } else { mods &= !MOD_SHIFT; }
+        }
+        0x38 | 0xB8 => { // Left/Right Alt
+            if pressed { mods |= MOD_ALT; } else { mods &= !MOD_ALT; }
+        }
+        0x5B | 0x5C => { // Left/Right Super/Windows
+            if pressed { mods |= MOD_META; } else { mods &= !MOD_META; }
+        }
+        _ => {}
+    }
+
+    MODIFIERS.store(mods as u32, Ordering::Relaxed);
+}
+
+/// Get current modifier state
+pub fn get_modifiers() -> u8 {
+    MODIFIERS.load(Ordering::Relaxed) as u8
+}
+
+/// Process a key event through the reflex engine
+/// Returns true if a reflex handled the event
+pub fn process_key_reflex(keycode: u8, pressed: bool) -> bool {
+    // Update modifier state first
+    update_modifiers(keycode, pressed);
+
+    // Only process on key press (not release) for most reflexes
+    if !pressed {
+        return false;
+    }
+
+    let event_type = InputEventType::KeyPress;
+    let modifiers = get_modifiers();
+    let (mx, my) = mouse_position();
+
+    let event = InputEvent {
+        event_type,
+        modifiers,
+        data: keycode as u16,
+        x: mx as i16,
+        y: my as i16,
+        timestamp: 0, // Will be set by reflex engine
+    };
+
+    // Process through reflex engine
+    if let Some((action, arg)) = system1::process_event(event) {
+        execute_reflex_action(action, arg);
+        return true;
+    }
+
+    false
+}
+
+/// Process a mouse event through the reflex engine
+pub fn process_mouse_reflex(event_type: InputEventType, button: u8) -> bool {
+    let modifiers = get_modifiers();
+    let (mx, my) = mouse_position();
+
+    let event = InputEvent {
+        event_type,
+        modifiers,
+        data: button as u16,
+        x: mx as i16,
+        y: my as i16,
+        timestamp: 0,
+    };
+
+    if let Some((action, arg)) = system1::process_event(event) {
+        execute_reflex_action(action, arg);
+        return true;
+    }
+
+    false
+}
+
+/// Execute a reflex action
+fn execute_reflex_action(action: ReflexAction, arg: u32) {
+    match action {
+        ReflexAction::None => {}
+
+        ReflexAction::CloseWindow => {
+            // Close the focused window
+            let wm = window_manager::get();
+            if let Some(focused_id) = wm.focused_window() {
+                super::shell::close_window(focused_id);
+            }
+        }
+
+        ReflexAction::MinimizeWindow => {
+            let wm = window_manager::get();
+            if let Some(focused_id) = wm.focused_window() {
+                // Minimize to bottom-left corner (status bar area)
+                super::shell::minimize_window(focused_id, 50, renderer::get_dimensions().1 as i32 - 30);
+            }
+        }
+
+        ReflexAction::ToggleMaximize => {
+            let wm = window_manager::get();
+            if let Some(focused_id) = wm.focused_window() {
+                toggle_maximize(focused_id);
+            }
+        }
+
+        ReflexAction::NextWindow => {
+            // Cycle to next window
+            let wm = window_manager::get();
+            if let Some(next) = wm.next_window() {
+                window_manager::set_focus(next);
+                window_manager::raise_window(next);
+                compositor::mark_dirty();
+            }
+        }
+
+        ReflexAction::PrevWindow => {
+            // Cycle to previous window
+            let wm = window_manager::get();
+            if let Some(prev) = wm.prev_window() {
+                window_manager::set_focus(prev);
+                window_manager::raise_window(prev);
+                compositor::mark_dirty();
+            }
+        }
+
+        ReflexAction::ShowLauncher => {
+            // Show app launcher (placeholder - could open launcher window)
+            #[cfg(feature = "serial_debug")]
+            crate::serial_write_str("REFLEX:show_launcher\n");
+        }
+
+        ReflexAction::TogglePanel => {
+            // Toggle panel visibility (placeholder)
+            #[cfg(feature = "serial_debug")]
+            crate::serial_write_str("REFLEX:toggle_panel\n");
+        }
+
+        ReflexAction::EmitRay => {
+            // Emit a ray to System 2 with the given ID
+            let _ = crate::rayq_push(crate::LogicRay {
+                id: arg as u64,
+                op: 0x10, // Reflex-triggered ray
+                priority: 64,
+                _reserved: 0,
+                arg: 0,
+            });
+        }
+
+        ReflexAction::Copy => {
+            // Trigger copy action (placeholder - integrate with clipboard)
+            #[cfg(feature = "serial_debug")]
+            crate::serial_write_str("REFLEX:copy\n");
+        }
+
+        ReflexAction::Paste => {
+            // Trigger paste action
+            #[cfg(feature = "serial_debug")]
+            crate::serial_write_str("REFLEX:paste\n");
+        }
+
+        ReflexAction::Undo => {
+            #[cfg(feature = "serial_debug")]
+            crate::serial_write_str("REFLEX:undo\n");
+        }
+
+        ReflexAction::Redo => {
+            #[cfg(feature = "serial_debug")]
+            crate::serial_write_str("REFLEX:redo\n");
+        }
+
+        ReflexAction::OpenApp => {
+            // Open app by ID (arg)
+            #[cfg(feature = "serial_debug")]
+            {
+                crate::serial_write_str("REFLEX:open_app\n");
+            }
+        }
+
+        ReflexAction::RunCommand => {
+            #[cfg(feature = "serial_debug")]
+            {
+                crate::serial_write_str("REFLEX:run_command\n");
+            }
+        }
+
+        ReflexAction::Notify => {
+            #[cfg(feature = "serial_debug")]
+            crate::serial_write_str("REFLEX:notify\n");
+        }
+
+        ReflexAction::SignalAttention => {
+            // Already handled by reflex engine sending attention signal
+        }
+    }
+
+    compositor::mark_dirty();
+}
+
+/// Tick the reflex engine (call once per frame)
+pub fn tick_reflex_engine() {
+    system1::tick();
+
+    // Process any pending attention signals for System 2
+    while let Some(signal) = system1::pop_attention() {
+        // Forward to System 2 via ray queue
+        let ray = crate::LogicRay {
+            id: signal.data as u64,
+            op: 0x20 + signal.signal_type as u8, // Attention signal rays
+            priority: signal.priority,
+            _reserved: 0,
+            arg: signal.context,
+        };
+        let _ = crate::rayq_push(ray);
+    }
+}

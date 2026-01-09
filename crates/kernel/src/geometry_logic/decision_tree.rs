@@ -244,20 +244,20 @@ fn sample_in_bounds(sample: Sample, node: BVHNode, num_features: u32) -> bool {
 // Traverse BVH to classify sample
 fn classify_sample(sample: Sample, num_features: u32) -> ClassResult {
     var result = ClassResult(sample.id, 0u, 1.0, 0u, 0u, 0u, 0u, 0u);
-    
+
     var node_idx = config.root_index;
     var depth = 0u;
     var nodes_visited = 0u;
-    
+
     // Traverse until we hit a leaf
     loop {
         if (depth >= 32u || node_idx >= config.num_nodes) {
             break;
         }
-        
+
         let node = nodes[node_idx];
         nodes_visited = nodes_visited + 1u;
-        
+
         // Check if we're at a leaf
         if (node.is_leaf == 1u) {
             result.class_label = node.left_child_or_class;
@@ -266,10 +266,10 @@ fn classify_sample(sample: Sample, num_features: u32) -> ClassResult {
             result.nodes_visited = nodes_visited;
             break;
         }
-        
+
         // Internal node: decide which child to visit
         let feature_val = get_feature(sample, node.split_axis);
-        
+
         if (feature_val <= node.split_value) {
             // Go left
             node_idx = node.left_child_or_class;
@@ -277,10 +277,10 @@ fn classify_sample(sample: Sample, num_features: u32) -> ClassResult {
             // Go right (left + 1)
             node_idx = node.left_child_or_class + 1u;
         }
-        
+
         depth = depth + 1u;
     }
-    
+
     return result;
 }
 
@@ -288,11 +288,11 @@ fn classify_sample(sample: Sample, num_features: u32) -> ClassResult {
 @compute @workgroup_size(256)
 fn bvh_classify_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let sample_idx = global_id.x;
-    
+
     if (sample_idx >= config.num_samples) {
         return;
     }
-    
+
     let sample = samples[sample_idx];
     results[sample_idx] = classify_sample(sample, config.num_features);
 }
@@ -937,7 +937,7 @@ impl DecisionTreeBuilder {
     /// Build a decision tree from training data using CART algorithm
     pub fn build(&self, features: &[Vec<f32>], labels: &[u32]) -> DecisionTree {
         let mut tree = DecisionTree::new(self.num_features);
-        
+
         if features.is_empty() || labels.is_empty() {
             return tree;
         }
@@ -970,7 +970,7 @@ impl DecisionTreeBuilder {
 
         // Check stopping conditions
         let unique_labels: std::collections::HashSet<_> = indices.iter().map(|&i| labels[i]).collect();
-        
+
         if unique_labels.len() == 1 || depth >= self.max_depth || indices.len() < self.min_samples_split {
             // Create leaf with majority class
             let class = self.majority_class(labels, indices);

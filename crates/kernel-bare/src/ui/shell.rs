@@ -3,7 +3,7 @@
 //! Main integration point for the UI framework. Initializes all components
 //! and provides the main tick loop for the UI.
 
-use super::{renderer, window_manager, compositor, input};
+use super::{renderer, window_manager, compositor, input, animation};
 use super::window_manager::WindowType;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -57,6 +57,9 @@ pub fn ui_shell_init(fb_addr: u64, fb_width: usize, fb_height: usize, fb_stride:
 
     // Initialize input handler
     input::init(fb_width as i32, fb_height as i32);
+
+    // Initialize System 1 reflex engine
+    crate::system1::init();
 
     // Create the desktop window (background)
     let desktop_id = window_manager::create_window(
@@ -125,6 +128,9 @@ pub fn ui_shell_tick() {
         return;
     }
 
+    // Tick the reflex engine (System 1)
+    input::tick_reflex_engine();
+
     // Increment our internal tick counter
     TICK_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -182,6 +188,10 @@ pub fn invalidate() {
 /// Create a normal window.
 pub fn create_window(title: &[u8], x: i32, y: i32, width: u32, height: u32) -> Option<u32> {
     let id = window_manager::create_window(title, x, y, width, height, WindowType::Normal)?;
+
+    // Start pop-in animation
+    animation::animate_pop_in(id, x, y, width, height);
+
     compositor::mark_dirty();
     Some(id)
 }
@@ -189,12 +199,31 @@ pub fn create_window(title: &[u8], x: i32, y: i32, width: u32, height: u32) -> O
 /// Create a VM surface window.
 pub fn create_vm_window(title: &[u8], x: i32, y: i32, width: u32, height: u32) -> Option<u32> {
     let id = window_manager::create_window(title, x, y, width, height, WindowType::VmSurface)?;
+
+    // Start fade-in animation for VM windows (pop-in might be jarring for large surfaces)
+    animation::animate_fade_in(id, x, y, width, height);
+
     compositor::mark_dirty();
     Some(id)
 }
 
 /// Close a window.
 pub fn close_window(id: u32) {
+    // Get window position for animation
+    if let Some(win) = window_manager::get().get_window(id) {
+        // Start pop-out animation (will destroy window on completion)
+        animation::animate_pop_out(id, win.x, win.y, win.width, win.height);
+        compositor::mark_dirty();
+    } else {
+        // Window not found, just destroy it
+        window_manager::destroy_window(id);
+        compositor::mark_dirty();
+    }
+}
+
+/// Close a window immediately without animation.
+pub fn close_window_immediate(id: u32) {
+    animation::cancel_for_window(id);
     window_manager::destroy_window(id);
     compositor::mark_dirty();
 }
@@ -206,16 +235,48 @@ pub fn focus_window(id: u32) {
     compositor::mark_dirty();
 }
 
-/// Move a window.
+/// Move a window (immediate, no animation).
 pub fn move_window(id: u32, x: i32, y: i32) {
     window_manager::get_mut().move_window(id, x, y);
     compositor::mark_dirty();
 }
 
-/// Resize a window.
+/// Move a window with smooth animation.
+pub fn move_window_animated(id: u32, to_x: i32, to_y: i32) {
+    if let Some(win) = window_manager::get().get_window(id) {
+        animation::animate_move(id, win.x, win.y, to_x, to_y, win.width, win.height);
+        compositor::mark_dirty();
+    }
+}
+
+/// Resize a window (immediate, no animation).
 pub fn resize_window(id: u32, width: u32, height: u32) {
     window_manager::get_mut().resize_window(id, width, height);
     compositor::mark_dirty();
+}
+
+/// Resize a window with smooth animation.
+pub fn resize_window_animated(id: u32, to_width: u32, to_height: u32) {
+    if let Some(win) = window_manager::get().get_window(id) {
+        animation::animate_resize(id, win.x, win.y, win.width, win.height, to_width, to_height);
+        compositor::mark_dirty();
+    }
+}
+
+/// Minimize a window to the dock.
+pub fn minimize_window(id: u32, dock_x: i32, dock_y: i32) {
+    if let Some(win) = window_manager::get().get_window(id) {
+        animation::animate_minimize(id, win.x, win.y, win.width, win.height, dock_x, dock_y);
+        compositor::mark_dirty();
+    }
+}
+
+/// Restore a window from minimized state.
+pub fn restore_window(id: u32, dock_x: i32, dock_y: i32) {
+    if let Some(win) = window_manager::get().get_window(id) {
+        animation::animate_restore(id, dock_x, dock_y, win.x, win.y, win.width, win.height);
+        compositor::mark_dirty();
+    }
 }
 
 /// Handle a click at the given coordinates.

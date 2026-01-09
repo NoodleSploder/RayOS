@@ -354,6 +354,10 @@ impl Shell {
             self.cmd_pkg(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"store") {
             self.cmd_store(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"update") {
+            self.cmd_update(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"recovery") {
+            self.cmd_recovery(&mut output, &input[cmd_end..]);
         } else {
             let _ = write!(output, "Unknown command: '");
             let _ = output.write_all(cmd);
@@ -495,6 +499,10 @@ impl Shell {
         let _ = writeln!(output, "  pkg [cmd]       Package management (list, install, remove, load)");
         let _ = writeln!(output, "  store [cmd]     App Store (browse, search, install apps)");
         let _ = writeln!(output, "  app [cmd]       Application lifecycle management");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "System Management:");
+        let _ = writeln!(output, "  update [cmd]    System updates (check, download, apply, rollback)");
+        let _ = writeln!(output, "  recovery [cmd]  Recovery mode (diagnose, repair, restore, reset)");
         let _ = writeln!(output, "");
         let _ = writeln!(output, "  test           Run comprehensive tests (Phase 3 + Phase 4)");
         let _ = writeln!(output);
@@ -2589,21 +2597,24 @@ impl Shell {
         }
 
         let subcmd = &args[start..cmd_end];
+        let subargs = &args[cmd_end..];
 
         if self.cmd_matches(subcmd, b"check") {
-            self.update_check(output);
+            self.update_check_new(output);
         } else if self.cmd_matches(subcmd, b"list") {
             self.update_list(output);
-        } else if self.cmd_matches(subcmd, b"install") {
-            self.update_install(output);
+        } else if self.cmd_matches(subcmd, b"install") || self.cmd_matches(subcmd, b"apply") {
+            self.update_apply_new(output);
         } else if self.cmd_matches(subcmd, b"download") {
-            self.update_download(output);
+            self.update_download_new(output);
         } else if self.cmd_matches(subcmd, b"status") {
-            self.update_status(output);
+            self.update_status_new(output);
         } else if self.cmd_matches(subcmd, b"channel") {
-            self.update_channel(output, &args[cmd_end..]);
+            self.update_channel_new(output, subargs);
         } else if self.cmd_matches(subcmd, b"auto") {
-            self.update_auto_config(output);
+            self.update_auto_new(output, subargs);
+        } else if self.cmd_matches(subcmd, b"rollback") {
+            self.update_rollback_new(output, subargs);
         } else {
             let _ = write!(output, "Unknown update subcommand: '");
             let _ = output.write_all(subcmd);
@@ -2631,21 +2642,26 @@ impl Shell {
         }
 
         let subcmd = &args[start..cmd_end];
+        let subargs = &args[cmd_end..];
 
-        if self.cmd_matches(subcmd, b"snapshot") {
-            self.recovery_snapshot(output, &args[cmd_end..]);
+        if self.cmd_matches(subcmd, b"snapshot") || self.cmd_matches(subcmd, b"create") {
+            self.recovery_create_new(output, subargs);
         } else if self.cmd_matches(subcmd, b"list") {
-            self.recovery_list_snapshots(output);
+            self.recovery_list_new(output);
         } else if self.cmd_matches(subcmd, b"restore") {
-            self.recovery_restore(output);
-        } else if self.cmd_matches(subcmd, b"fsck") {
-            self.recovery_fsck(output);
-        } else if self.cmd_matches(subcmd, b"safeboot") {
-            self.recovery_safeboot(output);
-        } else if self.cmd_matches(subcmd, b"diagnostic") {
-            self.recovery_diagnostic(output);
+            self.recovery_restore_new(output, subargs);
+        } else if self.cmd_matches(subcmd, b"fsck") || self.cmd_matches(subcmd, b"repair") {
+            self.recovery_repair_new(output);
+        } else if self.cmd_matches(subcmd, b"safeboot") || self.cmd_matches(subcmd, b"boot") {
+            self.recovery_boot_new(output, subargs);
+        } else if self.cmd_matches(subcmd, b"diagnostic") || self.cmd_matches(subcmd, b"diagnose") || self.cmd_matches(subcmd, b"diag") {
+            self.recovery_diagnose_new(output);
         } else if self.cmd_matches(subcmd, b"lkg") {
             self.recovery_lkg(output);
+        } else if self.cmd_matches(subcmd, b"status") {
+            self.recovery_status_new(output);
+        } else if self.cmd_matches(subcmd, b"reset") {
+            self.recovery_reset_new(output, subargs);
         } else {
             let _ = write!(output, "Unknown recovery subcommand: '");
             let _ = output.write_all(subcmd);
@@ -2655,7 +2671,7 @@ impl Shell {
     }
 
     fn show_update_menu(&self, output: &mut ShellOutput) {
-        let _ = writeln!(output, "\n📦 RayOS System Update Manager (Phase 9B Task 5)");
+        let _ = writeln!(output, "\n📦 RayOS System Update Manager");
         let _ = writeln!(output, "Manage kernel, system software, and subsystem updates");
         let _ = writeln!(output, "");
         let _ = writeln!(output, "Usage: update <subcommand>");
@@ -2665,28 +2681,31 @@ impl Shell {
         let _ = writeln!(output, "  check       Check for available updates");
         let _ = writeln!(output, "  list        List recent updates and releases");
         let _ = writeln!(output, "  download    Download available update");
-        let _ = writeln!(output, "  install     Install downloaded update (requires reboot)");
+        let _ = writeln!(output, "  apply       Apply downloaded update (requires reboot)");
         let _ = writeln!(output, "  status      Show update progress and status");
-        let _ = writeln!(output, "  channel     Configure update channel (stable/beta/nightly)");
+        let _ = writeln!(output, "  channel     Configure update channel (stable/beta/dev)");
         let _ = writeln!(output, "  auto        Configure automatic updates");
+        let _ = writeln!(output, "  rollback    Rollback to previous version");
         let _ = writeln!(output, "");
     }
 
     fn show_recovery_menu(&self, output: &mut ShellOutput) {
-        let _ = writeln!(output, "\n🔄 RayOS Recovery & Rollback Manager (Phase 9B Task 5)");
-        let _ = writeln!(output, "Create snapshots, restore from backups, enter recovery mode");
+        let _ = writeln!(output, "\n🔄 RayOS Recovery & Rollback Manager");
+        let _ = writeln!(output, "Create restore points, restore from backups, enter recovery mode");
         let _ = writeln!(output, "");
         let _ = writeln!(output, "Usage: recovery <subcommand>");
         let _ = writeln!(output, "");
         let _ = writeln!(output, "Subcommands:");
         let _ = writeln!(output, "");
-        let _ = writeln!(output, "  snapshot    Create recovery snapshot");
-        let _ = writeln!(output, "  list        List available snapshots");
-        let _ = writeln!(output, "  restore     Restore from snapshot");
+        let _ = writeln!(output, "  status      Show recovery status");
+        let _ = writeln!(output, "  diagnose    Run system diagnostics");
+        let _ = writeln!(output, "  repair      Attempt automatic repair");
+        let _ = writeln!(output, "  list        List available restore points");
+        let _ = writeln!(output, "  create      Create a new restore point");
+        let _ = writeln!(output, "  restore     Restore from restore point");
+        let _ = writeln!(output, "  boot        Set next boot mode (normal/safe/console)");
         let _ = writeln!(output, "  lkg         Restore last-known-good boot");
-        let _ = writeln!(output, "  fsck        Run filesystem check (recovery mode)");
-        let _ = writeln!(output, "  safeboot    Boot into safe mode");
-        let _ = writeln!(output, "  diagnostic  Run system diagnostics");
+        let _ = writeln!(output, "  reset       Factory reset (DANGER!)");
         let _ = writeln!(output, "");
     }
 
@@ -2978,6 +2997,495 @@ impl Shell {
         let _ = writeln!(output, "");
         let _ = writeln!(output, "To boot LKG on reboot: hold SHIFT at boot menu");
         let _ = writeln!(output, "");
+    }
+
+    // ========================================================================
+    // New Update System and Recovery Mode implementations (using modules)
+    // ========================================================================
+
+    fn update_check_new(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "[RAYOS_UPDATE:CHECK]");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Checking for updates...");
+        let _ = writeln!(output, "");
+
+        match crate::update_system::check_updates() {
+            Ok(true) => {
+                if let Some(update) = crate::update_system::available_update() {
+                    let _ = writeln!(output, "Update available!");
+                    let _ = writeln!(output, "");
+
+                    let _ = write!(output, "New version: ");
+                    let mut ver_buf = [0u8; 32];
+                    let ver_len = update.version.format(&mut ver_buf);
+                    let _ = output.write_all(&ver_buf[..ver_len]);
+                    let _ = writeln!(output, "");
+
+                    let _ = write!(output, "Download size: ");
+                    self.format_bytes(output, update.download_size);
+                    let _ = writeln!(output, "");
+
+                    if update.is_critical {
+                        let _ = writeln!(output, "");
+                        let _ = writeln!(output, "** CRITICAL SECURITY UPDATE **");
+                    }
+
+                    let _ = writeln!(output, "");
+                    let _ = writeln!(output, "Changelog:");
+                    let _ = output.write_all(update.changelog());
+                    let _ = writeln!(output, "");
+
+                    let _ = writeln!(output, "");
+                    let _ = writeln!(output, "Run 'update download' to download this update.");
+                }
+            }
+            Ok(false) => {
+                let _ = writeln!(output, "System is up to date.");
+            }
+            Err(e) => {
+                let _ = write!(output, "Error: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn update_status_new(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "[RAYOS_UPDATE:STATUS]");
+        let _ = writeln!(output, "");
+
+        let version = crate::update_system::current_version();
+        let _ = write!(output, "Current version: ");
+        let mut ver_buf = [0u8; 32];
+        let ver_len = version.format_full(&mut ver_buf);
+        let _ = output.write_all(&ver_buf[..ver_len]);
+        let _ = writeln!(output, "");
+
+        let channel = crate::update_system::channel();
+        let _ = write!(output, "Update channel: ");
+        let _ = output.write_all(channel.name());
+        let _ = writeln!(output, "");
+
+        let state = crate::update_system::state();
+        let _ = write!(output, "Status: ");
+        let _ = output.write_all(state.name());
+        let _ = writeln!(output, "");
+
+        let auto = crate::update_system::auto_update();
+        let _ = write!(output, "Auto-update: ");
+        let _ = writeln!(output, "{}", if auto { "Enabled" } else { "Disabled" });
+
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Rollback Slots:");
+
+        for i in 0..2 {
+            if let Some(slot) = crate::update_system::get_rollback_slot(i) {
+                let _ = write!(output, "  [");
+                let _ = Self::write_u32(output, i as u32);
+                let _ = write!(output, "] v");
+                let mut ver_buf2 = [0u8; 16];
+                let ver_len2 = slot.version.format(&mut ver_buf2);
+                let _ = output.write_all(&ver_buf2[..ver_len2]);
+                let _ = writeln!(output, "");
+            }
+        }
+    }
+
+    fn update_download_new(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "[RAYOS_UPDATE:DOWNLOAD]");
+
+        match crate::update_system::download_update() {
+            Ok(()) => {
+                let _ = writeln!(output, "Update downloaded successfully.");
+                let _ = writeln!(output, "Run 'update apply' to install.");
+            }
+            Err(e) => {
+                let _ = write!(output, "Error: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn update_apply_new(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "[RAYOS_UPDATE:APPLY]");
+
+        match crate::update_system::apply_update() {
+            Ok(()) => {
+                let _ = writeln!(output, "Update applied successfully.");
+                let _ = writeln!(output, "");
+                let _ = writeln!(output, "** REBOOT REQUIRED **");
+                let _ = writeln!(output, "Please restart the system to complete the update.");
+            }
+            Err(e) => {
+                let _ = write!(output, "Error: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn update_rollback_new(&self, output: &mut ShellOutput, args: &[u8]) {
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        let slot = if start < args.len() && args[start].is_ascii_digit() {
+            (args[start] - b'0') as usize
+        } else {
+            0
+        };
+
+        let _ = writeln!(output, "[RAYOS_UPDATE:ROLLBACK]");
+
+        match crate::update_system::rollback(slot) {
+            Ok(()) => {
+                let _ = write!(output, "Rolling back to slot ");
+                let _ = Self::write_u32(output, slot as u32);
+                let _ = writeln!(output, "...");
+                let _ = writeln!(output, "");
+                let _ = writeln!(output, "Rollback complete.");
+                let _ = writeln!(output, "** REBOOT REQUIRED **");
+            }
+            Err(e) => {
+                let _ = write!(output, "Error: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn update_channel_new(&self, output: &mut ShellOutput, args: &[u8]) {
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() || args[start] == 0 {
+            let channel = crate::update_system::channel();
+            let _ = write!(output, "Current channel: ");
+            let _ = output.write_all(channel.name());
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "Available channels: stable, beta, dev");
+            return;
+        }
+
+        let mut end = start;
+        while end < args.len() && args[end] != b' ' && args[end] != 0 {
+            end += 1;
+        }
+        let name = &args[start..end];
+
+        let channel = if self.cmd_matches(name, b"stable") {
+            crate::update_system::UpdateChannel::Stable
+        } else if self.cmd_matches(name, b"beta") {
+            crate::update_system::UpdateChannel::Beta
+        } else if self.cmd_matches(name, b"dev") || self.cmd_matches(name, b"nightly") {
+            crate::update_system::UpdateChannel::Dev
+        } else {
+            let _ = writeln!(output, "Unknown channel. Use: stable, beta, or dev");
+            return;
+        };
+
+        crate::update_system::set_channel(channel);
+        let _ = write!(output, "Update channel set to: ");
+        let _ = output.write_all(channel.name());
+        let _ = writeln!(output, "");
+    }
+
+    fn update_auto_new(&self, output: &mut ShellOutput, args: &[u8]) {
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() || args[start] == 0 {
+            let auto = crate::update_system::auto_update();
+            let _ = write!(output, "Auto-update: ");
+            let _ = writeln!(output, "{}", if auto { "Enabled" } else { "Disabled" });
+            return;
+        }
+
+        let mut end = start;
+        while end < args.len() && args[end] != b' ' && args[end] != 0 {
+            end += 1;
+        }
+        let val = &args[start..end];
+
+        let enabled = self.cmd_matches(val, b"on") || self.cmd_matches(val, b"enable") || self.cmd_matches(val, b"true") || self.cmd_matches(val, b"1");
+        crate::update_system::set_auto_update(enabled);
+        let _ = write!(output, "Auto-update: ");
+        let _ = writeln!(output, "{}", if enabled { "Enabled" } else { "Disabled" });
+    }
+
+    // Recovery mode implementations using the recovery_mode module
+
+    fn recovery_status_new(&self, output: &mut ShellOutput) {
+        if !crate::recovery_mode::is_initialized() {
+            crate::recovery_mode::init();
+        }
+
+        let _ = writeln!(output, "[RAYOS_RECOVERY:STATUS]");
+        let _ = writeln!(output, "");
+
+        let mode = crate::recovery_mode::boot_mode();
+        let _ = write!(output, "Boot mode: ");
+        let _ = output.write_all(mode.name());
+        let _ = writeln!(output, "");
+
+        let state = crate::recovery_mode::state();
+        let _ = write!(output, "Recovery state: ");
+        let _ = output.write_all(state.name());
+        let _ = writeln!(output, "");
+
+        let restore_count = crate::recovery_mode::restore_count();
+        let _ = write!(output, "Restore points: ");
+        let _ = Self::write_u32(output, restore_count as u32);
+        let _ = writeln!(output, "");
+    }
+
+    fn recovery_diagnose_new(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "[RAYOS_RECOVERY:DIAGNOSE]");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Running system diagnostics...");
+        let _ = writeln!(output, "");
+
+        match crate::recovery_mode::run_diagnostics() {
+            Ok(result) => {
+                let failures = (result >> 16) & 0xFFFF;
+                let warnings = result & 0xFFFF;
+
+                let count = crate::recovery_mode::diag_count();
+                for i in 0..count {
+                    if let Some(diag) = crate::recovery_mode::get_diagnostic(i) {
+                        let _ = output.write_all(diag.status.symbol());
+                        let _ = write!(output, " ");
+                        let _ = output.write_all(diag.name());
+                        let _ = write!(output, ": ");
+                        let _ = output.write_all(diag.message());
+                        let _ = writeln!(output, "");
+                    }
+                }
+
+                let _ = writeln!(output, "");
+                let _ = write!(output, "Results: ");
+                let _ = Self::write_u32(output, failures as u32);
+                let _ = write!(output, " failures, ");
+                let _ = Self::write_u32(output, warnings as u32);
+                let _ = writeln!(output, " warnings");
+
+                if failures == 0 && warnings == 0 {
+                    let _ = writeln!(output, "System health: GOOD");
+                } else if failures == 0 {
+                    let _ = writeln!(output, "System health: FAIR");
+                } else {
+                    let _ = writeln!(output, "System health: POOR - repair recommended");
+                }
+            }
+            Err(e) => {
+                let _ = write!(output, "Diagnostics failed: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn recovery_repair_new(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "[RAYOS_RECOVERY:REPAIR]");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Attempting automatic repair...");
+        let _ = writeln!(output, "");
+
+        match crate::recovery_mode::auto_repair() {
+            Ok(repairs) => {
+                let _ = write!(output, "Repairs completed: ");
+                let _ = Self::write_u32(output, repairs);
+                let _ = writeln!(output, "");
+                let _ = writeln!(output, "");
+                let _ = writeln!(output, "Repair complete. Reboot recommended.");
+            }
+            Err(e) => {
+                let _ = write!(output, "Repair failed: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn recovery_list_new(&self, output: &mut ShellOutput) {
+        if !crate::recovery_mode::is_initialized() {
+            crate::recovery_mode::init();
+        }
+
+        let _ = writeln!(output, "[RAYOS_RECOVERY:LIST]");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Restore Points:");
+        let _ = writeln!(output, "");
+
+        let count = crate::recovery_mode::restore_count();
+        if count == 0 {
+            let _ = writeln!(output, "No restore points available.");
+            return;
+        }
+
+        let _ = writeln!(output, "ID   Type        Description");
+        let _ = writeln!(output, "---- ----------- ------------------------------------");
+
+        for i in 0..count {
+            if let Some(rp) = crate::recovery_mode::get_restore_point(i) {
+                self.format_id(output, rp.id, 4);
+                let _ = write!(output, " ");
+                self.format_padded(output, rp.restore_type.name(), 11);
+                let _ = write!(output, " ");
+                let _ = output.write_all(rp.description());
+                let _ = writeln!(output, "");
+            }
+        }
+    }
+
+    fn recovery_create_new(&self, output: &mut ShellOutput, args: &[u8]) {
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        let desc = if start < args.len() && args[start] != 0 {
+            &args[start..]
+        } else {
+            b"Manual restore point"
+        };
+
+        let _ = writeln!(output, "[RAYOS_RECOVERY:CREATE]");
+
+        match crate::recovery_mode::create_restore_point(desc) {
+            Ok(id) => {
+                let _ = write!(output, "Restore point created with ID: ");
+                let _ = Self::write_u32(output, id);
+                let _ = writeln!(output, "");
+            }
+            Err(e) => {
+                let _ = write!(output, "Failed to create restore point: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn recovery_restore_new(&self, output: &mut ShellOutput, args: &[u8]) {
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() || !args[start].is_ascii_digit() {
+            let _ = writeln!(output, "Usage: recovery restore <id>");
+            let _ = writeln!(output, "Run 'recovery list' to see available restore points.");
+            return;
+        }
+
+        let mut id = 0u32;
+        let mut i = start;
+        while i < args.len() && args[i].is_ascii_digit() {
+            id = id.saturating_mul(10).saturating_add((args[i] - b'0') as u32);
+            i += 1;
+        }
+
+        let _ = writeln!(output, "[RAYOS_RECOVERY:RESTORE]");
+        let _ = write!(output, "Restoring from point ");
+        let _ = Self::write_u32(output, id);
+        let _ = writeln!(output, "...");
+        let _ = writeln!(output, "");
+
+        match crate::recovery_mode::restore(id) {
+            Ok(()) => {
+                let _ = writeln!(output, "Restore complete!");
+                let _ = writeln!(output, "** REBOOT REQUIRED **");
+            }
+            Err(e) => {
+                let _ = write!(output, "Restore failed: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn recovery_reset_new(&self, output: &mut ShellOutput, args: &[u8]) {
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        let confirmed = if start < args.len() {
+            let mut end = start;
+            while end < args.len() && args[end] != b' ' && args[end] != 0 {
+                end += 1;
+            }
+            self.cmd_matches(&args[start..end], b"confirm")
+        } else {
+            false
+        };
+
+        if !confirmed {
+            let _ = writeln!(output, "[RAYOS_RECOVERY:RESET]");
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "** WARNING: FACTORY RESET **");
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "This will erase all data and restore factory settings.");
+            let _ = writeln!(output, "ALL USER DATA WILL BE PERMANENTLY DELETED.");
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "To confirm, run: recovery reset confirm");
+            return;
+        }
+
+        let _ = writeln!(output, "[RAYOS_RECOVERY:RESET]");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Performing factory reset...");
+        let _ = writeln!(output, "");
+
+        match crate::recovery_mode::factory_reset(true) {
+            Ok(()) => {
+                let _ = writeln!(output, "Factory reset complete!");
+                let _ = writeln!(output, "** REBOOT REQUIRED **");
+            }
+            Err(e) => {
+                let _ = write!(output, "Reset failed: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn recovery_boot_new(&self, output: &mut ShellOutput, args: &[u8]) {
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() || args[start] == 0 {
+            let mode = crate::recovery_mode::boot_mode();
+            let _ = write!(output, "Current boot mode: ");
+            let _ = output.write_all(mode.name());
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "Available modes: normal, safe, console");
+            return;
+        }
+
+        let mut end = start;
+        while end < args.len() && args[end] != b' ' && args[end] != 0 {
+            end += 1;
+        }
+        let mode_name = &args[start..end];
+
+        let mode = if self.cmd_matches(mode_name, b"normal") {
+            crate::recovery_mode::RecoveryMode::Normal
+        } else if self.cmd_matches(mode_name, b"safe") {
+            crate::recovery_mode::RecoveryMode::SafeMode
+        } else if self.cmd_matches(mode_name, b"console") {
+            crate::recovery_mode::RecoveryMode::RecoveryConsole
+        } else {
+            let _ = writeln!(output, "Unknown boot mode. Use: normal, safe, or console");
+            return;
+        };
+
+        crate::recovery_mode::set_boot_mode(mode);
+        let _ = write!(output, "Next boot mode set to: ");
+        let _ = output.write_all(mode.name());
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Change will take effect on next reboot.");
     }
 
     // ========================================================================

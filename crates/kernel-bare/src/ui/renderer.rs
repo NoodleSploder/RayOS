@@ -155,6 +155,148 @@ pub fn draw_rect(x: i32, y: i32, w: u32, h: u32, color: u32, thickness: u32) {
     fill_rect(x + w as i32 - t as i32, y + t as i32, t, h - 2 * t, color);
 }
 
+// ===== Alpha Blending Functions =====
+
+/// Blend a color onto a destination color with the given alpha (0-255).
+///
+/// Uses optimized bit-shifting instead of division for performance.
+///
+/// # Arguments
+/// * `src` - Source color (ARGB)
+/// * `dst` - Destination color (ARGB)
+/// * `alpha` - Blend alpha (0 = transparent, 255 = opaque)
+#[inline(always)]
+pub fn blend_color(src: u32, dst: u32, alpha: u8) -> u32 {
+    if alpha == 255 {
+        return src;
+    }
+    if alpha == 0 {
+        return dst;
+    }
+
+    // Fast path for common semi-transparent values
+    // Use 256 as divisor (shift by 8) instead of 255 for speed
+    // Error is at most 1/255 ≈ 0.4% which is imperceptible
+    let a = alpha as u32;
+    let inv_a = 256 - a;
+
+    let sr = (src >> 16) & 0xFF;
+    let sg = (src >> 8) & 0xFF;
+    let sb = src & 0xFF;
+
+    let dr = (dst >> 16) & 0xFF;
+    let dg = (dst >> 8) & 0xFF;
+    let db = dst & 0xFF;
+
+    // Use shift instead of divide: (x * a) >> 8 instead of (x * a) / 255
+    let r = (sr * a + dr * inv_a) >> 8;
+    let g = (sg * a + dg * inv_a) >> 8;
+    let b = (sb * a + db * inv_a) >> 8;
+
+    0xFF000000 | (r << 16) | (g << 8) | b
+}
+
+/// Draw a pixel with alpha blending.
+#[inline]
+pub fn draw_pixel_alpha(x: i32, y: i32, color: u32, alpha: u8) {
+    if alpha == 0 || x < 0 || y < 0 {
+        return;
+    }
+
+    let ux = x as usize;
+    let uy = y as usize;
+    let width = FB_WIDTH.load(Ordering::Relaxed);
+    let height = FB_HEIGHT.load(Ordering::Relaxed);
+    let stride = FB_STRIDE.load(Ordering::Relaxed);
+    let addr = FB_ADDR.load(Ordering::Relaxed);
+
+    if ux < width && uy < height && addr != 0 {
+        unsafe {
+            let fb = addr as *mut u32;
+            let offset = uy * stride + ux;
+            let dst = *fb.add(offset);
+            *fb.add(offset) = blend_color(color, dst, alpha);
+        }
+    }
+}
+
+/// Fill a rectangle with alpha blending.
+///
+/// Uses optimized bit-shifting and pre-computed source components for performance.
+///
+/// # Arguments
+/// * `x`, `y` - Top-left corner
+/// * `w`, `h` - Width and height
+/// * `color` - Fill color (ARGB format)
+/// * `alpha` - Opacity (0-255)
+pub fn fill_rect_alpha(x: i32, y: i32, w: u32, h: u32, color: u32, alpha: u8) {
+    if !is_ready() || w == 0 || h == 0 || alpha == 0 {
+        return;
+    }
+
+    // Fast path for opaque - just use fill_rect
+    if alpha >= 253 {
+        fill_rect(x, y, w, h, color);
+        return;
+    }
+
+    // Fast path for very transparent - skip entirely
+    if alpha < 3 {
+        return;
+    }
+
+    let fb_width = FB_WIDTH.load(Ordering::Relaxed) as i32;
+    let fb_height = FB_HEIGHT.load(Ordering::Relaxed) as i32;
+    let stride = FB_STRIDE.load(Ordering::Relaxed);
+    let addr = FB_ADDR.load(Ordering::Relaxed);
+
+    // Clip to screen bounds
+    let x0 = x.max(0);
+    let y0 = y.max(0);
+    let x1 = (x + w as i32).min(fb_width);
+    let y1 = (y + h as i32).min(fb_height);
+
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+
+    // Pre-compute alpha and source components (hoisted out of loop)
+    let a = alpha as u32;
+    let inv_a = 256 - a;
+
+    // Pre-multiply source color components by alpha
+    let sr_a = ((color >> 16) & 0xFF) * a;
+    let sg_a = ((color >> 8) & 0xFF) * a;
+    let sb_a = (color & 0xFF) * a;
+
+    let row_width = (x1 - x0) as usize;
+
+    unsafe {
+        let fb = addr as *mut u32;
+
+        for row in y0..y1 {
+            let row_start = fb.add(row as usize * stride + x0 as usize);
+
+            // Process pixels in the row
+            for col in 0..row_width {
+                let dst = *row_start.add(col);
+
+                // Extract destination components and multiply by inverse alpha
+                let dr_inv = ((dst >> 16) & 0xFF) * inv_a;
+                let dg_inv = ((dst >> 8) & 0xFF) * inv_a;
+                let db_inv = (dst & 0xFF) * inv_a;
+
+                // Blend using bit-shift (divide by 256 instead of 255)
+                let r = (sr_a + dr_inv) >> 8;
+                let g = (sg_a + dg_inv) >> 8;
+                let b = (sb_a + db_inv) >> 8;
+
+                *row_start.add(col) = 0xFF000000 | (r << 16) | (g << 8) | b;
+            }
+        }
+    }
+}
+
 /// Draw a single character at (x, y).
 ///
 /// Uses the built-in 8x8 bitmap font.

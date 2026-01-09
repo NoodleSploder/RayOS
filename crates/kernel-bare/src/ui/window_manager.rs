@@ -415,6 +415,75 @@ impl WindowManager {
     pub fn window_count(&self) -> usize {
         self.windows.iter().filter(|w| w.is_some()).count()
     }
+
+    /// Get the focused window ID.
+    pub fn focused_window(&self) -> Option<WindowId> {
+        if self.focused_id != WINDOW_ID_NONE {
+            Some(self.focused_id)
+        } else {
+            None
+        }
+    }
+
+    /// Get the next window in z-order (for Alt+Tab).
+    pub fn next_window(&self) -> Option<WindowId> {
+        if self.z_count < 2 {
+            return None;
+        }
+
+        // Find current focused position in z-order
+        let focused_pos = self.z_order[..self.z_count]
+            .iter()
+            .position(|&id| id == self.focused_id);
+
+        // Find next non-desktop window
+        for offset in 1..self.z_count {
+            let pos = match focused_pos {
+                Some(p) => (p + self.z_count - offset) % self.z_count,
+                None => self.z_count - 1 - offset,
+            };
+            let id = self.z_order[pos];
+            if let Some(win) = self.get_window(id) {
+                if win.window_type != WindowType::Desktop
+                    && win.window_type != WindowType::Panel
+                    && win.visible
+                {
+                    return Some(id);
+                }
+            }
+        }
+        None
+    }
+
+    /// Get the previous window in z-order (for Alt+Shift+Tab).
+    pub fn prev_window(&self) -> Option<WindowId> {
+        if self.z_count < 2 {
+            return None;
+        }
+
+        // Find current focused position in z-order
+        let focused_pos = self.z_order[..self.z_count]
+            .iter()
+            .position(|&id| id == self.focused_id);
+
+        // Find previous non-desktop window
+        for offset in 1..self.z_count {
+            let pos = match focused_pos {
+                Some(p) => (p + offset) % self.z_count,
+                None => offset,
+            };
+            let id = self.z_order[pos];
+            if let Some(win) = self.get_window(id) {
+                if win.window_type != WindowType::Desktop
+                    && win.window_type != WindowType::Panel
+                    && win.visible
+                {
+                    return Some(id);
+                }
+            }
+        }
+        None
+    }
 }
 
 // ===== Global accessors =====

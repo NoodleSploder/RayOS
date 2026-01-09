@@ -24,6 +24,8 @@ pub mod widgets;
 pub mod layout;
 pub mod app_sdk;
 pub mod example_apps;
+pub mod font;
+pub mod animation;
 
 // Re-export key types
 pub use renderer::{COLOR_ACCENT, COLOR_BACKGROUND, COLOR_TEXT, COLOR_WINDOW_BG, CursorType};
@@ -33,6 +35,7 @@ pub use shell::{ui_shell_init, ui_shell_tick};
 pub use input::{
     handle_mouse_move, handle_mouse_button_down, handle_mouse_button_up, mouse_position,
     handle_key_for_mouse, handle_scancode_for_mouse, is_text_input_active,
+    process_key_reflex, process_mouse_reflex, tick_reflex_engine,
 };
 
 // Re-export Linux Desktop window management functions
@@ -51,4 +54,17 @@ pub use shell::{
 pub use app_sdk::{
     App, AppCapabilities, AppContext, AppDescriptor, AppEvent, AppInstance,
     AppManager, AppRegistryEntry, Key, MouseButton, app_manager,
+};
+
+// Re-export Font types
+pub use font::{
+    FontSize, FontStyle, AntiAlias, FontMetrics, GlyphBitmap,
+    draw_text_aa, draw_char_aa, measure_text, measure_text_height, get_metrics,
+};
+
+// Re-export Animation types
+pub use animation::{
+    Animation, AnimationType, AnimatedProperties, AnimationCallback, AnimationManager,
+    Easing, SlideDirection, animate_fade_in, animate_fade_out, animate_pop_in, animate_pop_out,
+    animate_move, animate_resize, animate_minimize, animate_restore,
 };

@@ -22,6 +22,7 @@ use super::renderer::{
     self, COLOR_ACCENT, COLOR_BACKGROUND, COLOR_BLACK, COLOR_BORDER, COLOR_TEXT,
     COLOR_TEXT_DIM, COLOR_WHITE, COLOR_WINDOW_BG, FONT_HEIGHT, FONT_WIDTH,
 };
+use super::font::{self, FontSize, draw_text_aa, measure_text, get_metrics};
 
 // ===== Widget Trait =====
 
@@ -84,6 +85,7 @@ pub const LABEL_MAX_LEN: usize = 128;
 /// A static text label widget.
 ///
 /// Labels display non-editable text with configurable color and alignment.
+/// Supports both legacy 8x8 bitmap fonts and scalable anti-aliased fonts.
 #[derive(Clone)]
 pub struct Label {
     text: [u8; LABEL_MAX_LEN],
@@ -93,6 +95,10 @@ pub struct Label {
     alignment: Alignment,
     valignment: VAlignment,
     bounds: Rect,
+    /// Font size (None = legacy 8x8, Some = scalable font)
+    font_size: Option<FontSize>,
+    /// Use anti-aliased rendering
+    anti_alias: bool,
 }
 
 impl Label {
@@ -106,8 +112,18 @@ impl Label {
             alignment: Alignment::Left,
             valignment: VAlignment::Center,
             bounds: Rect::default(),
+            font_size: None,  // Legacy by default for compatibility
+            anti_alias: false,
         };
         label.set_text(text);
+        label
+    }
+
+    /// Create a new label with scalable font.
+    pub fn new_scaled(text: &[u8], size: FontSize) -> Self {
+        let mut label = Self::new(text);
+        label.font_size = Some(size);
+        label.anti_alias = true;
         label
     }
 
@@ -148,11 +164,30 @@ impl Label {
         self.bounds = bounds;
     }
 
+    /// Set font size (None for legacy 8x8 bitmap font).
+    pub fn set_font_size(&mut self, size: Option<FontSize>) {
+        self.font_size = size;
+        if size.is_some() {
+            self.anti_alias = true;
+        }
+    }
+
+    /// Set anti-aliasing mode.
+    pub fn set_anti_alias(&mut self, enabled: bool) {
+        self.anti_alias = enabled;
+    }
+
     /// Calculate the preferred size for this label.
     pub fn preferred_size(&self) -> (u32, u32) {
-        let width = (self.text_len * FONT_WIDTH) as u32;
-        let height = FONT_HEIGHT as u32;
-        (width, height)
+        if let Some(size) = self.font_size {
+            let width = measure_text(&self.text[..self.text_len], size) as u32;
+            let metrics = get_metrics(size);
+            (width, metrics.line_height as u32)
+        } else {
+            let width = (self.text_len * FONT_WIDTH) as u32;
+            let height = FONT_HEIGHT as u32;
+            (width, height)
+        }
     }
 
     /// Render the label at the specified position.
@@ -162,8 +197,7 @@ impl Label {
 
     /// Render the label within the given bounds.
     pub fn render_in_bounds(&self, bounds: Rect) {
-        let text_width = (self.text_len * FONT_WIDTH) as u32;
-        let text_height = FONT_HEIGHT as u32;
+        let (text_width, text_height) = self.preferred_size();
 
         // Calculate x position based on alignment
         let x = match self.alignment {
@@ -184,8 +218,21 @@ impl Label {
             renderer::fill_rect(x, y, text_width, text_height, bg);
         }
 
-        // Draw text
-        renderer::draw_text(x, y, &self.text[..self.text_len], self.color);
+        // Draw text using appropriate renderer
+        if let Some(size) = self.font_size {
+            if self.anti_alias {
+                // Scalable font with anti-aliasing
+                // For AA fonts, y is baseline, so adjust
+                let baseline_y = y + get_metrics(size).ascent as i32;
+                draw_text_aa(x, baseline_y, &self.text[..self.text_len], self.color, size);
+            } else {
+                // Scalable font without AA (just use legacy for now)
+                renderer::draw_text(x, y, &self.text[..self.text_len], self.color);
+            }
+        } else {
+            // Legacy 8x8 bitmap font
+            renderer::draw_text(x, y, &self.text[..self.text_len], self.color);
+        }
     }
 }
 
@@ -209,6 +256,7 @@ pub const BUTTON_TEXT_DISABLED: u32 = 0xFF606060;
 /// A clickable button widget.
 ///
 /// Buttons respond to mouse hover and click events.
+/// Supports both legacy 8x8 bitmap fonts and scalable anti-aliased fonts.
 #[derive(Clone)]
 pub struct Button {
     text: [u8; BUTTON_MAX_LEN],
@@ -216,6 +264,10 @@ pub struct Button {
     state: WidgetState,
     bounds: Rect,
     enabled: bool,
+    /// Font size (None = legacy 8x8, Some = scalable font)
+    font_size: Option<FontSize>,
+    /// Use anti-aliased rendering
+    anti_alias: bool,
 }
 
 impl Button {
@@ -227,8 +279,18 @@ impl Button {
             state: WidgetState::Normal,
             bounds: Rect::default(),
             enabled: true,
+            font_size: None,  // Legacy by default
+            anti_alias: false,
         };
         button.set_text(text);
+        button
+    }
+
+    /// Create a new button with scalable font.
+    pub fn new_scaled(text: &[u8], size: FontSize) -> Self {
+        let mut button = Self::new(text);
+        button.font_size = Some(size);
+        button.anti_alias = true;
         button
     }
 
@@ -281,14 +343,36 @@ impl Button {
         self.bounds
     }
 
+    /// Set font size (None for legacy 8x8 bitmap font).
+    pub fn set_font_size(&mut self, size: Option<FontSize>) {
+        self.font_size = size;
+        if size.is_some() {
+            self.anti_alias = true;
+        }
+    }
+
+    /// Set anti-aliasing mode.
+    pub fn set_anti_alias(&mut self, enabled: bool) {
+        self.anti_alias = enabled;
+    }
+
     /// Calculate the preferred size for this button.
     pub fn preferred_size(&self) -> (u32, u32) {
-        let text_width = (self.text_len * FONT_WIDTH) as u32;
-        let text_height = FONT_HEIGHT as u32;
-        (
-            text_width + BUTTON_PADDING_X * 2,
-            text_height + BUTTON_PADDING_Y * 2,
-        )
+        if let Some(size) = self.font_size {
+            let text_width = measure_text(&self.text[..self.text_len], size) as u32;
+            let metrics = get_metrics(size);
+            (
+                text_width + BUTTON_PADDING_X * 2,
+                metrics.line_height as u32 + BUTTON_PADDING_Y * 2,
+            )
+        } else {
+            let text_width = (self.text_len * FONT_WIDTH) as u32;
+            let text_height = FONT_HEIGHT as u32;
+            (
+                text_width + BUTTON_PADDING_X * 2,
+                text_height + BUTTON_PADDING_Y * 2,
+            )
+        }
     }
 
     /// Check if a point is within the button bounds.
@@ -366,13 +450,28 @@ impl Button {
         renderer::draw_rect(x, y, width, height, border_color, 1);
 
         // Calculate text position (centered)
-        let text_width = (self.text_len * FONT_WIDTH) as u32;
-        let text_height = FONT_HEIGHT as u32;
+        let (text_width, text_height) = if let Some(size) = self.font_size {
+            let w = measure_text(&self.text[..self.text_len], size) as u32;
+            let metrics = get_metrics(size);
+            (w, metrics.line_height as u32)
+        } else {
+            ((self.text_len * FONT_WIDTH) as u32, FONT_HEIGHT as u32)
+        };
+
         let text_x = x + (width.saturating_sub(text_width) / 2) as i32;
         let text_y = y + (height.saturating_sub(text_height) / 2) as i32;
 
-        // Draw text
-        renderer::draw_text(text_x, text_y, &self.text[..self.text_len], text_color);
+        // Draw text using appropriate renderer
+        if let Some(size) = self.font_size {
+            if self.anti_alias {
+                let baseline_y = text_y + get_metrics(size).ascent as i32;
+                draw_text_aa(text_x, baseline_y, &self.text[..self.text_len], text_color, size);
+            } else {
+                renderer::draw_text(text_x, text_y, &self.text[..self.text_len], text_color);
+            }
+        } else {
+            renderer::draw_text(text_x, text_y, &self.text[..self.text_len], text_color);
+        }
     }
 }
 
@@ -396,6 +495,7 @@ pub const TEXT_INPUT_CURSOR: u32 = COLOR_ACCENT;
 /// An editable text input widget.
 ///
 /// Supports typing, cursor movement, backspace, and selection.
+/// Supports both legacy 8x8 bitmap fonts and scalable anti-aliased fonts.
 #[derive(Clone)]
 pub struct TextInput {
     text: [u8; TEXT_INPUT_MAX_LEN],
@@ -410,6 +510,10 @@ pub struct TextInput {
     scroll_offset: usize,
     cursor_visible: bool,
     cursor_blink_counter: u32,
+    /// Font size (None = legacy 8x8, Some = scalable font)
+    font_size: Option<FontSize>,
+    /// Use anti-aliased rendering
+    anti_alias: bool,
 }
 
 impl TextInput {
@@ -428,12 +532,29 @@ impl TextInput {
             scroll_offset: 0,
             cursor_visible: true,
             cursor_blink_counter: 0,
+            font_size: None,
+            anti_alias: false,
         }
+    }
+
+    /// Create a new text input with scalable font.
+    pub fn new_scaled(size: FontSize) -> Self {
+        let mut input = Self::new();
+        input.font_size = Some(size);
+        input.anti_alias = true;
+        input
     }
 
     /// Create a text input with initial text.
     pub fn with_text(text: &[u8]) -> Self {
         let mut input = Self::new();
+        input.set_text(text);
+        input
+    }
+
+    /// Create a text input with initial text and scalable font.
+    pub fn with_text_scaled(text: &[u8], size: FontSize) -> Self {
+        let mut input = Self::new_scaled(size);
         input.set_text(text);
         input
     }
@@ -507,6 +628,37 @@ impl TextInput {
     /// Check if a point is within bounds.
     pub fn contains(&self, x: i32, y: i32) -> bool {
         self.bounds.contains(x, y)
+    }
+
+    /// Set font size (None for legacy 8x8 bitmap font).
+    pub fn set_font_size(&mut self, size: Option<FontSize>) {
+        self.font_size = size;
+        if size.is_some() {
+            self.anti_alias = true;
+        }
+    }
+
+    /// Set anti-aliasing mode.
+    pub fn set_anti_alias(&mut self, enabled: bool) {
+        self.anti_alias = enabled;
+    }
+
+    /// Get the effective character width for this input.
+    fn char_width(&self) -> usize {
+        if let Some(size) = self.font_size {
+            get_metrics(size).avg_width
+        } else {
+            FONT_WIDTH
+        }
+    }
+
+    /// Get the effective font height for this input.
+    fn font_height(&self) -> usize {
+        if let Some(size) = self.font_size {
+            get_metrics(size).line_height
+        } else {
+            FONT_HEIGHT
+        }
     }
 
     /// Handle a character input.
@@ -666,7 +818,8 @@ impl TextInput {
         if self.bounds.width == 0 {
             return;
         }
-        let visible_chars = ((self.bounds.width - TEXT_INPUT_PADDING_X * 2) / FONT_WIDTH as u32) as usize;
+        let char_w = self.char_width();
+        let visible_chars = ((self.bounds.width - TEXT_INPUT_PADDING_X * 2) / char_w as u32) as usize;
         if visible_chars == 0 {
             return;
         }
@@ -691,8 +844,10 @@ impl TextInput {
 
     /// Calculate preferred size.
     pub fn preferred_size(&self, min_chars: usize) -> (u32, u32) {
-        let width = (min_chars * FONT_WIDTH) as u32 + TEXT_INPUT_PADDING_X * 2;
-        let height = FONT_HEIGHT as u32 + TEXT_INPUT_PADDING_Y * 2;
+        let char_w = self.char_width();
+        let font_h = self.font_height();
+        let width = (min_chars * char_w) as u32 + TEXT_INPUT_PADDING_X * 2;
+        let height = font_h as u32 + TEXT_INPUT_PADDING_Y * 2;
         (width, height)
     }
 
@@ -706,8 +861,9 @@ impl TextInput {
             self.selection_start = None;
 
             // Calculate cursor position from click
+            let char_w = self.char_width();
             let text_x = self.bounds.x + TEXT_INPUT_PADDING_X as i32;
-            let click_offset = ((x - text_x) / FONT_WIDTH as i32).max(0) as usize;
+            let click_offset = ((x - text_x) / char_w as i32).max(0) as usize;
             self.cursor_pos = (self.scroll_offset + click_offset).min(self.text_len);
             self.cursor_visible = true;
             self.cursor_blink_counter = 0;
@@ -721,7 +877,9 @@ impl TextInput {
 
     /// Render the text input.
     pub fn render(&self, x: i32, y: i32, width: u32) {
-        let height = FONT_HEIGHT as u32 + TEXT_INPUT_PADDING_Y * 2;
+        let font_h = self.font_height();
+        let char_w = self.char_width();
+        let height = font_h as u32 + TEXT_INPUT_PADDING_Y * 2;
 
         // Choose colors based on state
         let (bg_color, border_color) = if !self.enabled {
@@ -741,40 +899,58 @@ impl TextInput {
         let text_x = x + TEXT_INPUT_PADDING_X as i32;
         let text_y = y + TEXT_INPUT_PADDING_Y as i32;
         let visible_width = width.saturating_sub(TEXT_INPUT_PADDING_X * 2);
-        let visible_chars = (visible_width / FONT_WIDTH as u32) as usize;
+        let visible_chars = (visible_width / char_w as u32) as usize;
 
         // Draw selection highlight if any
         if let Some(sel_start) = self.selection_start {
             let start = sel_start.min(self.cursor_pos).saturating_sub(self.scroll_offset);
             let end = (sel_start.max(self.cursor_pos)).saturating_sub(self.scroll_offset).min(visible_chars);
             if start < end {
-                let sel_x = text_x + (start * FONT_WIDTH) as i32;
-                let sel_width = ((end - start) * FONT_WIDTH) as u32;
-                renderer::fill_rect(sel_x, text_y, sel_width, FONT_HEIGHT as u32, COLOR_ACCENT & 0x80FFFFFF);
+                let sel_x = text_x + (start * char_w) as i32;
+                let sel_width = ((end - start) * char_w) as u32;
+                renderer::fill_rect(sel_x, text_y, sel_width, font_h as u32, COLOR_ACCENT & 0x80FFFFFF);
             }
         }
 
         // Draw text or placeholder
         if self.text_len == 0 && self.placeholder_len > 0 {
             let display_len = self.placeholder_len.min(visible_chars);
-            renderer::draw_text(text_x, text_y, &self.placeholder[..display_len], TEXT_INPUT_PLACEHOLDER);
+            if let Some(size) = self.font_size {
+                if self.anti_alias {
+                    let baseline_y = text_y + get_metrics(size).ascent as i32;
+                    draw_text_aa(text_x, baseline_y, &self.placeholder[..display_len], TEXT_INPUT_PLACEHOLDER, size);
+                } else {
+                    renderer::draw_text(text_x, text_y, &self.placeholder[..display_len], TEXT_INPUT_PLACEHOLDER);
+                }
+            } else {
+                renderer::draw_text(text_x, text_y, &self.placeholder[..display_len], TEXT_INPUT_PLACEHOLDER);
+            }
         } else {
             let display_start = self.scroll_offset;
             let display_end = (self.scroll_offset + visible_chars).min(self.text_len);
             if display_start < display_end {
-                renderer::draw_text(
-                    text_x,
-                    text_y,
-                    &self.text[display_start..display_end],
-                    COLOR_TEXT,
-                );
+                if let Some(size) = self.font_size {
+                    if self.anti_alias {
+                        let baseline_y = text_y + get_metrics(size).ascent as i32;
+                        draw_text_aa(text_x, baseline_y, &self.text[display_start..display_end], COLOR_TEXT, size);
+                    } else {
+                        renderer::draw_text(text_x, text_y, &self.text[display_start..display_end], COLOR_TEXT);
+                    }
+                } else {
+                    renderer::draw_text(
+                        text_x,
+                        text_y,
+                        &self.text[display_start..display_end],
+                        COLOR_TEXT,
+                    );
+                }
             }
         }
 
         // Draw cursor if focused and visible
         if self.focused && self.cursor_visible && self.enabled {
-            let cursor_x = text_x + ((self.cursor_pos - self.scroll_offset) * FONT_WIDTH) as i32;
-            renderer::fill_rect(cursor_x, text_y, 2, FONT_HEIGHT as u32, TEXT_INPUT_CURSOR);
+            let cursor_x = text_x + ((self.cursor_pos - self.scroll_offset) * char_w) as i32;
+            renderer::fill_rect(cursor_x, text_y, 2, font_h as u32, TEXT_INPUT_CURSOR);
         }
     }
 }

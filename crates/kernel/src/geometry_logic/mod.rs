@@ -19,11 +19,12 @@
 //! - `access_control` - Permissions as geometric hit tests
 //! - `logic_encoding` - RT Core logic: conditionals as ray-geometry intersections
 //! - `decision_tree` - BVH-encoded decision trees for GPU classification
-//! - `state_geometry` - Variables as spatial structures (planned)
+//! - `state_geometry` - Ray-based state access: variables as spatial structures
 
 pub mod access_control;
 pub mod logic_encoding;
 pub mod decision_tree;
+pub mod state_geometry;
 
 pub use access_control::{
     AccessControlGeometry, AccessQuery, AccessResult, AccessDecision,
@@ -61,4 +62,21 @@ pub use decision_tree::{
     MAX_TREE_DEPTH, MAX_NODES, MAX_SAMPLES,
     // Shader
     BVH_DECISION_TREE_SHADER,
+};
+
+pub use state_geometry::{
+    // Core types
+    StateGeometry, StateVariable, StatePosition, VarType,
+    // GPU types
+    GpuStateVar, GpuReadRequest, GpuReadResult,
+    // Results
+    ReadResult, WriteResult,
+    // Builder
+    StateLayoutBuilder, LayoutStrategy,
+    // Stats
+    StateAccessStats,
+    // Constants
+    MAX_STATE_VARS, MAX_ARRAY_SIZE, MAX_STRUCT_FIELDS, WORKGROUP_SIZE,
+    // Shader
+    STATE_GEOMETRY_SHADER,
 };

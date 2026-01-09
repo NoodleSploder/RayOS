@@ -79,6 +79,7 @@ mod watchdog;              // Phase 21 Task 4: Watchdog Timer & Hang Detection
 mod boot_marker;           // Phase 21 Task 5: Boot Markers & Golden State
 mod recovery_policy;       // Phase 21 Task 5: Recovery Policy & Coordinator
 mod syslog;                // In-kernel event journal
+mod system1;               // System 1: Reflex Engine (Subconscious)
 
 #[cfg(feature = "ui_shell")]
 mod ui;                    // Phase 21.1: Native UI Framework
@@ -282,6 +283,8 @@ pub mod windows_vm;
 pub mod rayapp_package;
 pub mod rayapp_loader;
 pub mod app_store;
+pub mod update_system;
+pub mod recovery_mode;
 mod pci;
 mod rayapp;
 mod rayapp_clipboard;

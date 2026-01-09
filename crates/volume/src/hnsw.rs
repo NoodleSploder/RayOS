@@ -977,39 +977,39 @@ mod tests {
 
     #[test]
     fn test_recall_quality() {
-        // Test that HNSW achieves reasonable recall 
+        // Test that HNSW achieves reasonable recall
         let mut config = HnswConfig::fast(32);
         config.ef_search = 100; // High ef_search for better recall
         config.ef_construction = 200;
         let index = HnswIndex::new(config);
-        
+
         // Insert some random vectors
         let n = 100;
         let mut vectors: Vec<Vec<f32>> = Vec::new();
         for _ in 0..n {
             vectors.push(normalized_vector(32));
         }
-        
+
         for (i, v) in vectors.iter().enumerate() {
             index.insert(i as u64, v);
         }
-        
+
         // Query for the first inserted vector (exact match should work)
         let query = &vectors[0];
         let k = 5;
-        
+
         let results = index.search(query, k);
-        
+
         // We should find at least one result
         assert!(!results.is_empty(), "No results found");
-        
+
         // The first result should be very close to the query (exact or near-exact match)
-        assert!(results[0].distance < 0.1, 
+        assert!(results[0].distance < 0.1,
             "First result should be very close. Got distance: {}", results[0].distance);
-        
+
         // The query vector is vectors[0], so we should find id=0
         let found_exact = results.iter().any(|r| r.id == 0);
-        assert!(found_exact, "Failed to find exact match (id=0). Results: {:?}", 
+        assert!(found_exact, "Failed to find exact match (id=0). Results: {:?}",
             results.iter().map(|r| (r.id, r.distance)).collect::<Vec<_>>());
     }
 

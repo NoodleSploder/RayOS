@@ -110,21 +110,21 @@ var<storage, read_write> output_data: array<WorkResult>;
 // Process perception input (e.g., edge detection, motion detection)
 fn process_perception(item: WorkItem) -> WorkResult {
     let offset = item.input_offset;
-    
+
     // Simple perception: compute average intensity from input window
     var sum: f32 = 0.0;
     let window_size = min(item.param, 64u);
-    
+
     for (var i: u32 = 0u; i < window_size; i = i + 1u) {
         sum = sum + input_data[offset + i];
     }
-    
+
     let avg = sum / f32(max(window_size, 1u));
-    
+
     // Motion detection: compare with expected baseline (stored after window)
     let baseline = input_data[offset + window_size];
     let motion = abs(avg - baseline);
-    
+
     return WorkResult(
         1u,           // success
         0u,           // stage_type = perception
@@ -140,24 +140,24 @@ fn process_perception(item: WorkItem) -> WorkResult {
 // Process logic input (e.g., access control, reflex matching)
 fn process_logic(item: WorkItem) -> WorkResult {
     let offset = item.input_offset;
-    
+
     // Logic encoding:
     // input_data[offset + 0] = user_id (as f32)
     // input_data[offset + 1] = resource_id (as f32)
     // input_data[offset + 2] = permission_bits
     // input_data[offset + 3] = resource_owner_id
     // input_data[offset + 4] = resource_permission_bits
-    
+
     let user_id = bitcast<u32>(input_data[offset + 0u]);
     let resource_id = bitcast<u32>(input_data[offset + 1u]);
     let requested_perm = bitcast<u32>(input_data[offset + 2u]);
     let owner_id = bitcast<u32>(input_data[offset + 3u]);
     let resource_perms = bitcast<u32>(input_data[offset + 4u]);
-    
+
     // Access control logic as geometric hit test
     var granted: u32 = 0u;
     var confidence: f32 = 0.0;
-    
+
     // Check 1: Owner always has full access
     if (user_id == owner_id) {
         granted = 1u;
@@ -173,7 +173,7 @@ fn process_logic(item: WorkItem) -> WorkResult {
         granted = 1u;
         confidence = 0.95;
     }
-    
+
     return WorkResult(
         1u,                    // success
         1u,                    // stage_type = logic
@@ -190,32 +190,32 @@ fn process_logic(item: WorkItem) -> WorkResult {
 fn process_semantic(item: WorkItem) -> WorkResult {
     let offset = item.input_offset;
     let dim = item.param;  // Vector dimension
-    
+
     // Compute cosine similarity between two vectors
     // Vector A: input_data[offset .. offset + dim]
     // Vector B: input_data[offset + dim .. offset + 2*dim]
-    
+
     var dot_product: f32 = 0.0;
     var mag_a_sq: f32 = 0.0;
     var mag_b_sq: f32 = 0.0;
-    
+
     for (var i: u32 = 0u; i < dim; i = i + 1u) {
         let a = input_data[offset + i];
         let b = input_data[offset + dim + i];
-        
+
         dot_product = dot_product + (a * b);
         mag_a_sq = mag_a_sq + (a * a);
         mag_b_sq = mag_b_sq + (b * b);
     }
-    
+
     let mag_a = sqrt(mag_a_sq);
     let mag_b = sqrt(mag_b_sq);
-    
+
     var similarity: f32 = 0.0;
     if (mag_a > 0.0 && mag_b > 0.0) {
         similarity = dot_product / (mag_a * mag_b);
     }
-    
+
     return WorkResult(
         1u,           // success
         2u,           // stage_type = semantic
@@ -232,11 +232,11 @@ fn process_semantic(item: WorkItem) -> WorkResult {
 fn process_custom(item: WorkItem) -> WorkResult {
     let offset = item.input_offset;
     let op_code = item.param;
-    
+
     // Custom operations based on op_code
     var result: f32 = 0.0;
     var aux: f32 = 0.0;
-    
+
     switch (op_code) {
         // Op 0: Sum
         case 0u: {
@@ -264,7 +264,7 @@ fn process_custom(item: WorkItem) -> WorkResult {
             return WorkResult(0u, 3u, 0.0, 0.0);  // Unknown op
         }
     }
-    
+
     return WorkResult(
         1u,       // success
         3u,       // stage_type = custom
@@ -280,15 +280,15 @@ fn process_custom(item: WorkItem) -> WorkResult {
 @compute @workgroup_size(256)
 fn unified_dispatch(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
-    
+
     // Bounds check
     if (idx >= header.total_items) {
         return;
     }
-    
+
     let item = work_items[idx];
     var result: WorkResult;
-    
+
     // Dispatch to appropriate stage handler
     switch (item.stage_type) {
         case 0u: {
@@ -307,7 +307,7 @@ fn unified_dispatch(@builtin(global_invocation_id) global_id: vec3<u32>) {
             result = WorkResult(0u, item.stage_type, 0.0, 0.0);
         }
     }
-    
+
     // Write result
     output_data[item.output_offset] = result;
 }

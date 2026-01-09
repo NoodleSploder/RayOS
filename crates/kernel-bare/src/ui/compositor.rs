@@ -1,14 +1,16 @@
 //! Compositor for RayOS UI
 //!
 //! Composites all windows to the framebuffer in z-order.
+//! Supports animated window transitions with alpha blending.
 
 use super::renderer::{
-    self, fill_rect, draw_rect, draw_text,
+    self, fill_rect, fill_rect_alpha, draw_rect, draw_text,
     COLOR_BACKGROUND, COLOR_WINDOW_BG, COLOR_TITLE_BAR, COLOR_TITLE_FOCUSED,
     COLOR_TEXT, COLOR_BORDER, COLOR_CLOSE_HOVER, COLOR_ACCENT, COLOR_TEXT_DIM,
     FONT_HEIGHT,
 };
 use super::window_manager::{self, Window, WindowType, WINDOW_ID_NONE};
+use super::animation::{self, AnimatedProperties, AnimationCallback};
 use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Title bar height in pixels.
@@ -32,6 +34,8 @@ pub struct Compositor {
     frame_count: u64,
     /// Whether compositor is initialized
     initialized: bool,
+    /// Whether animations are enabled
+    animations_enabled: bool,
 }
 
 /// Global compositor instance.
@@ -45,6 +49,7 @@ impl Compositor {
             dirty: true,
             frame_count: 0,
             initialized: false,
+            animations_enabled: true,
         }
     }
 
@@ -53,11 +58,26 @@ impl Compositor {
         self.dirty = true;
         self.frame_count = 0;
         self.initialized = true;
+        self.animations_enabled = true;  // Performance optimized with bit-shift blending
+
+        // Initialize animation system (but it starts disabled)
+        animation::init();
 
         #[cfg(feature = "serial_debug")]
         {
             crate::serial_write_str("RAYOS_UI_COMPOSITOR_INIT:ok\n");
         }
+    }
+
+    /// Enable or disable window animations.
+    pub fn set_animations_enabled(&mut self, enabled: bool) {
+        self.animations_enabled = enabled;
+        animation::set_enabled(enabled);
+    }
+
+    /// Check if animations are enabled.
+    pub fn animations_enabled(&self) -> bool {
+        self.animations_enabled
     }
 
     /// Mark the compositor as needing a redraw.
@@ -77,6 +97,38 @@ impl Compositor {
             return;
         }
 
+        // Tick animations and handle callbacks
+        let callbacks = animation::tick();
+        for (window_id, callback) in callbacks.iter() {
+            if *window_id == 0 {
+                break;
+            }
+            match callback {
+                AnimationCallback::DestroyWindow => {
+                    window_manager::get_mut().destroy_window(*window_id);
+                }
+                AnimationCallback::HideWindow => {
+                    if let Some(win) = window_manager::get_mut().get_window_mut(*window_id) {
+                        win.visible = false;
+                    }
+                }
+                AnimationCallback::ShowWindow => {
+                    if let Some(win) = window_manager::get_mut().get_window_mut(*window_id) {
+                        win.visible = true;
+                    }
+                }
+                AnimationCallback::FocusWindow => {
+                    window_manager::get_mut().set_focus(*window_id);
+                }
+                AnimationCallback::None => {}
+            }
+        }
+
+        // If animations are active, we need to keep redrawing
+        if animation::has_active() {
+            self.dirty = true;
+        }
+
         // Render desktop background
         self.render_desktop();
 
@@ -93,11 +145,15 @@ impl Compositor {
             }
         }
 
-        // Render each window
+        // Render each window (with animation support)
         for i in 0..count {
             let id = window_ids[i];
             if let Some(win) = wm.get_window(id) {
-                if win.visible {
+                // Check if this window is being animated
+                if let Some(anim_props) = animation::get_animated_properties(id) {
+                    // Render with animated properties
+                    self.render_window_animated(win, &anim_props);
+                } else if win.visible {
                     self.render_window(win);
                 }
             }
@@ -150,6 +206,113 @@ impl Compositor {
                 self.render_popup(win);
             }
         }
+    }
+
+    /// Render a window with animated properties (position, size, opacity).
+    fn render_window_animated(&self, win: &Window, props: &AnimatedProperties) {
+        // Skip if fully transparent
+        if props.opacity == 0 {
+            return;
+        }
+
+        // For now, render with alpha blending at the animated position
+        // Full animation rendering with scaling would require more complex compositing
+        match win.window_type {
+            WindowType::Desktop => {
+                // Desktop doesn't animate
+            }
+            WindowType::Normal | WindowType::Dialog | WindowType::VmSurface => {
+                self.render_decorated_window_alpha(win, props);
+            }
+            WindowType::Panel => {
+                self.render_panel_alpha(win, props);
+            }
+            WindowType::Popup => {
+                self.render_popup_alpha(win, props);
+            }
+        }
+    }
+
+    /// Render a decorated window with animation properties.
+    fn render_decorated_window_alpha(&self, win: &Window, props: &AnimatedProperties) {
+        let x = props.x;
+        let y = props.y;
+        let alpha = props.opacity;
+
+        // Use animated dimensions if scaling is applied, otherwise use window dimensions
+        let (w, h) = if props.scale < 1000 {
+            (props.width.max(1), props.height.max(1))
+        } else {
+            (win.width, win.height)
+        };
+
+        // Calculate total dimensions with decorations
+        let bw = win.border_width();
+        let tbh = win.title_bar_height();
+        let tw = w + 2 * bw;
+        let th = h + tbh + bw;
+
+        // Window border (alpha blended)
+        // Draw as four rectangles
+        fill_rect_alpha(x, y, tw, bw, COLOR_BORDER, alpha); // Top
+        fill_rect_alpha(x, y + th as i32 - bw as i32, tw, bw, COLOR_BORDER, alpha); // Bottom
+        fill_rect_alpha(x, y + bw as i32, bw, th - 2 * bw, COLOR_BORDER, alpha); // Left
+        fill_rect_alpha(x + tw as i32 - bw as i32, y + bw as i32, bw, th - 2 * bw, COLOR_BORDER, alpha); // Right
+
+        // Title bar background
+        let title_color = if win.focused { COLOR_TITLE_FOCUSED } else { COLOR_TITLE_BAR };
+        fill_rect_alpha(x + bw as i32, y + bw as i32, tw - 2 * bw, tbh - bw, title_color, alpha);
+
+        // Title text (only if reasonably visible)
+        if alpha > 128 {
+            let title = win.get_title();
+            if !title.is_empty() {
+                let text_x = x + bw as i32 + 8;
+                let text_y = y + bw as i32 + (tbh - bw - FONT_HEIGHT as u32) as i32 / 2 + 2;
+                draw_text(text_x, text_y, title, COLOR_TEXT);
+            }
+        }
+
+        // Close button (only if reasonably visible)
+        if alpha > 128 {
+            let btn_x = x + tw as i32 - CLOSE_BUTTON_SIZE as i32 - CLOSE_BUTTON_MARGIN as i32 - bw as i32;
+            let btn_y = y + bw as i32 + (tbh - bw - CLOSE_BUTTON_SIZE) as i32 / 2;
+            self.render_close_button(btn_x, btn_y, win.focused);
+        }
+
+        // Window content area
+        let cx = x + bw as i32;
+        let cy = y + tbh as i32;
+        fill_rect_alpha(cx, cy, w, h, COLOR_WINDOW_BG, alpha);
+
+        // Render window content (only if reasonably visible)
+        if alpha > 64 {
+            super::content::render_window_content(win, cx, cy, w, h);
+        }
+    }
+
+    /// Render a panel with animation properties.
+    fn render_panel_alpha(&self, win: &Window, props: &AnimatedProperties) {
+        let alpha = props.opacity;
+        fill_rect_alpha(props.x, props.y, props.width, props.height, COLOR_TITLE_BAR, alpha);
+
+        if alpha > 128 {
+            draw_text(props.x + 10, props.y + 8, b"RayOS", COLOR_ACCENT);
+            draw_text(props.x + 100, props.y + 8, b"|", COLOR_BORDER);
+            draw_text(props.x + 120, props.y + 8, b"Ready", COLOR_TEXT);
+        }
+    }
+
+    /// Render a popup with animation properties.
+    fn render_popup_alpha(&self, win: &Window, props: &AnimatedProperties) {
+        let alpha = props.opacity;
+        fill_rect_alpha(props.x, props.y, props.width, props.height, COLOR_WINDOW_BG, alpha);
+
+        // Border (as four rectangles)
+        fill_rect_alpha(props.x, props.y, props.width, 1, COLOR_BORDER, alpha);
+        fill_rect_alpha(props.x, props.y + props.height as i32 - 1, props.width, 1, COLOR_BORDER, alpha);
+        fill_rect_alpha(props.x, props.y, 1, props.height, COLOR_BORDER, alpha);
+        fill_rect_alpha(props.x + props.width as i32 - 1, props.y, 1, props.height, COLOR_BORDER, alpha);
     }
 
     /// Render a window with decorations (title bar, border).
