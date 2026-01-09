@@ -281,6 +281,7 @@ pub mod guest_surface;
 pub mod windows_vm;
 pub mod rayapp_package;
 pub mod rayapp_loader;
+pub mod app_store;
 mod pci;
 mod rayapp;
 mod rayapp_clipboard;

@@ -352,6 +352,8 @@ impl Shell {
             self.cmd_log(&mut output, &input[cmd_end..]);
         } else if self.cmd_matches(cmd, b"pkg") {
             self.cmd_pkg(&mut output, &input[cmd_end..]);
+        } else if self.cmd_matches(cmd, b"store") {
+            self.cmd_store(&mut output, &input[cmd_end..]);
         } else {
             let _ = write!(output, "Unknown command: '");
             let _ = output.write_all(cmd);
@@ -491,6 +493,7 @@ impl Shell {
         let _ = writeln!(output, "");
         let _ = writeln!(output, "App Platform:");
         let _ = writeln!(output, "  pkg [cmd]       Package management (list, install, remove, load)");
+        let _ = writeln!(output, "  store [cmd]     App Store (browse, search, install apps)");
         let _ = writeln!(output, "  app [cmd]       Application lifecycle management");
         let _ = writeln!(output, "");
         let _ = writeln!(output, "  test           Run comprehensive tests (Phase 3 + Phase 4)");
@@ -8299,6 +8302,645 @@ impl Shell {
         let _ = writeln!(output, "Checking signature... NOT SIGNED");
         let _ = writeln!(output, "");
         let _ = writeln!(output, "Package verification complete.");
+    }
+
+    // ===== App Store Commands =====
+
+    fn cmd_store(&self, output: &mut ShellOutput, args: &[u8]) {
+        // Parse subcommand
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() || args[start] == 0 {
+            self.store_help(output);
+            return;
+        }
+
+        // Find end of subcommand
+        let mut end = start;
+        while end < args.len() && args[end] != b' ' && args[end] != b'\t' && args[end] != 0 {
+            end += 1;
+        }
+
+        let subcmd = &args[start..end];
+        let subargs = if end < args.len() { &args[end..] } else { &args[args.len()..] };
+
+        if self.cmd_matches(subcmd, b"help") {
+            self.store_help(output);
+        } else if self.cmd_matches(subcmd, b"init") {
+            self.store_init(output);
+        } else if self.cmd_matches(subcmd, b"browse") || self.cmd_matches(subcmd, b"list") {
+            self.store_browse(output, subargs);
+        } else if self.cmd_matches(subcmd, b"featured") {
+            self.store_featured(output);
+        } else if self.cmd_matches(subcmd, b"search") {
+            self.store_search(output, subargs);
+        } else if self.cmd_matches(subcmd, b"info") {
+            self.store_info(output, subargs);
+        } else if self.cmd_matches(subcmd, b"install") {
+            self.store_install(output, subargs);
+        } else if self.cmd_matches(subcmd, b"uninstall") || self.cmd_matches(subcmd, b"remove") {
+            self.store_uninstall(output, subargs);
+        } else if self.cmd_matches(subcmd, b"updates") {
+            self.store_updates(output);
+        } else if self.cmd_matches(subcmd, b"categories") {
+            self.store_categories(output);
+        } else if self.cmd_matches(subcmd, b"status") {
+            self.store_status(output);
+        } else {
+            let _ = write!(output, "Unknown store command: ");
+            let _ = output.write_all(subcmd);
+            let _ = writeln!(output, "");
+            self.store_help(output);
+        }
+    }
+
+    fn store_help(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "[RAYOS_STORE:HELP]");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "RayOS App Store Commands:");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "  store init            Initialize the store catalog");
+        let _ = writeln!(output, "  store browse [cat]    Browse apps (optional category filter)");
+        let _ = writeln!(output, "  store featured        Show featured apps");
+        let _ = writeln!(output, "  store search <query>  Search for apps by name");
+        let _ = writeln!(output, "  store info <id>       Show app details");
+        let _ = writeln!(output, "  store install <id>    Install an app");
+        let _ = writeln!(output, "  store uninstall <id>  Uninstall an app");
+        let _ = writeln!(output, "  store updates         Check for updates");
+        let _ = writeln!(output, "  store categories      List categories");
+        let _ = writeln!(output, "  store status          Show store status");
+        let _ = writeln!(output, "  store help            Show this help");
+    }
+
+    fn store_init(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "[RAYOS_STORE:INIT]");
+
+        if crate::app_store::is_initialized() {
+            let _ = writeln!(output, "Store already initialized.");
+        } else {
+            crate::app_store::init_store();
+            let _ = writeln!(output, "App Store initialized.");
+        }
+
+        let count = crate::app_store::app_count();
+        let _ = write!(output, "Catalog contains ");
+        let _ = Self::write_u32(output, count as u32);
+        let _ = writeln!(output, " apps.");
+    }
+
+    fn store_browse(&self, output: &mut ShellOutput, args: &[u8]) {
+        if !crate::app_store::is_initialized() {
+            crate::app_store::init_store();
+        }
+
+        let _ = writeln!(output, "[RAYOS_STORE:BROWSE]");
+        let _ = writeln!(output, "");
+
+        // Check for category filter
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        let category = if start < args.len() && args[start] != 0 {
+            self.parse_category(&args[start..])
+        } else {
+            crate::app_store::AppCategory::All
+        };
+
+        let (apps, count) = crate::app_store::get_apps_by_category(category);
+
+        let _ = write!(output, "Apps in category '");
+        let _ = output.write_all(category.name());
+        let _ = write!(output, "': ");
+        let _ = Self::write_u32(output, count as u32);
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "");
+
+        let _ = writeln!(output, "ID   Name                    Version    Size      Rating");
+        let _ = writeln!(output, "---- ----------------------- ---------- --------- ------");
+
+        for i in 0..count {
+            if let Some(ref app) = apps[i] {
+                self.format_app_row(output, app);
+            }
+        }
+    }
+
+    fn store_featured(&self, output: &mut ShellOutput) {
+        if !crate::app_store::is_initialized() {
+            crate::app_store::init_store();
+        }
+
+        let _ = writeln!(output, "[RAYOS_STORE:FEATURED]");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Featured Apps");
+        let _ = writeln!(output, "=============");
+        let _ = writeln!(output, "");
+
+        let (apps, count) = crate::app_store::get_featured_apps();
+
+        if count == 0 {
+            let _ = writeln!(output, "No featured apps available.");
+            return;
+        }
+
+        for i in 0..count {
+            if let Some(ref app) = apps[i] {
+                let _ = write!(output, "[");
+                let _ = Self::write_u32(output, app.catalog_id);
+                let _ = write!(output, "] ");
+                let _ = output.write_all(app.name());
+                let _ = writeln!(output, "");
+
+                let _ = write!(output, "    ");
+                let _ = output.write_all(app.description());
+                let _ = writeln!(output, "");
+
+                let _ = write!(output, "    Rating: ");
+                self.format_rating(output, app.rating);
+                let _ = write!(output, "  Downloads: ");
+                let _ = Self::write_u32(output, app.download_count);
+                let _ = writeln!(output, "");
+                let _ = writeln!(output, "");
+            }
+        }
+    }
+
+    fn store_search(&self, output: &mut ShellOutput, args: &[u8]) {
+        if !crate::app_store::is_initialized() {
+            crate::app_store::init_store();
+        }
+
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() || args[start] == 0 {
+            let _ = writeln!(output, "Usage: store search <query>");
+            return;
+        }
+
+        // Find end of query (skip trailing spaces/nulls)
+        let mut end = args.len();
+        while end > start && (args[end - 1] == b' ' || args[end - 1] == 0) {
+            end -= 1;
+        }
+
+        let query = &args[start..end];
+
+        let _ = writeln!(output, "[RAYOS_STORE:SEARCH]");
+        let _ = write!(output, "Searching for: '");
+        let _ = output.write_all(query);
+        let _ = writeln!(output, "'");
+        let _ = writeln!(output, "");
+
+        let (apps, count) = crate::app_store::search_apps(query);
+
+        if count == 0 {
+            let _ = writeln!(output, "No apps found matching your search.");
+            return;
+        }
+
+        let _ = write!(output, "Found ");
+        let _ = Self::write_u32(output, count as u32);
+        let _ = writeln!(output, " app(s):");
+        let _ = writeln!(output, "");
+
+        let _ = writeln!(output, "ID   Name                    Version    Category");
+        let _ = writeln!(output, "---- ----------------------- ---------- -----------");
+
+        for i in 0..count {
+            if let Some(ref app) = apps[i] {
+                // ID
+                self.format_id(output, app.catalog_id, 4);
+                let _ = write!(output, " ");
+
+                // Name (23 chars)
+                self.format_padded(output, app.name(), 23);
+                let _ = write!(output, " ");
+
+                // Version (10 chars)
+                self.format_padded(output, app.version(), 10);
+                let _ = write!(output, " ");
+
+                // Category
+                let _ = output.write_all(app.category.name());
+                let _ = writeln!(output, "");
+            }
+        }
+    }
+
+    fn store_info(&self, output: &mut ShellOutput, args: &[u8]) {
+        if !crate::app_store::is_initialized() {
+            crate::app_store::init_store();
+        }
+
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() || args[start] == 0 {
+            let _ = writeln!(output, "Usage: store info <catalog_id>");
+            return;
+        }
+
+        // Parse ID
+        let mut catalog_id = 0u32;
+        let mut i = start;
+        while i < args.len() && args[i].is_ascii_digit() {
+            catalog_id = catalog_id.saturating_mul(10).saturating_add((args[i] - b'0') as u32);
+            i += 1;
+        }
+
+        let _ = writeln!(output, "[RAYOS_STORE:INFO]");
+        let _ = writeln!(output, "");
+
+        if let Some(app) = crate::app_store::get_app_by_id(catalog_id) {
+            let _ = write!(output, "App: ");
+            let _ = output.write_all(app.name());
+            let _ = writeln!(output, "");
+
+            let _ = write!(output, "ID: ");
+            let _ = output.write_all(app.app_id());
+            let _ = writeln!(output, "");
+
+            let _ = write!(output, "Version: ");
+            let _ = output.write_all(app.version());
+            let _ = writeln!(output, "");
+
+            let _ = write!(output, "Author: ");
+            let _ = output.write_all(app.author());
+            let _ = writeln!(output, "");
+
+            let _ = write!(output, "Category: ");
+            let _ = output.write_all(app.category.name());
+            let _ = writeln!(output, "");
+
+            let _ = writeln!(output, "");
+            let _ = write!(output, "Description: ");
+            let _ = output.write_all(app.description());
+            let _ = writeln!(output, "");
+
+            let _ = writeln!(output, "");
+            let _ = write!(output, "Download Size: ");
+            self.format_bytes(output, app.download_size as u64);
+            let _ = writeln!(output, "");
+
+            let _ = write!(output, "Install Size: ");
+            self.format_bytes(output, app.install_size as u64);
+            let _ = writeln!(output, "");
+
+            let _ = write!(output, "Rating: ");
+            self.format_rating(output, app.rating);
+            let _ = write!(output, " (");
+            let _ = Self::write_u32(output, app.rating_count);
+            let _ = writeln!(output, " ratings)");
+
+            let _ = write!(output, "Downloads: ");
+            let _ = Self::write_u32(output, app.download_count);
+            let _ = writeln!(output, "");
+
+            let _ = writeln!(output, "");
+            let _ = write!(output, "Installed: ");
+            let _ = writeln!(output, "{}", if app.installed { "Yes" } else { "No" });
+
+            let _ = write!(output, "Featured: ");
+            let _ = writeln!(output, "{}", if app.featured { "Yes" } else { "No" });
+        } else {
+            let _ = write!(output, "App not found with ID: ");
+            let _ = Self::write_u32(output, catalog_id);
+            let _ = writeln!(output, "");
+        }
+    }
+
+    fn store_install(&self, output: &mut ShellOutput, args: &[u8]) {
+        if !crate::app_store::is_initialized() {
+            crate::app_store::init_store();
+        }
+
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() || args[start] == 0 {
+            let _ = writeln!(output, "Usage: store install <catalog_id>");
+            return;
+        }
+
+        // Parse ID
+        let mut catalog_id = 0u32;
+        let mut i = start;
+        while i < args.len() && args[i].is_ascii_digit() {
+            catalog_id = catalog_id.saturating_mul(10).saturating_add((args[i] - b'0') as u32);
+            i += 1;
+        }
+
+        let _ = writeln!(output, "[RAYOS_STORE:INSTALL]");
+
+        // Get app name first
+        if let Some(app) = crate::app_store::get_app_by_id(catalog_id) {
+            let _ = write!(output, "Installing: ");
+            let _ = output.write_all(app.name());
+            let _ = writeln!(output, "");
+
+            let _ = write!(output, "Size: ");
+            self.format_bytes(output, app.download_size as u64);
+            let _ = writeln!(output, "");
+            let _ = writeln!(output, "");
+
+            let _ = writeln!(output, "Downloading...");
+        }
+
+        match crate::app_store::install_app(catalog_id) {
+            Ok(()) => {
+                let _ = writeln!(output, "Verifying package...");
+                let _ = writeln!(output, "Installing...");
+                let _ = writeln!(output, "");
+                let _ = writeln!(output, "Installation complete!");
+            }
+            Err(e) => {
+                let _ = write!(output, "Error: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn store_uninstall(&self, output: &mut ShellOutput, args: &[u8]) {
+        if !crate::app_store::is_initialized() {
+            crate::app_store::init_store();
+        }
+
+        let mut start = 0;
+        while start < args.len() && (args[start] == b' ' || args[start] == b'\t') {
+            start += 1;
+        }
+
+        if start >= args.len() || args[start] == 0 {
+            let _ = writeln!(output, "Usage: store uninstall <catalog_id>");
+            return;
+        }
+
+        // Parse ID
+        let mut catalog_id = 0u32;
+        let mut i = start;
+        while i < args.len() && args[i].is_ascii_digit() {
+            catalog_id = catalog_id.saturating_mul(10).saturating_add((args[i] - b'0') as u32);
+            i += 1;
+        }
+
+        let _ = writeln!(output, "[RAYOS_STORE:UNINSTALL]");
+
+        match crate::app_store::uninstall_app(catalog_id) {
+            Ok(()) => {
+                let _ = writeln!(output, "App uninstalled successfully.");
+            }
+            Err(e) => {
+                let _ = write!(output, "Error: ");
+                let _ = writeln!(output, "{}", e.message());
+            }
+        }
+    }
+
+    fn store_updates(&self, output: &mut ShellOutput) {
+        if !crate::app_store::is_initialized() {
+            crate::app_store::init_store();
+        }
+
+        let _ = writeln!(output, "[RAYOS_STORE:UPDATES]");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Checking for updates...");
+        let _ = writeln!(output, "");
+
+        let updates = crate::app_store::check_updates();
+
+        if updates == 0 {
+            let _ = writeln!(output, "All apps are up to date.");
+        } else {
+            let _ = Self::write_u32(output, updates as u32);
+            let _ = writeln!(output, " update(s) available.");
+        }
+    }
+
+    fn store_categories(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "[RAYOS_STORE:CATEGORIES]");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Available Categories:");
+        let _ = writeln!(output, "");
+
+        let categories = [
+            crate::app_store::AppCategory::Productivity,
+            crate::app_store::AppCategory::Utilities,
+            crate::app_store::AppCategory::Development,
+            crate::app_store::AppCategory::Games,
+            crate::app_store::AppCategory::Media,
+            crate::app_store::AppCategory::Communication,
+            crate::app_store::AppCategory::System,
+            crate::app_store::AppCategory::Education,
+            crate::app_store::AppCategory::Science,
+        ];
+
+        for cat in categories.iter() {
+            let _ = write!(output, "  - ");
+            let _ = output.write_all(cat.name());
+            let _ = writeln!(output, "");
+        }
+
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "Use 'store browse <category>' to filter by category.");
+    }
+
+    fn store_status(&self, output: &mut ShellOutput) {
+        let _ = writeln!(output, "[RAYOS_STORE:STATUS]");
+        let _ = writeln!(output, "");
+        let _ = writeln!(output, "App Store Status");
+        let _ = writeln!(output, "----------------");
+
+        let _ = write!(output, "Initialized: ");
+        let _ = writeln!(output, "{}", if crate::app_store::is_initialized() { "Yes" } else { "No" });
+
+        if crate::app_store::is_initialized() {
+            let _ = write!(output, "Catalog version: ");
+            let _ = Self::write_u32(output, crate::app_store::catalog_version());
+            let _ = writeln!(output, "");
+
+            let _ = write!(output, "Total apps: ");
+            let _ = Self::write_u32(output, crate::app_store::app_count() as u32);
+            let _ = writeln!(output, "");
+
+            let _ = write!(output, "Install in progress: ");
+            let _ = writeln!(output, "{}", if crate::app_store::is_installing() { "Yes" } else { "No" });
+        }
+    }
+
+    // Helper: parse category name
+    fn parse_category(&self, input: &[u8]) -> crate::app_store::AppCategory {
+        // Find end of category name
+        let mut end = 0;
+        while end < input.len() && input[end] != b' ' && input[end] != b'\t' && input[end] != 0 {
+            end += 1;
+        }
+        let name = &input[..end];
+
+        if self.cmd_matches(name, b"productivity") {
+            crate::app_store::AppCategory::Productivity
+        } else if self.cmd_matches(name, b"utilities") || self.cmd_matches(name, b"utility") {
+            crate::app_store::AppCategory::Utilities
+        } else if self.cmd_matches(name, b"development") || self.cmd_matches(name, b"dev") {
+            crate::app_store::AppCategory::Development
+        } else if self.cmd_matches(name, b"games") || self.cmd_matches(name, b"game") {
+            crate::app_store::AppCategory::Games
+        } else if self.cmd_matches(name, b"media") {
+            crate::app_store::AppCategory::Media
+        } else if self.cmd_matches(name, b"communication") || self.cmd_matches(name, b"comm") {
+            crate::app_store::AppCategory::Communication
+        } else if self.cmd_matches(name, b"system") {
+            crate::app_store::AppCategory::System
+        } else if self.cmd_matches(name, b"education") || self.cmd_matches(name, b"edu") {
+            crate::app_store::AppCategory::Education
+        } else if self.cmd_matches(name, b"science") {
+            crate::app_store::AppCategory::Science
+        } else {
+            crate::app_store::AppCategory::All
+        }
+    }
+
+    // Helper: format app row for browse/list
+    fn format_app_row(&self, output: &mut ShellOutput, app: &crate::app_store::AppListing) {
+        // ID (4 chars, right-aligned)
+        self.format_id(output, app.catalog_id, 4);
+        let _ = write!(output, " ");
+
+        // Name (23 chars)
+        self.format_padded(output, app.name(), 23);
+        let _ = write!(output, " ");
+
+        // Version (10 chars)
+        self.format_padded(output, app.version(), 10);
+        let _ = write!(output, " ");
+
+        // Size (9 chars)
+        self.format_size_padded(output, app.download_size as u64, 9);
+        let _ = write!(output, " ");
+
+        // Rating
+        self.format_rating(output, app.rating);
+
+        // Install indicator
+        if app.installed {
+            let _ = write!(output, " [installed]");
+        }
+
+        let _ = writeln!(output, "");
+    }
+
+    // Helper: format ID right-aligned
+    fn format_id(&self, output: &mut ShellOutput, id: u32, width: usize) {
+        let mut buf = [b' '; 10];
+        let mut i = 10;
+        let mut val = id;
+        if val == 0 {
+            i -= 1;
+            buf[i] = b'0';
+        }
+        while val > 0 && i > 0 {
+            i -= 1;
+            buf[i] = b'0' + (val % 10) as u8;
+            val /= 10;
+        }
+        let num_len = 10 - i;
+        // Pad left
+        for _ in 0..(width.saturating_sub(num_len)) {
+            let _ = output.write_all(b" ");
+        }
+        let _ = output.write_all(&buf[i..]);
+    }
+
+    // Helper: format bytes with padding
+    fn format_padded(&self, output: &mut ShellOutput, data: &[u8], width: usize) {
+        let len = data.len().min(width);
+        let _ = output.write_all(&data[..len]);
+        for _ in 0..(width - len) {
+            let _ = output.write_all(b" ");
+        }
+    }
+
+    // Helper: format size with padding
+    fn format_size_padded(&self, output: &mut ShellOutput, bytes: u64, width: usize) {
+        let mut buf = [b' '; 16];
+        let len = self.format_bytes_buf(bytes, &mut buf);
+        let _ = output.write_all(&buf[..len]);
+        for _ in 0..(width.saturating_sub(len)) {
+            let _ = output.write_all(b" ");
+        }
+    }
+
+    // Helper: format bytes to buffer
+    fn format_bytes_buf(&self, bytes: u64, buf: &mut [u8]) -> usize {
+        const KB: u64 = 1024;
+        const MB: u64 = KB * 1024;
+
+        let (value, suffix): (u64, &[u8]) = if bytes >= MB {
+            (bytes / MB, b" MB")
+        } else if bytes >= KB {
+            (bytes / KB, b" KB")
+        } else {
+            (bytes, b" B")
+        };
+
+        let mut pos = self.format_u64_buf(value, buf);
+        for &b in suffix.iter() {
+            if pos < buf.len() {
+                buf[pos] = b;
+                pos += 1;
+            }
+        }
+        pos
+    }
+
+    // Helper: format u64 to buffer
+    fn format_u64_buf(&self, mut n: u64, buf: &mut [u8]) -> usize {
+        if n == 0 {
+            if !buf.is_empty() {
+                buf[0] = b'0';
+            }
+            return 1;
+        }
+
+        let mut temp = [0u8; 20];
+        let mut i = 20;
+        while n > 0 && i > 0 {
+            i -= 1;
+            temp[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+
+        let len = 20 - i;
+        let copy_len = len.min(buf.len());
+        buf[..copy_len].copy_from_slice(&temp[i..i + copy_len]);
+        copy_len
+    }
+
+    // Helper: format bytes inline
+    fn format_bytes(&self, output: &mut ShellOutput, bytes: u64) {
+        let mut buf = [0u8; 16];
+        let len = self.format_bytes_buf(bytes, &mut buf);
+        let _ = output.write_all(&buf[..len]);
+    }
+
+    // Helper: format rating (0-50 -> X.X stars)
+    fn format_rating(&self, output: &mut ShellOutput, rating: u8) {
+        let whole = rating / 10;
+        let frac = rating % 10;
+        let _ = output.write_all(&[b'0' + whole]);
+        let _ = output.write_all(b".");
+        let _ = output.write_all(&[b'0' + frac]);
     }
 
     fn write_u32(output: &mut ShellOutput, n: u32) {
