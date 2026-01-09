@@ -9,6 +9,7 @@ pub mod hal;
 pub mod system1;
 pub mod system2;
 pub mod task_queue;
+pub mod unified_pipeline;
 
 use anyhow::Result;
 use std::sync::Arc;
