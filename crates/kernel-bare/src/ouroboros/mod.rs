@@ -117,6 +117,7 @@ pub mod full_stack_tests;  // Phase 33, Task 2
 pub mod dream_mode;  // Phase 33, Task 3
 pub mod live_demo;  // Phase 33, Task 4
 pub mod performance_analysis;  // Phase 33, Task 5
+pub mod metrics_dashboard;  // Phase 33, Task 6
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -197,6 +198,11 @@ pub use performance_analysis::{
     PerformanceSnapshot, ComparisonResult, TrendDirection, PerformanceTrend,
     RecommendationPriority, Recommendation, AnalysisReport,
     PerformanceAnalyzer,
+};
+pub use metrics_dashboard::{
+    KpiType, KpiValue, TimeSeriesPoint, TimeSeries,
+    WidgetType, DashboardWidget, ExportFormat, ExportResult,
+    MetricsDashboard,
 };
 
 // ============================================================================

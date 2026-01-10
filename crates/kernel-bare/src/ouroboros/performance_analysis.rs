@@ -347,11 +347,11 @@ impl PerformanceAnalyzer {
         }
 
         let snapshot = self.snapshots[snapshot_idx]?;
-        
+
         // Collect all snapshots for trend analysis
         let mut trend_snapshots = [PerformanceSnapshot::new(0, 0, 0, 0, 0); 5];
         let mut trend_count = 0;
-        
+
         for i in 0..5 {
             if let Some(s) = self.snapshots[i] {
                 trend_snapshots[i] = s;
@@ -374,7 +374,7 @@ impl PerformanceAnalyzer {
             comparison,
             trend,
         );
-        
+
         self.report_counter += 1;
         report.top_recommendations = 3;
 
@@ -398,7 +398,7 @@ mod tests {
         let before = PerformanceSnapshot::new(1, 100, 1000, 5120, 75);
         let after = PerformanceSnapshot::new(2, 150, 800, 5000, 80);
         let comparison = ComparisonResult::compare(before, after);
-        
+
         assert!(comparison.throughput_delta > 0);
         assert!(comparison.duration_delta_ms < 0);
         assert!(comparison.overall_score > 0);
@@ -409,7 +409,7 @@ mod tests {
         let before = PerformanceSnapshot::new(1, 100, 1000, 5120, 75);
         let after = PerformanceSnapshot::new(2, 50, 1500, 5500, 70);
         let comparison = ComparisonResult::compare(before, after);
-        
+
         assert!(comparison.throughput_delta < 0);
         assert!(comparison.duration_delta_ms > 0);
     }
@@ -419,7 +419,7 @@ mod tests {
         let before = PerformanceSnapshot::new(1, 100, 1000, 5120, 75);
         let after = PerformanceSnapshot::new(2, 150, 1000, 5120, 75);
         let comparison = ComparisonResult::compare(before, after);
-        
+
         assert!(comparison.throughput_improvement_percent() > 0);
     }
 
@@ -430,7 +430,7 @@ mod tests {
             Some(PerformanceSnapshot::new(2, 150, 950, 5100, 78)),
             Some(PerformanceSnapshot::new(3, 200, 900, 5080, 80)),
         ];
-        
+
         let trend = PerformanceTrend::analyze_throughput(&[snapshots[0].unwrap(), snapshots[1].unwrap(), snapshots[2].unwrap()]);
         assert_eq!(trend.direction, TrendDirection::Improving);
         assert!(trend.slope > 0);
@@ -443,7 +443,7 @@ mod tests {
             PerformanceSnapshot::new(2, 150, 950, 5100, 78),
             PerformanceSnapshot::new(3, 100, 1000, 5120, 75),
         ];
-        
+
         let trend = PerformanceTrend::analyze_throughput(&snapshots);
         assert_eq!(trend.direction, TrendDirection::Degrading);
         assert!(trend.slope < 0);
@@ -476,7 +476,7 @@ mod tests {
             avg_value: 100,
             volatility: 0,
         };
-        
+
         let report = AnalysisReport::new(1, 1, 2, comparison, trend);
         assert_eq!(report.baseline_cycle, 1);
     }
@@ -492,7 +492,7 @@ mod tests {
         let mut analyzer = PerformanceAnalyzer::new();
         let snapshot = PerformanceSnapshot::new(1, 100, 1000, 5120, 75);
         analyzer.record_snapshot(snapshot);
-        
+
         assert!(analyzer.snapshot_history()[0].is_some());
     }
 
@@ -501,7 +501,7 @@ mod tests {
         let mut analyzer = PerformanceAnalyzer::new();
         let rec = Recommendation::new(1, RecommendationPriority::High, 15, 5, 1, 85);
         analyzer.add_recommendation(rec);
-        
+
         let recs = analyzer.top_recommendations(1);
         assert!(recs[0].is_some());
     }
@@ -511,7 +511,7 @@ mod tests {
         let mut analyzer = PerformanceAnalyzer::new();
         let snapshot = PerformanceSnapshot::new(1, 100, 1000, 5120, 75);
         analyzer.record_snapshot(snapshot);
-        
+
         let report = analyzer.generate_report(0);
         assert!(report.is_some());
     }
@@ -519,11 +519,11 @@ mod tests {
     #[test]
     fn test_performance_analyzer_top_recommendations() {
         let mut analyzer = PerformanceAnalyzer::new();
-        
+
         analyzer.add_recommendation(Recommendation::new(1, RecommendationPriority::High, 10, 5, 1, 85));
         analyzer.add_recommendation(Recommendation::new(2, RecommendationPriority::Medium, 20, 2, 1, 80));
         analyzer.add_recommendation(Recommendation::new(3, RecommendationPriority::Low, 5, 10, 1, 70));
-        
+
         let top = analyzer.top_recommendations(2);
         assert!(top[0].is_some());
         assert!(top[1].is_some());
@@ -544,7 +544,7 @@ mod tests {
             PerformanceSnapshot::new(2, 150, 950, 5100, 78),
             PerformanceSnapshot::new(3, 120, 900, 5080, 80),
         ];
-        
+
         let trend = PerformanceTrend::analyze_throughput(&snapshots);
         assert_eq!(trend.min_value, 100);
         assert_eq!(trend.max_value, 150);
