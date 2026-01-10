@@ -103,7 +103,7 @@
 pub mod genome;
 pub mod mutation;   // Phase 31, Task 2
 pub mod selection;  // Phase 31, Task 3
-// pub mod patcher;      // Phase 31, Task 4
+pub mod patcher;    // Phase 31, Task 4
 // pub mod scheduler;    // Phase 31, Task 5
 // pub mod coordinator;  // Phase 31, Task 6
 
@@ -119,6 +119,11 @@ pub use mutation::{
 pub use selection::{
     Sandbox, SandboxStatus, TestSuite, TestCase, TestCategory, BenchmarkSuite, Benchmark,
     FitnessMetric, MetricType, FitnessScore, TournamentSelector, SelectionResult,
+};
+pub use patcher::{
+    PatchOperation, PatchStatus, PatchBundle, BundleStatus,
+    RollbackEntry, RollbackReason, RollbackLog, AtomicSwap,
+    CodeVersion, VersionRegistry, LivePatcher,
 };
 
 // ============================================================================
