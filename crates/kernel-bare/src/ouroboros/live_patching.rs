@@ -62,7 +62,7 @@ impl PatchPoint {
         let can_patch_idle = matches!(safety, PatchPointSafety::SafeIdle | PatchPointSafety::AlwaysSafe);
         let can_patch_with_sync = safety != PatchPointSafety::Unsafe;
         let safe_window_ms = if safety == PatchPointSafety::AlwaysSafe { 0 } else { 100 };
-        
+
         PatchPoint {
             id,
             location,
@@ -261,7 +261,7 @@ impl LivePatcherController {
         if self.active_patch_count >= 50 {
             return false;
         }
-        
+
         for slot in &mut self.pending_patches {
             if slot.is_none() {
                 *slot = Some(patch);
@@ -312,7 +312,7 @@ impl LivePatcherController {
                 break;
             }
         }
-        
+
         if !found {
             // Rotate buffer
             for i in 0..49 {
@@ -349,7 +349,7 @@ impl LivePatcherController {
                 if patch.id == patch_id {
                     let mut rolled_back = patch;
                     rolled_back.status = LivePatchStatus::Rolledback;
-                    
+
                     // Store in rollback history
                     for slot in &mut self.rollback_history {
                         if slot.is_none() {
@@ -357,7 +357,7 @@ impl LivePatcherController {
                             break;
                         }
                     }
-                    
+
                     self.applied_patches[i] = None;
                     self.active_patch_count = self.active_patch_count.saturating_sub(1);
                     self.total_patches_rolled_back += 1;
@@ -392,7 +392,7 @@ impl LivePatcherController {
                 }
             }
         }
-        
+
         for patch in &self.applied_patches {
             if let Some(p) = patch {
                 if p.id == patch_id {
@@ -400,7 +400,7 @@ impl LivePatcherController {
                 }
             }
         }
-        
+
         None
     }
 
@@ -504,7 +504,7 @@ mod tests {
         let mut patcher = LivePatcherController::new();
         let patch = LivePatch::new(1, 1, 100, 120);
         patcher.submit_patch(patch);
-        
+
         assert!(patcher.verify_patch(1, VerificationType::Checksum));
     }
 
@@ -514,12 +514,12 @@ mod tests {
         let mut patch = LivePatch::new(1, 1, 100, 120);
         patch.verified = true;
         patcher.submit_patch(patch);
-        
+
         let ctx = PatchContext::new(1, 2, true);
         let mut favorable_ctx = ctx;
         favorable_ctx.cpu_idle_percent = 75;
         favorable_ctx.time_since_syscall_ms = 100;
-        
+
         assert!(patcher.apply_patch(1, favorable_ctx));
     }
 
@@ -528,7 +528,7 @@ mod tests {
         let mut patcher = LivePatcherController::new();
         let check = HealthCheckResult::success(1, 50);
         patcher.record_health_check(check);
-        
+
         assert!(!patcher.should_rollback());
     }
 
@@ -537,7 +537,7 @@ mod tests {
         let mut patcher = LivePatcherController::new();
         let check = HealthCheckResult::failed(1, 1);
         patcher.record_health_check(check);
-        
+
         assert!(patcher.should_rollback());
     }
 
@@ -550,7 +550,7 @@ mod tests {
         patcher.pending_patches[0] = Some(patch);
         patcher.applied_patches[0] = Some(patch);
         patcher.active_patch_count = 1;
-        
+
         assert!(patcher.rollback_patch(1));
         assert_eq!(patcher.active_patches(), 0);
     }
@@ -560,7 +560,7 @@ mod tests {
         let mut patcher = LivePatcherController::new();
         let patch = LivePatch::new(1, 1, 100, 120);
         patcher.submit_patch(patch);
-        
+
         let status = patcher.get_patch_status(1);
         assert!(status.is_some());
         assert_eq!(status.unwrap(), LivePatchStatus::Pending);
@@ -597,12 +597,12 @@ mod tests {
     #[test]
     fn test_live_patcher_max_patches() {
         let mut patcher = LivePatcherController::new();
-        
+
         for i in 0..50 {
             let patch = LivePatch::new(i, 1, 100, 120);
             assert!(patcher.submit_patch(patch));
         }
-        
+
         // 51st should fail
         let patch = LivePatch::new(50, 1, 100, 120);
         assert!(!patcher.submit_patch(patch));
@@ -613,7 +613,7 @@ mod tests {
         let mut patcher = LivePatcherController::new();
         let check = HealthCheckResult::failed(1, 1);
         patcher.record_health_check(check);
-        
+
         assert!(patcher.should_rollback());
         patcher.clear_rollback_flag();
         assert!(!patcher.should_rollback());
