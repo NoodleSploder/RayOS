@@ -114,6 +114,7 @@ pub mod regression;  // Phase 32, Task 5
 pub mod batching;  // Phase 32, Task 6
 pub mod kernel_integration;  // Phase 33, Task 1
 pub mod full_stack_tests;  // Phase 33, Task 2
+pub mod dream_mode;  // Phase 33, Task 3
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -181,6 +182,10 @@ pub use full_stack_tests::{
     IntegrationScenario, ScenarioResult,
     FullStackIntegrationTest,
     run_all_scenarios,
+};
+pub use dream_mode::{
+    DreamApprovalMode, DreamModeState, ThermalThrottle, PowerThrottle,
+    DreamModeSession, DreamModeController,
 };
 
 // ============================================================================
