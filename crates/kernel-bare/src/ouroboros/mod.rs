@@ -111,6 +111,7 @@ pub mod integration_tests;  // Phase 32, Task 2
 pub mod performance;  // Phase 32, Task 3
 pub mod observability;  // Phase 32, Task 4
 pub mod regression;  // Phase 32, Task 5
+pub mod batching;  // Phase 32, Task 6
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -163,6 +164,11 @@ pub use regression::{
     PerformanceBaseline, RegressionResult,
     RegressionDetector, AdaptiveThreshold,
     RollbackDecision, RegressionRollbackReason,
+};
+pub use batching::{
+    BatchId, BatchedMutation, EvolutionBatchStatus, MutationResult,
+    EvolutionBatch, ParallelTestRunner,
+    AdaptiveBatcher, BatchStatistics,
 };
 
 // ============================================================================
