@@ -112,6 +112,7 @@ pub mod performance;  // Phase 32, Task 3
 pub mod observability;  // Phase 32, Task 4
 pub mod regression;  // Phase 32, Task 5
 pub mod batching;  // Phase 32, Task 6
+pub mod kernel_integration;  // Phase 33, Task 1
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -169,6 +170,11 @@ pub use batching::{
     BatchId, BatchedMutation, EvolutionBatchStatus, MutationResult,
     EvolutionBatch, ParallelTestRunner,
     AdaptiveBatcher, BatchStatistics,
+};
+pub use kernel_integration::{
+    EvolutionBudget, IntegrationStatus, KernelPowerState, KernelThermalState,
+    KernelIntegrationConfig, DreamSessionInfo,
+    KernelOuroborosIntegration,
 };
 
 // ============================================================================

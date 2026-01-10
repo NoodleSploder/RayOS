@@ -115,7 +115,7 @@ See [Phase 31 Plan](phases/PHASE_31_PLAN.md) for detailed implementation design.
 | Regression Detection | ✅ Done | Statistical analysis with z-scores and adaptive thresholds (585 lines, 23 tests) |
 | Multi-Mutation Batching | ✅ Done | Parallel testing with adaptive batch sizing (700 lines, 23 tests) |
 
-**Phase 32 Total**: 4,132 lines, 137 tests, zero compilation errors  
+**Phase 32 Total**: 4,132 lines, 137 tests, zero compilation errors
 See [Phase 32 Final Report](../PHASE_32_FINAL_REPORT.md) for complete details.
 
 ### Ouroboros Integration & Kernel Integration (Phase 33)
