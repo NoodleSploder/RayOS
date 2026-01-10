@@ -288,7 +288,7 @@ impl MetricsDashboard {
     /// Update KPI value
     pub fn update_kpi(&mut self, kpi_type: KpiType, value: u32, timestamp_ms: u64) {
         let idx = kpi_type as usize;
-        
+
         if let Some(ref mut kpi) = self.kpi_values[idx] {
             kpi.previous_value = kpi.value;
             kpi.value = value;
@@ -303,7 +303,7 @@ impl MetricsDashboard {
         // Add to time series
         let point = TimeSeriesPoint::new(timestamp_ms, value, 0);
         self.time_series[idx].add_point(point);
-        
+
         self.update_count += 1;
     }
 
@@ -324,7 +324,7 @@ impl MetricsDashboard {
         if self.widget_count >= 12 {
             return false;
         }
-        
+
         let idx = self.widget_count as usize;
         self.widgets[idx] = Some(widget);
         self.widget_count += 1;
@@ -434,11 +434,11 @@ mod tests {
         let mut kpi = KpiValue::new(KpiType::Throughput, 100, 1000);
         assert_eq!(kpi.min_value, 100);
         assert_eq!(kpi.max_value, 100);
-        
+
         kpi.value = 150;
         kpi.update_bounds();
         assert_eq!(kpi.max_value, 150);
-        
+
         kpi.value = 50;
         kpi.update_bounds();
         assert_eq!(kpi.min_value, 50);
@@ -463,7 +463,7 @@ mod tests {
         let mut ts = TimeSeries::new();
         let point1 = TimeSeriesPoint::new(1000, 100, 1);
         ts.add_point(point1);
-        
+
         assert_eq!(ts.point_count(), 1);
         assert_eq!(ts.min, 100);
         assert_eq!(ts.max, 100);
@@ -478,11 +478,11 @@ mod tests {
             TimeSeriesPoint::new(1100, 150, 2),
             TimeSeriesPoint::new(1200, 120, 3),
         ];
-        
+
         for p in points {
             ts.add_point(p);
         }
-        
+
         assert_eq!(ts.point_count(), 3);
         assert_eq!(ts.min, 100);
         assert_eq!(ts.max, 150);
@@ -522,7 +522,7 @@ mod tests {
     fn test_metrics_dashboard_update_kpi() {
         let mut dashboard = MetricsDashboard::new();
         dashboard.update_kpi(KpiType::Throughput, 100, 1000);
-        
+
         let kpi = dashboard.get_kpi(KpiType::Throughput);
         assert!(kpi.is_some());
         assert_eq!(kpi.unwrap().value, 100);
@@ -534,7 +534,7 @@ mod tests {
         dashboard.update_kpi(KpiType::Throughput, 100, 1000);
         dashboard.update_kpi(KpiType::SuccessRate, 80, 1000);
         dashboard.update_kpi(KpiType::CumulativeImprovement, 5, 1000);
-        
+
         assert_eq!(dashboard.get_update_count(), 3);
     }
 
@@ -542,7 +542,7 @@ mod tests {
     fn test_metrics_dashboard_add_widget() {
         let mut dashboard = MetricsDashboard::new();
         let widget = DashboardWidget::new(1, WidgetType::KpiDisplay, 0);
-        
+
         assert!(dashboard.add_widget(widget));
         assert_eq!(dashboard.visible_widget_count(), 1);
     }
@@ -550,24 +550,24 @@ mod tests {
     #[test]
     fn test_metrics_dashboard_add_multiple_widgets() {
         let mut dashboard = MetricsDashboard::new();
-        
+
         for i in 0..6 {
             let widget = DashboardWidget::new(i, WidgetType::KpiDisplay, i as u8);
             assert!(dashboard.add_widget(widget));
         }
-        
+
         assert_eq!(dashboard.visible_widget_count(), 6);
     }
 
     #[test]
     fn test_metrics_dashboard_widget_limit() {
         let mut dashboard = MetricsDashboard::new();
-        
+
         for i in 0..12 {
             let widget = DashboardWidget::new(i, WidgetType::KpiDisplay, (i % 12) as u8);
             dashboard.add_widget(widget);
         }
-        
+
         // Try to add 13th widget - should fail
         let widget = DashboardWidget::new(12, WidgetType::KpiDisplay, 0);
         assert!(!dashboard.add_widget(widget));
@@ -577,7 +577,7 @@ mod tests {
     fn test_metrics_dashboard_remove_widget() {
         let mut dashboard = MetricsDashboard::new();
         let widget = DashboardWidget::new(1, WidgetType::KpiDisplay, 0);
-        
+
         dashboard.add_widget(widget);
         assert!(dashboard.remove_widget(1));
         assert_eq!(dashboard.visible_widget_count(), 0);
@@ -587,7 +587,7 @@ mod tests {
     fn test_metrics_dashboard_record_export() {
         let mut dashboard = MetricsDashboard::new();
         let export = ExportResult::new(1, ExportFormat::Json, 1024, 1000, true);
-        
+
         dashboard.record_export(export);
         assert_eq!(dashboard.successful_exports(), 1);
     }
@@ -595,11 +595,11 @@ mod tests {
     #[test]
     fn test_metrics_dashboard_export_stats() {
         let mut dashboard = MetricsDashboard::new();
-        
+
         dashboard.record_export(ExportResult::new(1, ExportFormat::Json, 1024, 1000, true));
         dashboard.record_export(ExportResult::new(2, ExportFormat::Csv, 512, 1100, true));
         dashboard.record_export(ExportResult::new(3, ExportFormat::Binary, 2048, 1200, false));
-        
+
         assert_eq!(dashboard.successful_exports(), 2);
         assert_eq!(dashboard.total_exported_bytes(), 1536);
     }
@@ -607,11 +607,11 @@ mod tests {
     #[test]
     fn test_metrics_dashboard_time_series() {
         let mut dashboard = MetricsDashboard::new();
-        
+
         dashboard.update_kpi(KpiType::Throughput, 100, 1000);
         dashboard.update_kpi(KpiType::Throughput, 150, 1100);
         dashboard.update_kpi(KpiType::Throughput, 120, 1200);
-        
+
         let ts = dashboard.get_time_series(KpiType::Throughput);
         assert_eq!(ts.point_count(), 3);
     }
@@ -634,10 +634,10 @@ mod tests {
     #[test]
     fn test_metrics_dashboard_kpi_update_trend() {
         let mut dashboard = MetricsDashboard::new();
-        
+
         dashboard.update_kpi(KpiType::SuccessRate, 75, 1000);
         dashboard.update_kpi(KpiType::SuccessRate, 85, 1100);
-        
+
         let kpi = dashboard.get_kpi(KpiType::SuccessRate);
         assert!(kpi.is_some());
         let k = kpi.unwrap();
