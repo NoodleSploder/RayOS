@@ -730,7 +730,7 @@ impl BinaryFormat {
         // Mach-O magic
         if header.len() >= 4 {
             let magic = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-            if magic == 0xFEEDFACE || magic == 0xFEEDFACF || 
+            if magic == 0xFEEDFACE || magic == 0xFEEDFACF ||
                magic == 0xCAFEBABE || magic == 0xBEBAFECA {
                 return Some(BinaryFormat::MachO);
             }
