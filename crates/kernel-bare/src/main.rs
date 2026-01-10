@@ -84,6 +84,8 @@ mod boot_marker;           // Phase 21 Task 5: Boot Markers & Golden State
 mod recovery_policy;       // Phase 21 Task 5: Recovery Policy & Coordinator
 mod syslog;                // In-kernel event journal
 mod system1;               // System 1: Reflex Engine (Subconscious)
+mod vmm_subsystems;        // Phase 9B Task 4: VMM & Subsystems Integration
+mod device_passthrough;    // Phase 9B Task 4: Device Pass-through & IOMMU
 
 #[cfg(feature = "ui_shell")]
 mod ui;                    // Phase 21.1: Native UI Framework
