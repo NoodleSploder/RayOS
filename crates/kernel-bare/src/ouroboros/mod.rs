@@ -123,6 +123,7 @@ pub mod autonomous_optimization;  // Phase 34, Task 2
 pub mod system_profiling;  // Phase 34, Task 3
 pub mod feedback_loop;  // Phase 34, Task 4
 pub mod multi_objective_optimizer;  // Phase 34, Task 5
+pub mod web_dashboard_backend;  // Phase 34, Task 6
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -232,6 +233,14 @@ pub use multi_objective_optimizer::{
     ObjectiveType, ObjectiveWeight, MultiObjectiveScore,
     ParetoPoint, TradeOffAnalysis, MultiObjectiveCandidate,
     MultiObjectiveOptimizer,
+};
+pub use web_dashboard_backend::{
+    HttpMethod, HttpStatus, EndpointType, ApiExportFormat, WebSocketMessageType,
+    HttpRequest, HttpResponse, WebSocketMessage,
+    MetricSnapshot, DashboardState,
+    ControlCommand, ControlRequest, ControlResponse,
+    ApiExportRequest, ApiExportResult,
+    DashboardBackend,
 };
 
 // ============================================================================
