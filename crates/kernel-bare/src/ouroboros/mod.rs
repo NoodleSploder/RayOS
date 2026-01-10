@@ -119,6 +119,7 @@ pub mod live_demo;  // Phase 33, Task 4
 pub mod performance_analysis;  // Phase 33, Task 5
 pub mod metrics_dashboard;  // Phase 33, Task 6
 pub mod live_patching;  // Phase 34, Task 1
+pub mod autonomous_optimization;  // Phase 34, Task 2
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -209,6 +210,11 @@ pub use live_patching::{
     PatchPointSafety, LivePatchStatus, VerificationType,
     PatchPoint, LivePatch, HealthCheckResult, PatchContext,
     LivePatcherController,
+};
+pub use autonomous_optimization::{
+    ConfidenceLevel, DecisionReason, ConfidenceFactors,
+    MutationPattern, AutoMutationCandidate, AutoOptimizationDecision,
+    AutonomousOptimizer,
 };
 
 // ============================================================================
