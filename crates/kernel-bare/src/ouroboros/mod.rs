@@ -128,6 +128,7 @@ pub mod evolution_integration;  // Phase 35, Task 1
 pub mod performance_metrics;    // Phase 35, Task 2
 pub mod impact_analysis;        // Phase 35, Task 3
 pub mod metrics_storage;        // Phase 35, Task 4
+pub mod alerting;               // Phase 35, Task 5
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -275,6 +276,14 @@ pub use metrics_storage::{
     MetricsRingBuffer, CompressedStorage,
     TimeSeriesQuery,
     MetricsStorage,
+};
+
+pub use alerting::{
+    AlertSeverity, AlertType,
+    AlertThreshold,
+    AlertEvent, AlertNotification,
+    AlertStatistic,
+    AlertManager,
 };
 
 // ============================================================================
