@@ -397,13 +397,13 @@ impl SystemProfiler {
     /// Get top N hotspots by priority score
     pub fn top_hotspots(&self, _n: usize) -> [Option<ProfileHotspot>; 50] {
         let mut sorted = self.hotspots;
-        
+
         // Simple bubble sort by priority score
         for i in 0..50 {
             for j in 0..49 - i {
                 let score_j = sorted[j].map(|h| h.priority_score()).unwrap_or(0);
                 let score_jp1 = sorted[j + 1].map(|h| h.priority_score()).unwrap_or(0);
-                
+
                 if score_j < score_jp1 {
                     sorted.swap(j, j + 1);
                 }
@@ -486,7 +486,7 @@ mod tests {
         let mut hotspot = ProfileHotspot::new(1, 0x1234567890abcdef, HotspotType::CpuIntensive);
         hotspot.time_percent = 50;
         hotspot.optimization_potential = 80;
-        
+
         // (50 * 60 + 80 * 40) / 100 = (3000 + 3200) / 100 = 62
         let score = hotspot.priority_score();
         assert_eq!(score, 62);

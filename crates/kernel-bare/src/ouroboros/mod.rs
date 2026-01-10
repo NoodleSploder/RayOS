@@ -121,6 +121,7 @@ pub mod metrics_dashboard;  // Phase 33, Task 6
 pub mod live_patching;  // Phase 34, Task 1
 pub mod autonomous_optimization;  // Phase 34, Task 2
 pub mod system_profiling;  // Phase 34, Task 3
+pub mod feedback_loop;  // Phase 34, Task 4
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -221,6 +222,10 @@ pub use system_profiling::{
     ProfileSource, HotspotType, ProfileMetricType,
     ProfileHotspot, CallGraphEdge, MemoryPattern, ProfileMetricDataPoint,
     ProfileSnapshot, SystemProfiler,
+};
+pub use feedback_loop::{
+    FeedbackMetric, OutcomeType, FeedbackEntry,
+    LearningPattern, AdaptiveStrategy, FeedbackLoop,
 };
 
 // ============================================================================
