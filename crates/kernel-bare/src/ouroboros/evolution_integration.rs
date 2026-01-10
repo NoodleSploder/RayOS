@@ -715,7 +715,7 @@ mod tests {
         coord.initialize();
         coord.start_session(1);
         coord.transition_phase(EvolutionPhase::Idle, EvolutionPhase::Profiling);
-        
+
         let (transitions, messages, healthy, health) = coord.statistics();
         assert_eq!(transitions, 1);
         assert!(healthy > 0);
@@ -727,12 +727,12 @@ mod tests {
         let mut coord = EvolutionCoordinator::new();
         coord.initialize();
         coord.start_session(1);
-        
+
         assert!(coord.transition_phase(EvolutionPhase::Idle, EvolutionPhase::Profiling));
         assert!(coord.transition_phase(EvolutionPhase::Profiling, EvolutionPhase::Mutation));
         assert!(coord.transition_phase(EvolutionPhase::Mutation, EvolutionPhase::Testing));
         assert!(coord.transition_phase(EvolutionPhase::Testing, EvolutionPhase::Selection));
-        
+
         assert_eq!(coord.session.current_phase, EvolutionPhase::Selection);
     }
 
@@ -784,7 +784,7 @@ mod tests {
         coord.start_session(1);
         coord.transition_phase(EvolutionPhase::Idle, EvolutionPhase::Profiling);
         coord.transition_phase(EvolutionPhase::Profiling, EvolutionPhase::Mutation);
-        
+
         // Emergency return to idle from Mutation
         assert!(coord.transition_phase(EvolutionPhase::Mutation, EvolutionPhase::Idle));
         assert_eq!(coord.session.current_phase, EvolutionPhase::Idle);
