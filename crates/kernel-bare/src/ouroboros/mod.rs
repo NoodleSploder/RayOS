@@ -122,6 +122,7 @@ pub mod live_patching;  // Phase 34, Task 1
 pub mod autonomous_optimization;  // Phase 34, Task 2
 pub mod system_profiling;  // Phase 34, Task 3
 pub mod feedback_loop;  // Phase 34, Task 4
+pub mod multi_objective_optimizer;  // Phase 34, Task 5
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -226,6 +227,11 @@ pub use system_profiling::{
 pub use feedback_loop::{
     FeedbackMetric, OutcomeType, FeedbackEntry,
     LearningPattern, AdaptiveStrategy, FeedbackLoop,
+};
+pub use multi_objective_optimizer::{
+    ObjectiveType, ObjectiveWeight, MultiObjectiveScore,
+    ParetoPoint, TradeOffAnalysis, MultiObjectiveCandidate,
+    MultiObjectiveOptimizer,
 };
 
 // ============================================================================
