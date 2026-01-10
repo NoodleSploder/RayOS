@@ -956,17 +956,29 @@ impl FilePicker {
 
     /// Handle selection.
     pub fn select_entry(&mut self) {
-        if let Some(entry) = self.view.selected_entry() {
-            if entry.entry_type.is_dir() {
-                // Navigate into directory
-                let name = entry.name().to_owned(); // Would need alloc
-                // For no_std, we'd need to copy the name first
-                // self.view.navigate(&name);
-                // RAYOS_FILEPICKER:NAVIGATED
+        // Extract info first to avoid borrow conflicts
+        let is_dir = self.view.selected_entry().map(|e| e.entry_type.is_dir()).unwrap_or(false);
+        let selected_idx = self.view.selected_index.unwrap_or(0);
+        
+        if is_dir {
+            // Navigate into directory
+            // Copy the name into a local buffer first (no_std friendly)
+            let mut name_buf = [0u8; 256];
+            let name_len;
+            if let Some(entry) = self.view.selected_entry() {
+                let entry_name = entry.name().as_bytes();
+                name_len = entry_name.len().min(255);
+                name_buf[..name_len].copy_from_slice(&entry_name[..name_len]);
             } else {
-                // Select file
-                self.toggle_selection(self.view.selected_index.unwrap_or(0));
+                return;
             }
+            // Navigate would use name_buf here
+            // self.view.navigate(core::str::from_utf8(&name_buf[..name_len]).unwrap_or(""));
+            // RAYOS_FILEPICKER:NAVIGATED
+            let _ = name_buf; // Silence unused warning for now
+        } else if self.view.selected_entry().is_some() {
+            // Select file
+            self.toggle_selection(selected_idx);
         }
     }
 
@@ -977,16 +989,18 @@ impl FilePicker {
         }
 
         let real_index = self.view.filtered[filtered_index] as usize;
-        let entry = &mut self.view.entries[real_index];
 
         if self.mode == PickerMode::OpenMultiple {
-            entry.selected = !entry.selected;
-        } else {
-            // Single selection - deselect others
-            for e in &mut self.view.entries[..self.view.entry_count] {
-                e.selected = false;
+            // Toggle just this entry
+            if let Some(entry) = self.view.entries.get_mut(real_index) {
+                entry.selected = !entry.selected;
             }
-            entry.selected = true;
+        } else {
+            // Single selection - deselect all first, then select target
+            let entry_count = self.view.entry_count;
+            for i in 0..entry_count {
+                self.view.entries[i].selected = i == real_index;
+            }
         }
     }
 
@@ -1022,9 +1036,21 @@ impl FilePicker {
                 self.result.add_path(self.view.path.as_str());
             }
             PickerMode::OpenFile | PickerMode::OpenMultiple => {
-                for entry in self.selected_entries() {
+                // Collect selected entry indices first to avoid borrow conflict
+                let mut selected_indices = [0usize; 64];
+                let mut selected_count = 0;
+                for i in 0..self.view.entry_count {
+                    if self.view.entries[i].selected && selected_count < 64 {
+                        selected_indices[selected_count] = i;
+                        selected_count += 1;
+                    }
+                }
+                
+                // Now add paths for each selected entry
+                for i in 0..selected_count {
+                    let idx = selected_indices[i];
                     let mut path = self.view.path;
-                    if path.push(entry.name()) {
+                    if path.push(self.view.entries[idx].name()) {
                         self.result.add_path(path.as_str());
                     }
                 }
@@ -1072,8 +1098,9 @@ pub struct PickerManager {
 impl PickerManager {
     /// Create new manager.
     pub const fn new() -> Self {
+        const EMPTY_PICKER: FilePicker = FilePicker::empty();
         Self {
-            pickers: [FilePicker::empty(); MAX_ACTIVE_PICKERS],
+            pickers: [EMPTY_PICKER; MAX_ACTIVE_PICKERS],
             next_id: 1,
             stats_opened: 0,
             stats_selected: 0,

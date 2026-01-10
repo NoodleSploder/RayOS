@@ -394,7 +394,7 @@ impl DropTarget {
         }
         // Check if any format is accepted
         for entry in &payload.formats[..payload.format_count] {
-            let format_bit = 1u32 << (entry.format as u16).min(31);
+            let format_bit = 1u32 << entry.format.to_id().min(31);
             if (self.accepted_formats & format_bit) != 0 {
                 return true;
             }

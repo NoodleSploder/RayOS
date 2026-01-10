@@ -586,15 +586,47 @@ impl AppLauncherMenu {
             return true;
         }
 
-        // Simple case-insensitive substring match
+        // Simple case-insensitive substring match (no_std compatible)
         let name = app.name_str();
-        let name_lower = name.to_ascii_lowercase();
-        let filter_lower = filter.to_ascii_lowercase();
-
-        // Check if filter is contained in name (simplified)
-        name_lower.contains(&filter_lower)
+        str_contains_ignore_case(name, filter)
     }
+}
 
+/// Case-insensitive substring search for no_std.
+fn str_contains_ignore_case(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.len() > haystack.len() {
+        return false;
+    }
+    let haystack_bytes = haystack.as_bytes();
+    let needle_bytes = needle.as_bytes();
+    
+    'outer: for i in 0..=(haystack_bytes.len() - needle_bytes.len()) {
+        for j in 0..needle_bytes.len() {
+            let h = to_ascii_lower(haystack_bytes[i + j]);
+            let n = to_ascii_lower(needle_bytes[j]);
+            if h != n {
+                continue 'outer;
+            }
+        }
+        return true;
+    }
+    false
+}
+
+/// Convert ASCII byte to lowercase.
+#[inline]
+fn to_ascii_lower(b: u8) -> u8 {
+    if b >= b'A' && b <= b'Z' {
+        b + 32
+    } else {
+        b
+    }
+}
+
+impl AppLauncherMenu {
     /// Get filtered apps.
     pub fn filtered_apps(&self) -> impl Iterator<Item = &LauncherAppEntry> {
         self.apps[..self.app_count]

@@ -755,7 +755,7 @@ mod tests {
         let mut manager = AlertManager::new();
         let threshold = AlertThreshold::new(1, AlertType::HighLatency, 100);
         manager.configure_threshold(threshold);
-        
+
         assert!(manager.check_and_alert(150, 1000));
         assert!(!manager.check_and_alert(50, 1000));
     }
@@ -838,7 +838,7 @@ mod tests {
             .with_severity(AlertSeverity::Critical);
         manager.configure_threshold(threshold1);
         manager.configure_threshold(threshold2);
-        
+
         manager.check_and_alert(150, 1000);
         manager.check_and_alert(90, 1000);
 
@@ -887,7 +887,7 @@ mod tests {
         let mut manager = AlertManager::new();
         let threshold = AlertThreshold::new(1, AlertType::HighLatency, 100);
         manager.configure_threshold(threshold);
-        
+
         assert!(manager.update_threshold(1, true, 200));
     }
 
@@ -907,7 +907,7 @@ mod tests {
     fn test_alert_manager_retry_notification() {
         let mut manager = AlertManager::new();
         manager.notify_event(1, 1000);
-        
+
         assert!(manager.retry_notification(0));
         assert!(!manager.retry_notification(999));  // Non-existent
     }
@@ -916,7 +916,7 @@ mod tests {
     fn test_alert_manager_get_retry_notification() {
         let mut manager = AlertManager::new();
         manager.notify_event(1, 1000);
-        
+
         let notif_id = manager.get_retry_notification();
         assert!(notif_id.is_some());
     }

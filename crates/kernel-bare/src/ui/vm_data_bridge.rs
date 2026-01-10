@@ -533,20 +533,25 @@ impl VmDataBridge {
         selection: ClipboardSelection,
         entry: &ClipboardEntry,
     ) -> Result<u32, BridgeError> {
-        let guest = self.find_guest_mut(vm_id).ok_or(BridgeError::GuestNotFound)?;
-
-        if !guest.is_connected() {
-            return Err(BridgeError::NotConnected);
+        // Check guest state first without holding mutable borrow
+        {
+            let guest = self.find_guest(vm_id).ok_or(BridgeError::GuestNotFound)?;
+            if !guest.is_connected() {
+                return Err(BridgeError::NotConnected);
+            }
+            if !guest.has_feature(VIRTIO_CLIPBOARD_F_PASTE) {
+                return Err(BridgeError::FeatureNotSupported);
+            }
         }
+        
+        // Get sequence from guest
+        let sequence = {
+            let guest = self.find_guest_mut(vm_id).ok_or(BridgeError::GuestNotFound)?;
+            guest.state = BridgeState::Syncing;
+            guest.next_sequence()
+        };
 
-        if !guest.has_feature(VIRTIO_CLIPBOARD_F_PASTE) {
-            return Err(BridgeError::FeatureNotSupported);
-        }
-
-        guest.state = BridgeState::Syncing;
-        let sequence = guest.next_sequence();
-
-        // Create transfer
+        // Create transfer (this uses self)
         let transfer_id = self.create_transfer(vm_id, VirtioMsgType::SetData as u8, sequence)?;
 
         // Build message
@@ -559,8 +564,11 @@ impl VmDataBridge {
         // In real implementation, queue to virtio ring
         let _ = header.to_bytes();
 
-        guest.state = BridgeState::Connected;
-        guest.stats_sent += 1;
+        // Update guest state
+        if let Some(guest) = self.find_guest_mut(vm_id) {
+            guest.state = BridgeState::Connected;
+            guest.stats_sent += 1;
+        }
         self.stats_syncs += 1;
         // RAYOS_VMBRIDGE:SYNC_H2G
 
@@ -574,24 +582,28 @@ impl VmDataBridge {
         selection: ClipboardSelection,
         format: FormatId,
     ) -> Result<u32, BridgeError> {
-        let guest = self.find_guest_mut(vm_id).ok_or(BridgeError::GuestNotFound)?;
-
-        if !guest.is_connected() {
-            return Err(BridgeError::NotConnected);
+        // Check guest state first without holding mutable borrow
+        {
+            let guest = self.find_guest(vm_id).ok_or(BridgeError::GuestNotFound)?;
+            if !guest.is_connected() {
+                return Err(BridgeError::NotConnected);
+            }
+            if !guest.has_feature(VIRTIO_CLIPBOARD_F_COPY) {
+                return Err(BridgeError::FeatureNotSupported);
+            }
+            if !guest.has_format(format) {
+                return Err(BridgeError::FormatNotAvailable);
+            }
         }
 
-        if !guest.has_feature(VIRTIO_CLIPBOARD_F_COPY) {
-            return Err(BridgeError::FeatureNotSupported);
-        }
+        // Get sequence from guest
+        let sequence = {
+            let guest = self.find_guest_mut(vm_id).ok_or(BridgeError::GuestNotFound)?;
+            guest.state = BridgeState::Syncing;
+            guest.next_sequence()
+        };
 
-        if !guest.has_format(format) {
-            return Err(BridgeError::FormatNotAvailable);
-        }
-
-        guest.state = BridgeState::Syncing;
-        let sequence = guest.next_sequence();
-
-        // Create transfer
+        // Create transfer (this uses self)
         let transfer_id = self.create_transfer(vm_id, VirtioMsgType::GetData as u8, sequence)?;
 
         // Update transfer with format
@@ -607,8 +619,11 @@ impl VmDataBridge {
         // In real implementation, queue to virtio ring
         let _ = header.to_bytes();
 
-        guest.state = BridgeState::Connected;
-        guest.stats_sent += 1;
+        // Update guest state
+        if let Some(guest) = self.find_guest_mut(vm_id) {
+            guest.state = BridgeState::Connected;
+            guest.stats_sent += 1;
+        }
         // RAYOS_VMBRIDGE:SYNC_G2H
 
         Ok(transfer_id)
@@ -651,22 +666,26 @@ impl VmDataBridge {
         vm_id: u32,
         formats: &[FormatId],
     ) -> Result<u32, BridgeError> {
-        let guest = self.find_guest_mut(vm_id).ok_or(BridgeError::GuestNotFound)?;
-
-        if !guest.is_connected() {
-            return Err(BridgeError::NotConnected);
-        }
-
-        if !guest.has_feature(VIRTIO_CLIPBOARD_F_DRAGDROP) {
-            return Err(BridgeError::FeatureNotSupported);
+        // Check guest state first
+        {
+            let guest = self.find_guest(vm_id).ok_or(BridgeError::GuestNotFound)?;
+            if !guest.is_connected() {
+                return Err(BridgeError::NotConnected);
+            }
+            if !guest.has_feature(VIRTIO_CLIPBOARD_F_DRAGDROP) {
+                return Err(BridgeError::FeatureNotSupported);
+            }
         }
 
         // Allocate session ID
         let session_id = self.next_transfer_id;
         self.next_transfer_id += 1;
 
-        guest.drag_session = session_id;
-        guest.set_formats(formats);
+        // Update guest state
+        if let Some(guest) = self.find_guest_mut(vm_id) {
+            guest.drag_session = session_id;
+            guest.set_formats(formats);
+        }
 
         let mut format_array = [0u32; 8];
         let count = formats.len().min(8);
@@ -847,29 +866,32 @@ impl VmDataBridge {
 
     /// Handle incoming message from guest.
     pub fn handle_message(&mut self, vm_id: u32, header: &VirtioMsgHeader, _data: &[u8]) {
-        let guest = match self.find_guest_mut(vm_id) {
-            Some(g) => g,
-            None => return,
-        };
-
-        guest.last_activity = self.timestamp;
-        guest.stats_received += 1;
-
+        // Cache timestamp before mutable borrows
+        let timestamp = self.timestamp;
+        
+        // Update guest activity first
+        if let Some(guest) = self.find_guest_mut(vm_id) {
+            guest.last_activity = timestamp;
+            guest.stats_received += 1;
+        } else {
+            return;
+        }
+        
+        // Extract needed data for each message type (to avoid holding borrow during emit_event)
         match header.get_type() {
             VirtioMsgType::Formats => {
-                // Guest is offering formats
-                // Parse format list from data
-                // For now, just mark as pending
-                guest.clipboard_pending = true;
-
-                self.emit_event(BridgeEvent::ClipboardChanged {
-                    vm_id,
-                    formats: guest.clipboard_formats,
-                    count: guest.format_count,
-                });
+                // Mark as pending and get data for event
+                let (formats, count) = {
+                    if let Some(guest) = self.find_guest_mut(vm_id) {
+                        guest.clipboard_pending = true;
+                        (guest.clipboard_formats, guest.format_count)
+                    } else {
+                        return;
+                    }
+                };
+                self.emit_event(BridgeEvent::ClipboardChanged { vm_id, formats, count });
             }
             VirtioMsgType::Data => {
-                // Guest sent clipboard data
                 // Find matching transfer
                 if let Some(transfer) = self.transfers[..self.transfer_count]
                     .iter_mut()
@@ -877,47 +899,44 @@ impl VmDataBridge {
                 {
                     transfer.state = TransferState::Completed;
                     transfer.bytes_transferred = header.length as usize;
-                    self.stats_syncs += 1;
                 }
+                self.stats_syncs += 1;
             }
             VirtioMsgType::DragStart => {
-                // Guest started drag
-                // Parse formats from data
+                // Allocate session ID and update guest
                 let session_id = self.next_transfer_id;
                 self.next_transfer_id += 1;
-                guest.drag_session = session_id;
-
-                self.emit_event(BridgeEvent::DragStarted {
-                    vm_id,
-                    session_id,
-                    formats: guest.clipboard_formats,
-                    count: guest.format_count,
-                });
+                
+                let (formats, count) = {
+                    if let Some(guest) = self.find_guest_mut(vm_id) {
+                        guest.drag_session = session_id;
+                        (guest.clipboard_formats, guest.format_count)
+                    } else {
+                        return;
+                    }
+                };
+                self.emit_event(BridgeEvent::DragStarted { vm_id, session_id, formats, count });
             }
             VirtioMsgType::DragCancel => {
-                let session_id = guest.drag_session;
-                guest.drag_session = 0;
-                // Notify host drag system
-                let _ = session_id;
+                if let Some(guest) = self.find_guest_mut(vm_id) {
+                    let _ = guest.drag_session; // Silence warning
+                    guest.drag_session = 0;
+                }
             }
             VirtioMsgType::FileStart => {
-                // File transfer starting
                 let transfer_id = self.next_transfer_id;
                 self.next_transfer_id += 1;
-
                 self.emit_event(BridgeEvent::FileTransferStarted {
                     vm_id,
                     transfer_id,
-                    filename: [0u8; 64], // Would parse from data
+                    filename: [0u8; 64],
                     size: header.length as u64,
                 });
             }
             VirtioMsgType::FileComplete => {
-                // File transfer done
                 self.stats_transfers += 1;
             }
             VirtioMsgType::Error => {
-                // Guest reported error
                 self.emit_event(BridgeEvent::Error {
                     vm_id,
                     code: header.flags,
@@ -955,20 +974,30 @@ impl VmDataBridge {
     /// Tick the bridge (update timestamp, cleanup).
     pub fn tick(&mut self) {
         self.timestamp += 1;
+        let timestamp = self.timestamp;
 
-        // Check for timed out transfers
+        // Check for timed out transfers - collect errors first to avoid borrow conflict
+        let mut timeout_errors = [(0u32, 0u8); 32]; // (vm_id, code)
+        let mut error_count = 0;
+        
         for transfer in &mut self.transfers[..self.transfer_count] {
-            if transfer.is_active() && transfer.is_timed_out(self.timestamp) {
+            if transfer.is_active() && transfer.is_timed_out(timestamp) {
                 transfer.state = TransferState::Failed;
-                self.emit_event(BridgeEvent::Error {
-                    vm_id: transfer.vm_id,
-                    code: 1, // Timeout
-                });
+                if error_count < 32 {
+                    timeout_errors[error_count] = (transfer.vm_id, 1);
+                    error_count += 1;
+                }
             }
+        }
+        
+        // Now emit events after the mutable borrow ends
+        for i in 0..error_count {
+            let (vm_id, code) = timeout_errors[i];
+            self.emit_event(BridgeEvent::Error { vm_id, code: code as u32 });
         }
 
         // Periodic cleanup
-        if self.timestamp % 100 == 0 {
+        if timestamp % 100 == 0 {
             self.cleanup_transfers();
         }
     }

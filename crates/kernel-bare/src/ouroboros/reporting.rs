@@ -736,7 +736,7 @@ mod tests {
     fn test_report_builder_build() {
         let mut builder = ReportBuilder::new(1, ReportFormat::Html, 1000);
         builder.add_metric(MetricSummary::new(1, 0x1234, 100));
-        
+
         let size = builder.build();
         assert!(size > 0);
         assert_eq!(builder.metadata().size_bytes, size);

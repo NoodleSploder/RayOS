@@ -131,6 +131,23 @@ impl ClipboardFormat {
             _ => ClipboardFormat::None,
         }
     }
+
+    /// Get numeric ID for format (for bitmask operations).
+    pub fn to_id(&self) -> u16 {
+        match self {
+            ClipboardFormat::None => 0,
+            ClipboardFormat::Text => 1,
+            ClipboardFormat::RichText => 2,
+            ClipboardFormat::Html => 3,
+            ClipboardFormat::ImagePng => 4,
+            ClipboardFormat::ImageJpeg => 5,
+            ClipboardFormat::ImageBmp => 6,
+            ClipboardFormat::FilePaths => 7,
+            ClipboardFormat::UriList => 8,
+            ClipboardFormat::Binary => 9,
+            ClipboardFormat::Custom(id) => 10 + *id,
+        }
+    }
 }
 
 // ============================================================================

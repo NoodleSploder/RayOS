@@ -806,8 +806,10 @@ pub struct IpcRouter {
 impl IpcRouter {
     /// Create a new IPC router.
     pub const fn new() -> Self {
+        // Manual array init to avoid Copy requirement
+        const EMPTY_QUEUE: IpcQueue = IpcQueue::new();
         Self {
-            queues: [IpcQueue::new(); MAX_APPS],
+            queues: [EMPTY_QUEUE; MAX_APPS],
             app_to_queue: [APP_ID_NONE; MAX_APPS],
             sequence: 0,
             timestamp: 0,
@@ -1029,26 +1031,36 @@ impl AppLauncher {
 
     /// Suspend an app.
     pub fn suspend(&mut self, app_id: AppId) -> bool {
-        if let Some(app) = self.registry.get_mut(app_id) {
-            if app.state == AppState::Running {
-                self.fire_hooks(app_id, LifecycleHookType::PreSuspend);
+        // Check state first without holding mutable borrow
+        let should_suspend = self.registry.get(app_id)
+            .map(|app| app.state == AppState::Running)
+            .unwrap_or(false);
+        
+        if should_suspend {
+            self.fire_hooks(app_id, LifecycleHookType::PreSuspend);
+            if let Some(app) = self.registry.get_mut(app_id) {
                 app.state = AppState::Suspended;
-                // RAYOS_APP:SUSPENDED
-                return true;
             }
+            // RAYOS_APP:SUSPENDED
+            return true;
         }
         false
     }
 
     /// Resume an app.
     pub fn resume(&mut self, app_id: AppId) -> bool {
-        if let Some(app) = self.registry.get_mut(app_id) {
-            if app.state == AppState::Suspended {
+        // Check state first without holding mutable borrow
+        let should_resume = self.registry.get(app_id)
+            .map(|app| app.state == AppState::Suspended)
+            .unwrap_or(false);
+        
+        if should_resume {
+            if let Some(app) = self.registry.get_mut(app_id) {
                 app.state = AppState::Running;
-                self.fire_hooks(app_id, LifecycleHookType::PostResume);
-                // RAYOS_APP:RUNNING
-                return true;
             }
+            self.fire_hooks(app_id, LifecycleHookType::PostResume);
+            // RAYOS_APP:RUNNING
+            return true;
         }
         false
     }
