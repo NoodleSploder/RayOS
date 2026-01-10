@@ -108,6 +108,7 @@ pub mod scheduler;  // Phase 31, Task 5
 pub mod coordinator;  // Phase 31, Task 6
 pub mod telemetry;  // Phase 32, Task 1
 pub mod integration_tests;  // Phase 32, Task 2
+pub mod performance;  // Phase 32, Task 3
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -144,6 +145,12 @@ pub use telemetry::{
 };
 pub use integration_tests::{
     FullLoopTest, TestScenario, ScenarioRunner,
+};
+pub use performance::{
+    FastGenomeParser, ParseResult,
+    EfficientMutationSelection,
+    OptimizedBenchmark, BenchmarkResult,
+    MemoryOptimizer,
 };
 
 // ============================================================================
