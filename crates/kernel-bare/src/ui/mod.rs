@@ -31,6 +31,11 @@ pub mod window_manager_ext;
 pub mod input_router;
 pub mod app_runtime;
 pub mod shell_integration;
+pub mod clipboard;
+pub mod drag_drop;
+pub mod file_picker;
+pub mod data_transfer;
+pub mod vm_data_bridge;
 
 // Re-export key types
 pub use renderer::{COLOR_ACCENT, COLOR_BACKGROUND, COLOR_TEXT, COLOR_WINDOW_BG, CursorType};

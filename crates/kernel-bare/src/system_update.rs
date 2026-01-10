@@ -188,10 +188,10 @@ impl AbPartitionManager {
         meta.version_hash = version_hash;
         meta.build_timestamp = timestamp;
         meta.mark_bootable();
-        
+
         // Increase priority of new slot
         meta.priority = 2;
-        
+
         // Decrease priority of old slot
         let other = slot.other();
         self.get_slot_meta_mut(other).priority = 1;
@@ -233,7 +233,7 @@ impl AbPartitionManager {
     pub fn rollback(&mut self) -> Result<PartitionSlot, &'static str> {
         let target = self.current_slot.other();
         let meta = self.get_slot_meta(target);
-        
+
         if !matches!(meta.state, SlotState::Valid | SlotState::Bootable) {
             return Err("No valid rollback target");
         }
@@ -357,7 +357,7 @@ impl Dependency {
     }
 
     pub fn check(&self, current_version: u64) -> bool {
-        current_version >= self.min_version && 
+        current_version >= self.min_version &&
         (self.max_version == 0 || current_version <= self.max_version)
     }
 }
@@ -401,7 +401,7 @@ impl CompatibilityChecker {
         for i in 0..self.dep_count {
             let dep = &self.dependencies[i];
             let mut found = false;
-            
+
             for (comp_type, version) in component_versions {
                 if *comp_type == dep.component {
                     found = true;
@@ -809,7 +809,7 @@ impl AtomicUpdateController {
     pub fn check_for_update(&mut self) -> Result<bool, UpdateError> {
         self.state_machine.transition(UpdatePhase::Checking)
             .map_err(|_| UpdateError::AlreadyInProgress)?;
-        
+
         // Would query update server
         // For now, return no update
         let _ = self.state_machine.transition(UpdatePhase::Idle);
@@ -828,13 +828,13 @@ impl AtomicUpdateController {
 
         // Prepare inactive slot
         let target_slot = self.partition_manager.prepare_for_update();
-        
+
         let _ = self.state_machine.transition(UpdatePhase::Downloading);
-        
+
         // Download would happen here
-        
+
         let _ = self.state_machine.transition(UpdatePhase::Verifying);
-        
+
         // Verify
         let result = self.verifier.finalize();
         if result != VerificationResult::Valid {

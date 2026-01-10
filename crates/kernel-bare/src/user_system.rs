@@ -316,7 +316,7 @@ impl FileMode {
     pub const S_IROTH: u16 = 0o004;  // Other read
     pub const S_IWOTH: u16 = 0o002;  // Other write
     pub const S_IXOTH: u16 = 0o001;  // Other execute
-    
+
     // Special bits
     pub const S_ISUID: u16 = 0o4000; // Set UID
     pub const S_ISGID: u16 = 0o2000; // Set GID
@@ -560,9 +560,9 @@ impl FileOwnership {
         }
 
         // Group member?
-        let in_group = req.gid == self.gid || 
+        let in_group = req.gid == self.gid ||
                        (self.gid < 64 && (req.groups_mask & (1u64 << self.gid)) != 0);
-        
+
         if in_group {
             if req.want_read && !self.mode.group_read() { return false; }
             if req.want_write && !self.mode.group_write() { return false; }
@@ -596,7 +596,7 @@ impl FileOwnership {
         // Check named group entries
         for entry in acl.entries() {
             if entry.tag == AclTag::Group {
-                let in_group = entry.id == req.gid || 
+                let in_group = entry.id == req.gid ||
                               (entry.id < 64 && (req.groups_mask & (1u64 << entry.id)) != 0);
                 if in_group {
                     return self.check_acl_entry(entry, acl.get_mask(), req);
@@ -661,7 +661,7 @@ impl UserDatabase {
 
         // Create root user
         db.create_system_user("root", UID_ROOT, GID_ROOT);
-        
+
         // Create system users
         db.create_system_user("system", UID_SYSTEM, GID_ROOT);
         db.create_system_user("nobody", UID_NOBODY, GID_NOBODY);
