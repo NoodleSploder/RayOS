@@ -105,7 +105,7 @@ pub mod mutation;   // Phase 31, Task 2
 pub mod selection;  // Phase 31, Task 3
 pub mod patcher;    // Phase 31, Task 4
 pub mod scheduler;  // Phase 31, Task 5
-// pub mod coordinator;  // Phase 31, Task 6
+pub mod coordinator;  // Phase 31, Task 6
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -129,6 +129,12 @@ pub use scheduler::{
     ActivityMonitor, CpuMetrics, MemoryMetrics, IoMetrics,
     IdleState, DreamTrigger, DreamSession, DreamStatus, DreamBudget,
     DreamScheduler,
+};
+pub use coordinator::{
+    HistoryEntry, HistoryStatus, MutationHistory,
+    Winner, WinnerRegistry,
+    PendingApproval, ApprovalQueue,
+    EvolutionConfig, OuroborosEngine, EvolutionStatistics,
 };
 
 // ============================================================================
