@@ -101,7 +101,7 @@
 #![allow(dead_code)]
 
 pub mod genome;
-// pub mod mutation;     // Phase 31, Task 2
+pub mod mutation;  // Phase 31, Task 2
 // pub mod selection;    // Phase 31, Task 3
 // pub mod patcher;      // Phase 31, Task 4
 // pub mod scheduler;    // Phase 31, Task 5
@@ -110,6 +110,11 @@ pub mod genome;
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
     MutationPoint, MutationType, GenomeChecksum,
+};
+pub use mutation::{
+    Mutator, MutationCandidate, MutationBatch, MutationStatus, BatchStatus,
+    RefactoringOp, RefactoringType, OptimizationOp, OptimizationType,
+    MutationStrategy, LlmGuidedMutator,
 };
 
 // ============================================================================
