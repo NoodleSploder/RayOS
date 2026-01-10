@@ -126,6 +126,7 @@ pub mod multi_objective_optimizer;  // Phase 34, Task 5
 pub mod web_dashboard_backend;  // Phase 34, Task 6
 pub mod evolution_integration;  // Phase 35, Task 1
 pub mod performance_metrics;    // Phase 35, Task 2
+pub mod impact_analysis;        // Phase 35, Task 3
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -257,6 +258,14 @@ pub use performance_metrics::{
     ResourceUtilization, PerfBaseline,
     PerfComparison, PhasePerformance,
     PerformanceMetrics,
+};
+
+pub use impact_analysis::{
+    ImpactMetric, StatisticalResult,
+    MutationBaseline, MutationMeasurement,
+    MutationImpact, VarianceAccumulator,
+    SignificanceTest,
+    ImpactAnalyzer,
 };
 
 // ============================================================================
