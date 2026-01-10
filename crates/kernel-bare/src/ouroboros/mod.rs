@@ -115,6 +115,7 @@ pub mod batching;  // Phase 32, Task 6
 pub mod kernel_integration;  // Phase 33, Task 1
 pub mod full_stack_tests;  // Phase 33, Task 2
 pub mod dream_mode;  // Phase 33, Task 3
+pub mod live_demo;  // Phase 33, Task 4
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -186,6 +187,10 @@ pub use full_stack_tests::{
 pub use dream_mode::{
     DreamApprovalMode, DreamModeState, ThermalThrottle, PowerThrottle,
     DreamModeSession, DreamModeController,
+};
+pub use live_demo::{
+    MutationEventType, MutationEvent, CycleSummary, DashboardMetrics,
+    LiveEvolutionDemo,
 };
 
 // ============================================================================
