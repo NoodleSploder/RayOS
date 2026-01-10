@@ -109,6 +109,7 @@ pub mod coordinator;  // Phase 31, Task 6
 pub mod telemetry;  // Phase 32, Task 1
 pub mod integration_tests;  // Phase 32, Task 2
 pub mod performance;  // Phase 32, Task 3
+pub mod observability;  // Phase 32, Task 4
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -151,6 +152,11 @@ pub use performance::{
     EfficientMutationSelection,
     OptimizedBenchmark, BenchmarkResult,
     MemoryOptimizer,
+};
+pub use observability::{
+    EvolutionKpi, Percentiles,
+    MetricsCollector, TraceEntry, TraceBuffer,
+    PerformanceProfiler, ComponentBottleneck,
 };
 
 // ============================================================================
