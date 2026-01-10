@@ -129,6 +129,7 @@ pub mod performance_metrics;    // Phase 35, Task 2
 pub mod impact_analysis;        // Phase 35, Task 3
 pub mod metrics_storage;        // Phase 35, Task 4
 pub mod alerting;               // Phase 35, Task 5
+pub mod reporting;              // Phase 35, Task 6
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -284,6 +285,14 @@ pub use alerting::{
     AlertEvent, AlertNotification,
     AlertStatistic,
     AlertManager,
+};
+
+pub use reporting::{
+    ReportFormat, ReportSection,
+    MetricSummary, ChartPoint, Chart,
+    EvolutionCycleSummary,
+    ReportMetadata, ReportBuilder,
+    ReportingSystem,
 };
 
 // ============================================================================
