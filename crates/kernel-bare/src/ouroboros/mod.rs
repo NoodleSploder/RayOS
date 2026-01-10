@@ -110,6 +110,7 @@ pub mod telemetry;  // Phase 32, Task 1
 pub mod integration_tests;  // Phase 32, Task 2
 pub mod performance;  // Phase 32, Task 3
 pub mod observability;  // Phase 32, Task 4
+pub mod regression;  // Phase 32, Task 5
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -157,6 +158,11 @@ pub use observability::{
     EvolutionKpi, Percentiles,
     MetricsCollector, TraceEntry, TraceBuffer,
     PerformanceProfiler, ComponentBottleneck,
+};
+pub use regression::{
+    PerformanceBaseline, RegressionResult,
+    RegressionDetector, AdaptiveThreshold,
+    RollbackDecision, RegressionRollbackReason,
 };
 
 // ============================================================================
