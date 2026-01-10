@@ -93,14 +93,29 @@ Core architectural components for RayOS as a cognitive substrate. See [SENTIENT_
 
 | Task | Status | Description |
 |------|--------|-------------|
-| Genome Repository | 📋 Planned | Source code as mutable genome with AST representation |
-| Mutation Engine | 📋 Planned | Code transformation: refactoring, optimization, synthesis |
-| Selection Arena | 📋 Planned | Sandboxed testing, fitness scoring, benchmark suites |
-| Live Patcher | 📋 Planned | Hot-swap winning mutations without reboot |
-| Dream Scheduler | 📋 Planned | Idle detection, evolution triggers, "No Idle Principle" |
-| Evolution Coordinator | 📋 Planned | Full loop: mutate → test → select → patch → learn |
+| Genome Repository | ✅ Done | Source code as mutable genome with AST representation (Phase 31, Task 1) |
+| Mutation Engine | ✅ Done | Code transformation: refactoring, optimization, synthesis (Phase 31, Task 2) |
+| Selection Arena | ✅ Done | Sandboxed testing, fitness scoring, benchmark suites (Phase 31, Task 3) |
+| Live Patcher | ✅ Done | Hot-swap winning mutations without reboot (Phase 31, Task 4) |
+| Dream Scheduler | ✅ Done | Idle detection, evolution triggers, "No Idle Principle" (Phase 31, Task 5) |
+| Evolution Coordinator | ✅ Done | Full loop: mutate → test → select → patch → learn (Phase 31, Task 6) |
 
 See [Phase 31 Plan](phases/PHASE_31_PLAN.md) for detailed implementation design.
+
+### Ouroboros Enhancement & Observability (Phase 32)
+
+**Advanced self-optimization features and monitoring**.
+
+| Task | Status | Description |
+|------|--------|-------------|
+| Boot Markers & Telemetry | 📋 Planned | RAYOS_OUROBOROS prefixed boot markers for evolution tracking |
+| Integration Testing | 📋 Planned | Cross-module test suite for complete evolution loop |
+| Performance Optimization | 📋 Planned | Memory optimization, algorithm improvements, cache tuning |
+| Advanced Observability | 📋 Planned | Statistics, metrics, tracing for evolution cycles |
+| Regression Detection | 📋 Planned | Detect and prevent performance regressions from mutations |
+| Multi-Mutation Batching | 📋 Planned | Test multiple mutations in parallel, adaptive batch sizing |
+
+See [Phase 32 Plan](phases/PHASE_32_PLAN.md) for detailed implementation design.
 
 ---
 
@@ -141,14 +156,24 @@ Cognitive architecture foundation:
 - Neural File System with semantic search
 - Logic as Geometry proof-of-concept
 
-### M6: Ouroboros Engine (2027)
+### M6: Ouroboros Engine (2027) ✅
 
-Self-evolving RayOS metabolism:
-- Genome Repository: Source code as mutable AST
-- Mutation Engine: Refactoring, optimization, synthesis
-- Selection Arena: Sandbox testing with fitness scoring
-- Live Patcher: Hot-swap without reboot
-- Dream Mode: "No Idle Principle" — self-optimize when user away
+Self-evolving RayOS metabolism - **PHASE 31 COMPLETE**:
+- ✅ Genome Repository: Source code as mutable AST
+- ✅ Mutation Engine: Refactoring, optimization, synthesis
+- ✅ Selection Arena: Sandbox testing with fitness scoring
+- ✅ Live Patcher: Hot-swap without reboot
+- ✅ Dream Scheduler: Idle detection and evolution triggering
+- ✅ Evolution Coordinator: Full self-optimization loop
+
+### M7: Ouroboros Enhancement (2027)
+
+Advanced evolution features and observability - **PHASE 32 IN PROGRESS**:
+- Boot markers and telemetry tracking
+- Cross-module integration testing
+- Performance optimization and tuning
+- Advanced metrics and observability
+- Regression detection framework
 
 ---
 
