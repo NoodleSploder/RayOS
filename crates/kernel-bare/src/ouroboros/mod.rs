@@ -124,6 +124,7 @@ pub mod system_profiling;  // Phase 34, Task 3
 pub mod feedback_loop;  // Phase 34, Task 4
 pub mod multi_objective_optimizer;  // Phase 34, Task 5
 pub mod web_dashboard_backend;  // Phase 34, Task 6
+pub mod evolution_integration;  // Phase 35, Task 1
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -241,6 +242,12 @@ pub use web_dashboard_backend::{
     ControlCommand, ControlRequest, ControlResponse,
     ApiExportRequest, ApiExportResult,
     DashboardBackend,
+};
+pub use evolution_integration::{
+    EvolutionPhase, ModuleStatus, ModuleType, ModuleHealth,
+    PhaseTransition, ModuleMessage,
+    MetricAggregation, EvolutionSession,
+    EvolutionCoordinator,
 };
 
 // ============================================================================

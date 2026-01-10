@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn test_feedback_loop_best_pattern_for_target() {
         let mut loop_ctrl = FeedbackLoop::new();
-        
+
         let entry = FeedbackEntry::new(
             1,
             0x1234567890abcdef,
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn test_feedback_loop_success_rate() {
         let mut loop_ctrl = FeedbackLoop::new();
-        
+
         let success = FeedbackEntry::new(
             1,
             0x1234567890abcdef,
@@ -809,7 +809,7 @@ mod tests {
     #[test]
     fn test_feedback_loop_top_patterns() {
         let mut loop_ctrl = FeedbackLoop::new();
-        
+
         for i in 0..3 {
             let entry = FeedbackEntry::new(
                 i as u32,
