@@ -861,7 +861,7 @@ impl VmDataBridge {
                 // Parse format list from data
                 // For now, just mark as pending
                 guest.clipboard_pending = true;
-                
+
                 self.emit_event(BridgeEvent::ClipboardChanged {
                     vm_id,
                     formats: guest.clipboard_formats,

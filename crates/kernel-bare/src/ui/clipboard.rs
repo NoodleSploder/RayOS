@@ -679,12 +679,12 @@ impl ClipboardManager {
         owner_app: AppId,
     ) -> Result<u32, ClipboardError> {
         let format_entry = FormatEntry::text(text).ok_or(ClipboardError::DataTooLarge)?;
-        
+
         let mut entry = ClipboardEntry::empty();
         entry.owner_app = owner_app;
         entry.add_format(format_entry);
         entry.set_label_from_text(text);
-        
+
         self.set(selection, entry, None)
     }
 
@@ -771,10 +771,10 @@ impl ClipboardManager {
         entry.id = self.next_entry_id;
         self.next_entry_id += 1;
         entry.timestamp = self.timestamp;
-        
+
         self.clipboard = entry;
         self.stats_copies += 1;
-        
+
         Ok(entry.id)
     }
 
@@ -968,12 +968,12 @@ impl ClipboardBridge {
 
         self.state = VirtioClipboardState::Syncing;
         self.sync_pending = true;
-        
+
         // In real implementation, this would:
         // 1. Serialize the entry to virtio format
         // 2. Queue a descriptor to the guest
         // 3. Wait for guest acknowledgment
-        
+
         self.state = VirtioClipboardState::Ready;
         self.sync_pending = false;
         self.stats_h2g += 1;
@@ -994,7 +994,7 @@ impl ClipboardBridge {
         // 1. Read data from virtio queue
         // 2. Deserialize to ClipboardEntry
         // 3. Set in clipboard manager
-        
+
         // Placeholder: create empty entry
         let entry = ClipboardEntry::empty();
         let id = manager.set(ClipboardSelection::Clipboard, entry, None)?;
@@ -1080,10 +1080,10 @@ mod tests {
     fn test_clipboard_entry() {
         let mut entry = ClipboardEntry::empty();
         assert!(!entry.is_valid());
-        
+
         let format = FormatEntry::text("test").unwrap();
         entry.add_format(format);
-        
+
         assert!(entry.is_valid());
         assert!(entry.has_format(ClipboardFormat::Text));
         assert_eq!(entry.get_text(), Some("test"));
@@ -1093,11 +1093,11 @@ mod tests {
     fn test_clipboard_history() {
         let mut history = ClipboardHistory::new();
         assert!(history.is_empty());
-        
+
         let mut entry = ClipboardEntry::empty();
         entry.id = 1;
         history.push(entry);
-        
+
         assert_eq!(history.len(), 1);
         assert_eq!(history.current().unwrap().id, 1);
     }
@@ -1105,10 +1105,10 @@ mod tests {
     #[test]
     fn test_clipboard_manager_set_get() {
         let mut manager = ClipboardManager::new();
-        
+
         let id = manager.set_text(ClipboardSelection::Clipboard, "hello", 1).unwrap();
         assert!(id > 0);
-        
+
         let text = manager.get_text(ClipboardSelection::Clipboard, 2).unwrap();
         assert_eq!(text, "hello");
     }
@@ -1118,7 +1118,7 @@ mod tests {
         let policy = ClipboardPolicy::read_only(1);
         assert!(policy.can_read);
         assert!(!policy.can_write);
-        
+
         let policy = ClipboardPolicy::no_access(1);
         assert!(!policy.can_read);
         assert!(!policy.can_write);
@@ -1128,7 +1128,7 @@ mod tests {
     fn test_clipboard_bridge() {
         let mut bridge = ClipboardBridge::new(1);
         assert_eq!(bridge.state(), VirtioClipboardState::Uninitialized);
-        
+
         bridge.init();
         assert!(bridge.is_ready());
     }
@@ -1138,19 +1138,19 @@ mod tests {
         assert_eq!(ClipboardFormat::Text.mime_type(), "text/plain");
         assert_eq!(ClipboardFormat::Html.mime_type(), "text/html");
         assert_eq!(ClipboardFormat::ImagePng.mime_type(), "image/png");
-        
+
         assert_eq!(ClipboardFormat::from_mime("text/plain"), ClipboardFormat::Text);
     }
 
     #[test]
     fn test_clipboard_watcher() {
         let mut manager = ClipboardManager::new();
-        
+
         fn dummy_callback(_: ClipboardEvent) {}
-        
+
         let id = manager.add_watcher(1, dummy_callback);
         assert!(id.is_some());
-        
+
         assert!(manager.remove_watcher(id.unwrap()));
     }
 }

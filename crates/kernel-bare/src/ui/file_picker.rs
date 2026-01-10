@@ -1134,9 +1134,9 @@ impl PickerManager {
     /// Close picker.
     pub fn close(&mut self, id: u32) -> Option<PickerResult> {
         let picker = self.pickers.iter_mut().find(|p| p.id == id)?;
-        
+
         let result = picker.result;
-        
+
         match picker.state {
             PickerState::Completed => self.stats_selected += 1,
             PickerState::Cancelled => self.stats_cancelled += 1,
@@ -1268,7 +1268,7 @@ mod tests {
     #[test]
     fn test_picker_manager() {
         let mut manager = PickerManager::new();
-        
+
         let id = manager.create(PickerMode::OpenFile, 1, None).unwrap();
         assert!(manager.get(id).is_some());
         assert_eq!(manager.active_count(), 1);

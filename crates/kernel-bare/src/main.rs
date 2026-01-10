@@ -89,6 +89,7 @@ mod device_passthrough;    // Phase 9B Task 4: Device Pass-through & IOMMU
 mod system_update;         // Phase 9B Task 5: Atomic Updates & Rollback
 mod fs_repair;             // Phase 9B Task 5: Filesystem Repair & Recovery
 mod user_system;           // Phase 9B Task 5: User/Group & Permissions
+mod ouroboros;             // Phase 31: Ouroboros Engine - Self-Evolving System
 
 #[cfg(feature = "ui_shell")]
 mod ui;                    // Phase 21.1: Native UI Framework

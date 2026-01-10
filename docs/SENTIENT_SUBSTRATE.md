@@ -9,11 +9,12 @@
 
 RayOS is not merely an operating system—it is a **sentient substrate**: a living computational foundation that perceives, reasons, and acts. Unlike traditional operating systems that passively await commands, RayOS continuously models its environment, anticipates user intent, and negotiates outcomes through semantic understanding.
 
-This document defines the three foundational pillars of RayOS as a sentient substrate:
+This document defines the four foundational pillars of RayOS as a sentient substrate:
 
 1. **The Bicameral Kernel** — Dual-process cognition architecture
 2. **Logic as Geometry** — GPU ray tracing as the execution model
 3. **The Neural File System** — Semantic memory and meaning-based retrieval
+4. **The Ouroboros Engine** — Self-evolving metabolism for continuous improvement
 
 ---
 
@@ -284,6 +285,144 @@ When a user requests "that presentation about Q3 sales numbers":
 
 ---
 
+## 4. The Ouroboros Engine
+
+RayOS embodies a radical design principle: **the system should constantly evolve into a better version of itself**. Named after the ancient symbol of a serpent consuming its own tail, the Ouroboros Engine is RayOS's metabolism—a built-in drive for perpetual self-improvement.
+
+### The No Idle Principle
+
+Traditional operating systems enter sleep or low-power states when the user is away. RayOS instead enters **Dream Mode**—a productive state where the system introspects, experiments, and evolves.
+
+> When RayOS detects user absence (configurable, default 5 minutes), it doesn't sleep. It dreams. The Ouroboros Engine activates, mutating RayOS's own code, testing variations in sandboxes, and live-patching the winners.
+
+### How It Works
+
+The Ouroboros Engine operates as a continuous evolutionary loop:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        OUROBOROS ENGINE                              │
+│                   "The System That Evolves Itself"                   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────────┐  │
+│  │   GENOME         │  │    MUTATION      │  │    SELECTION      │  │
+│  │   REPOSITORY     │  │    ENGINE        │  │    ARENA          │  │
+│  │                  │  │                  │  │                   │  │
+│  │  Source code     │  │  Code            │  │  Sandbox          │  │
+│  │  as mutable      │──►  transformation  │──►  testing &        │  │
+│  │  genome          │  │  & variation     │  │  fitness scoring  │  │
+│  │                  │  │                  │  │                   │  │
+│  │  • AST parsing   │  │  • Refactoring   │  │  • Performance    │  │
+│  │  • Dependency    │  │  • Optimization  │  │  • Memory usage   │  │
+│  │    graph         │  │  • LLM-guided    │  │  • Correctness    │  │
+│  │  • Hot regions   │  │    rewrites      │  │  • Regression     │  │
+│  └────────▲─────────┘  └─────────────────┘  └─────────┬─────────┘  │
+│           │                                           │             │
+│           │            ┌─────────────────┐            │             │
+│           └────────────┤   LIVE PATCHER  │◄───────────┘             │
+│                        │                 │                          │
+│                        │  Hot-swap       │                          │
+│                        │  winning        │                          │
+│                        │  mutations      │                          │
+│                        └────────┬────────┘                          │
+│                                 │                                   │
+│  ┌──────────────────────────────▼───────────────────────────────┐  │
+│  │                    DREAM SCHEDULER                            │  │
+│  │                                                               │  │
+│  │  Monitors user activity → Triggers evolution during idle     │  │
+│  │  Configurable idle threshold (default: 5 minutes)            │  │
+│  │  Power-aware: More aggressive on AC, conservative on battery │  │
+│  └───────────────────────────────────────────────────────────────┘  │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Core Components
+
+#### Genome Repository
+
+RayOS's source code is represented as a mutable genome:
+
+| Component | Purpose |
+|-----------|---------|
+| **AST Parser** | Parses source into abstract syntax tree for manipulation |
+| **Dependency Graph** | Tracks relationships between code units |
+| **Hotspot Tracker** | Identifies high-impact code regions for targeted evolution |
+| **Mutation Points** | Valid locations where changes can safely occur |
+
+**Requirement**: RayOS's source code must be accessible to RayOS itself. The system introspects its own codebase as the genome for evolution.
+
+#### Mutation Engine
+
+The Mutation Engine generates code variations:
+
+| Mutation Type | Description |
+|---------------|-------------|
+| **Refactoring** | Extract functions, inline code, rename for clarity |
+| **Optimization** | Loop unrolling, caching, vectorization |
+| **LLM-Guided** | System 2 proposes intelligent rewrites |
+| **Simplification** | Remove dead code, simplify conditionals |
+| **Parallelization** | Convert sequential to parallel execution |
+
+System 2 (the resident LLM) plays a crucial role, suggesting mutations that require semantic understanding rather than mechanical transformation.
+
+#### Selection Arena
+
+Mutations compete in sandboxed environments:
+
+| Fitness Metric | Weight | Description |
+|----------------|--------|-------------|
+| Execution Time | 40% | Faster is better (weighted by call frequency) |
+| Memory Usage | 25% | Lower allocation, smaller footprint |
+| Test Pass Rate | **Must be 100%** | Correctness is non-negotiable |
+| Code Size | 15% | Smaller often means more elegant |
+| Energy Consumption | 20% | Battery-friendly for mobile use |
+
+Only mutations that pass all tests AND improve the fitness score advance.
+
+#### Live Patcher
+
+Winning mutations are hot-swapped into the running system:
+
+- **Safe Points**: Patches applied only at quiescent points (between syscalls)
+- **Atomic Swap**: Lock-free code replacement for hot paths
+- **Rollback Log**: Complete history enables instant reversion
+- **Health Checks**: Automatic rollback if crash detected post-patch
+
+#### Dream Scheduler
+
+The Dream Scheduler monitors activity and triggers evolution:
+
+| State | Trigger | Action |
+|-------|---------|--------|
+| **Active** | User input within threshold | Evolution paused |
+| **Idle** | 5 min no activity (configurable) | Evolution begins |
+| **Deep Idle** | 15 min no activity | Aggressive evolution |
+| **Power Save** | Battery < 20% | Evolution suspended |
+
+### User Control
+
+Users retain full control over evolution:
+
+| Mode | Behavior |
+|------|----------|
+| **Automatic** | All passing mutations applied immediately |
+| **Notify** | Applied automatically, user notified |
+| **Approve Major** | Minor refactors auto, major changes need approval |
+| **Approve All** | Every mutation requires explicit consent |
+| **Disabled** | Ouroboros Engine completely off |
+
+### Safety Guarantees
+
+1. **Isolation**: All mutations tested in sandboxes before affecting live system
+2. **Reversibility**: Every change logged and instantly revertible
+3. **Correctness**: 100% test pass rate required for acceptance
+4. **Grace Period**: Automatic rollback if crash within configurable window
+5. **User Consent**: Approval modes let users control evolution scope
+
+---
+
 ## Integration Points
 
 ### Bicameral ↔ Logic as Geometry
@@ -306,6 +445,28 @@ System 1 (GPU compute shaders) naturally interfaces with the geometric logic eng
 - The Vector Store index (HNSW) is itself a navigable geometry
 - Access control decisions (geometric logic) gate file retrieval
 
+### Ouroboros ↔ Bicameral Kernel
+
+- **System 2** proposes intelligent mutations based on semantic understanding
+- **System 2** evaluates whether mutations align with user intent and system goals
+- **System 1** monitors real-time performance metrics for fitness scoring
+- **System 1** triggers evolution when detecting performance degradation patterns
+
+### Ouroboros ↔ Neural File System
+
+- **Epiphany Buffer** may suggest code improvements based on pattern analysis across history
+- **Vector Store** enables semantic search through mutation history
+- **Relationship Inference** connects related code regions for coordinated batch mutations
+- Mutation outcomes are embedded and stored for future learning
+
+### Ouroboros ↔ Dream Mode (Shared Infrastructure)
+
+The Ouroboros Engine and Epiphany Buffer share dream mode cycles:
+1. Both activate during user idle periods
+2. Resource budget split based on priority and pending work
+3. Epiphany discoveries can trigger Ouroboros mutations
+4. Ouroboros improvements inform Epiphany pattern recognition
+
 ---
 
 ## Development Status
@@ -326,6 +487,11 @@ System 1 (GPU compute shaders) naturally interfaces with the geometric logic eng
 | Semantic Query | ✅ Implemented | Natural language parsing, expansion, multi-factor ranking |
 | Relationship Inference | ✅ Implemented | Knowledge graph, concept linking, inference engine |
 | GPU Reflex Engine | ✅ Implemented | Pattern matching on GPU with WGSL compute shaders |
+| Ouroboros Genome Repository | 📋 Planned | Source code as mutable genome (Phase 31) |
+| Ouroboros Mutation Engine | 📋 Planned | Code transformation and variation (Phase 31) |
+| Ouroboros Selection Arena | 📋 Planned | Sandbox testing and fitness scoring (Phase 31) |
+| Ouroboros Live Patcher | 📋 Planned | Hot-swap winning mutations (Phase 31) |
+| Ouroboros Dream Scheduler | 📋 Planned | Idle detection and evolution triggers (Phase 31) |
 
 ---
 
@@ -336,3 +502,4 @@ System 1 (GPU compute shaders) naturally interfaces with the geometric logic eng
 - [Cortex README](cortex/README.md) — Sensory processing layer
 - [Gaze Ray Pipeline](gaze_ray_pipeline.md) — Eye tracking integration
 - [ROADMAP](ROADMAP.md) — Development milestones and tasks
+- [Phase 31 Plan](phases/PHASE_31_PLAN.md) — Ouroboros Engine implementation details

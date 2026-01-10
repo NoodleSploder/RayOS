@@ -85,6 +85,23 @@ Core architectural components for RayOS as a cognitive substrate. See [SENTIENT_
 | Semantic Query Interface | ✅ Done | Natural language parsing, query expansion, multi-factor ranking |
 | Relationship Inference | ✅ Done | Automatic concept linking with knowledge graph and inference engine |
 
+### Ouroboros Engine 🐍
+
+**RayOS Metabolism**: The self-evolving, self-refactoring system. RayOS's source code is available to RayOS itself, enabling continuous self-improvement through mutation, testing, and live-patching of winning changes.
+
+**No Idle Principle**: When user is away (default: 5 min, configurable), RayOS enters "Dream Mode" and begins self-optimization cycles.
+
+| Task | Status | Description |
+|------|--------|-------------|
+| Genome Repository | 📋 Planned | Source code as mutable genome with AST representation |
+| Mutation Engine | 📋 Planned | Code transformation: refactoring, optimization, synthesis |
+| Selection Arena | 📋 Planned | Sandboxed testing, fitness scoring, benchmark suites |
+| Live Patcher | 📋 Planned | Hot-swap winning mutations without reboot |
+| Dream Scheduler | 📋 Planned | Idle detection, evolution triggers, "No Idle Principle" |
+| Evolution Coordinator | 📋 Planned | Full loop: mutate → test → select → patch → learn |
+
+See [Phase 31 Plan](phases/PHASE_31_PLAN.md) for detailed implementation design.
+
 ---
 
 ## Milestones
@@ -123,6 +140,15 @@ Cognitive architecture foundation:
 - Bicameral Kernel with GPU reflexes
 - Neural File System with semantic search
 - Logic as Geometry proof-of-concept
+
+### M6: Ouroboros Engine (2027)
+
+Self-evolving RayOS metabolism:
+- Genome Repository: Source code as mutable AST
+- Mutation Engine: Refactoring, optimization, synthesis
+- Selection Arena: Sandbox testing with fitness scoring
+- Live Patcher: Hot-swap without reboot
+- Dream Mode: "No Idle Principle" — self-optimize when user away
 
 ---
 

@@ -1090,10 +1090,10 @@ mod tests {
         let input = b"hello";
         let mut encoded = [0u8; 16];
         let enc_len = base64_encode(input, &mut encoded).unwrap();
-        
+
         let mut decoded = [0u8; 16];
         let dec_len = base64_decode(&encoded[..enc_len], &mut decoded).unwrap();
-        
+
         assert_eq!(&decoded[..dec_len], input);
     }
 }

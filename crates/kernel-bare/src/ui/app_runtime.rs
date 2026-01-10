@@ -241,17 +241,17 @@ impl AppDescriptor {
     /// Create a descriptor with name.
     pub fn new(name: &str, identifier: &str) -> Self {
         let mut desc = Self::empty();
-        
+
         // Copy name
         let name_bytes = name.as_bytes();
         let name_len = name_bytes.len().min(31);
         desc.name[..name_len].copy_from_slice(&name_bytes[..name_len]);
-        
+
         // Copy identifier
         let id_bytes = identifier.as_bytes();
         let id_len = id_bytes.len().min(63);
         desc.identifier[..id_len].copy_from_slice(&id_bytes[..id_len]);
-        
+
         desc
     }
 
@@ -507,13 +507,13 @@ impl AppScheduler {
         let start_index = self.schedule_index;
         loop {
             self.schedule_index = (self.schedule_index + 1) % MAX_APPS;
-            
+
             let app = &mut registry.apps[self.schedule_index];
             if app.is_valid() && app.state == AppState::Running && app.has_budget() {
                 self.current_app = app.id;
                 return Some(app.id);
             }
-            
+
             if self.schedule_index == start_index {
                 break;
             }
@@ -685,11 +685,11 @@ impl IpcMessage {
         msg.msg_type = IpcMessageType::Data;
         msg.sender = sender;
         msg.receiver = receiver;
-        
+
         let copy_len = data.len().min(64);
         msg.payload[..copy_len].copy_from_slice(&data[..copy_len]);
         msg.payload_len = copy_len;
-        
+
         msg
     }
 
@@ -1082,7 +1082,7 @@ impl AppLauncher {
     pub fn tick(&mut self) {
         self.timestamp += 1;
         self.scheduler.begin_frame();
-        
+
         // Schedule apps until budget exhausted
         while !self.scheduler.budget_exhausted() {
             if let Some(app_id) = self.scheduler.next_app(&mut self.registry) {
@@ -1093,7 +1093,7 @@ impl AppLauncher {
                 break;
             }
         }
-        
+
         // Reset budgets for next frame
         self.scheduler.reset_budgets(&mut self.registry);
     }
@@ -1175,10 +1175,10 @@ mod tests {
     fn test_capability_set() {
         let mut caps = CapabilitySet::empty();
         assert!(!caps.has(Capability::Network));
-        
+
         caps.grant(Capability::Network);
         assert!(caps.has(Capability::Network));
-        
+
         caps.revoke(Capability::Network);
         assert!(!caps.has(Capability::Network));
     }
@@ -1201,20 +1201,20 @@ mod tests {
     #[test]
     fn test_app_registry() {
         let mut registry = AppRegistry::new();
-        
+
         let instance = AppInstance {
             id: 1,
             state: AppState::Running,
             ..AppInstance::empty()
         };
-        
+
         let id = registry.register(instance);
         assert!(id.is_some());
         assert_eq!(registry.count(), 1);
-        
+
         let app = registry.get(1);
         assert!(app.is_some());
-        
+
         registry.remove(1);
         assert_eq!(registry.count(), 0);
     }
@@ -1223,11 +1223,11 @@ mod tests {
     fn test_ipc_queue() {
         let mut queue = IpcQueue::new();
         assert!(queue.is_empty());
-        
+
         let msg = IpcMessage::data(1, 2, b"hello");
         assert!(queue.enqueue(msg));
         assert_eq!(queue.len(), 1);
-        
+
         let received = queue.dequeue();
         assert!(received.is_some());
         assert!(queue.is_empty());
@@ -1236,14 +1236,14 @@ mod tests {
     #[test]
     fn test_ipc_router() {
         let mut router = IpcRouter::new();
-        
+
         router.register_app(1);
         router.register_app(2);
-        
+
         let msg = IpcMessage::data(1, 2, b"test");
         assert!(router.send(msg));
         assert!(router.has_messages(2));
-        
+
         let received = router.receive(2);
         assert!(received.is_some());
         assert!(!router.has_messages(2));
@@ -1254,9 +1254,9 @@ mod tests {
         let mut sandbox = AppSandbox::new();
         let mut caps = CapabilitySet::empty();
         caps.grant(Capability::Network);
-        
+
         sandbox.init(1, caps);
-        
+
         assert!(sandbox.check(Capability::Network));
         assert!(!sandbox.check(Capability::FileWrite));
         assert_eq!(sandbox.violations(), 1);
@@ -1266,15 +1266,15 @@ mod tests {
     fn test_app_instance_budget() {
         let mut instance = AppInstance::empty();
         instance.frame_budget = 1000;
-        
+
         assert!(instance.has_budget());
-        
+
         instance.consume_budget(500);
         assert!(instance.has_budget());
-        
+
         instance.consume_budget(600);
         assert!(!instance.has_budget());
-        
+
         instance.reset_budget();
         assert!(instance.has_budget());
     }

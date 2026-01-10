@@ -1532,11 +1532,11 @@ mod tests {
     fn test_focus_stack_basic() {
         let mut stack = FocusStack::new();
         assert!(stack.is_empty());
-        
+
         stack.push(1);
         stack.push(2);
         stack.push(3);
-        
+
         assert_eq!(stack.len(), 3);
         assert_eq!(stack.current(), 3);
         assert_eq!(stack.get(0), 3);
@@ -1550,9 +1550,9 @@ mod tests {
         stack.push(1);
         stack.push(2);
         stack.push(3);
-        
+
         stack.remove(2);
-        
+
         assert_eq!(stack.len(), 2);
         assert_eq!(stack.get(0), 3);
         assert_eq!(stack.get(1), 1);
@@ -1564,14 +1564,14 @@ mod tests {
         stack.push(1);
         stack.push(2);
         stack.push(3);
-        
+
         stack.start_cycle();
         assert!(stack.is_cycling());
-        
+
         assert_eq!(stack.cycle_next(), 2);
         assert_eq!(stack.cycle_next(), 1);
         assert_eq!(stack.cycle_next(), 3);
-        
+
         let selected = stack.finish_cycle();
         assert!(!stack.is_cycling());
         assert_eq!(selected, 3);
@@ -1585,10 +1585,10 @@ mod tests {
             alt: true,
             super_key: false,
         };
-        
+
         let packed = mods.pack();
         let unpacked = Modifiers::unpack(packed);
-        
+
         assert!(unpacked.shift);
         assert!(!unpacked.ctrl);
         assert!(unpacked.alt);
@@ -1605,17 +1605,17 @@ mod tests {
             },
             ShortcutAction::ShowDesktop,
         );
-        
+
         // Should match
         let mods = Modifiers {
             super_key: true,
             ..Modifiers::none()
         };
         assert!(binding.matches(KeyCode::D, &mods));
-        
+
         // Should not match (wrong key)
         assert!(!binding.matches(KeyCode::L, &mods));
-        
+
         // Should not match (missing modifier)
         let mods2 = Modifiers::none();
         assert!(!binding.matches(KeyCode::D, &mods2));
@@ -1625,7 +1625,7 @@ mod tests {
     fn test_input_router_shortcuts() {
         let mut router = InputRouter::new();
         router.init_default_shortcuts();
-        
+
         // Verify shortcuts were added
         assert!(router.shortcut_count > 0);
     }
@@ -1633,14 +1633,14 @@ mod tests {
     #[test]
     fn test_input_router_grab() {
         let mut router = InputRouter::new();
-        
+
         // Acquire grab
         assert!(router.acquire_grab(1, GrabType::Keyboard, GrabReason::Modal));
         assert_eq!(router.keyboard_grab_owner(), 1);
-        
+
         // Cannot acquire conflicting grab
         assert!(!router.acquire_grab(2, GrabType::Keyboard, GrabReason::Modal));
-        
+
         // Release
         router.release_grabs_for(1);
         assert_eq!(router.keyboard_grab_owner(), WINDOW_ID_NONE);
@@ -1649,12 +1649,12 @@ mod tests {
     #[test]
     fn test_input_router_focus() {
         let mut router = InputRouter::new();
-        
+
         router.focus_window(1);
         router.focus_window(2);
-        
+
         assert_eq!(router.focused_window(), 2);
-        
+
         router.remove_window(2);
         assert_eq!(router.focused_window(), 1);
     }
@@ -1662,17 +1662,17 @@ mod tests {
     #[test]
     fn test_input_event_queue() {
         let mut router = InputRouter::new();
-        
+
         let event = InputEvent::KeyDown {
             scancode: 32,
             keycode: KeyCode::D,
             modifiers: Modifiers::none(),
         };
         let routed = RoutedEvent::new(event, InputTarget::System, 1);
-        
+
         assert!(router.enqueue(routed));
         assert_eq!(router.queue_len(), 1);
-        
+
         let dequeued = router.dequeue();
         assert!(dequeued.is_some());
         assert_eq!(router.queue_len(), 0);
@@ -1685,7 +1685,7 @@ mod tests {
             visible: true,
             ..Default::default()
         };
-        
+
         assert!(filter.hit_test(150, 150));
         assert!(filter.hit_test(100, 100));
         assert!(!filter.hit_test(50, 50));
@@ -1695,17 +1695,17 @@ mod tests {
     #[test]
     fn test_vm_input_injector() {
         let mut injector = VmInputInjector::new();
-        
+
         injector.activate(1, 10, 20);
         assert!(injector.is_active());
-        
+
         let (sx, sy) = injector.translate_position(110, 120);
         assert_eq!(sx, 100);
         assert_eq!(sy, 100);
-        
+
         let key_event = injector.inject_key(32, true);
         assert!(key_event.is_some());
-        
+
         injector.deactivate();
         assert!(!injector.is_active());
     }
@@ -1716,7 +1716,7 @@ mod tests {
         assert_eq!(target.window_id(), Some(42));
         assert_eq!(target.surface_id(), None);
         assert!(!target.is_none());
-        
+
         let target2 = InputTarget::None;
         assert!(target2.is_none());
     }

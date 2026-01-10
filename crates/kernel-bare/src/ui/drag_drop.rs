@@ -897,7 +897,7 @@ impl DragManager {
                 if let Some(target) = self.find_target(new_id) {
                     if target.accepts_payload(&self.session.payload) {
                         let action = target.negotiate_action(&self.session.payload);
-                        
+
                         // Update session state
                         if let Some(target_mut) = self.find_target_mut(new_id) {
                             target_mut.highlighted = true;
@@ -950,7 +950,7 @@ impl DragManager {
         if self.session.state == DragState::OverTarget {
             if let Some(target_id) = self.session.current_target_id {
                 let action = self.session.negotiated_action;
-                
+
                 // Unhighlight target
                 if let Some(target) = self.find_target_mut(target_id) {
                     target.highlighted = false;

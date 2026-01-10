@@ -120,11 +120,11 @@ impl TaskbarEntry {
     pub fn new(window_id: WindowId, title: &str) -> Self {
         let mut entry = Self::empty();
         entry.window_id = window_id;
-        
+
         let title_bytes = title.as_bytes();
         let copy_len = title_bytes.len().min(31);
         entry.title[..copy_len].copy_from_slice(&title_bytes[..copy_len]);
-        
+
         entry
     }
 
@@ -322,7 +322,7 @@ impl Taskbar {
         // Calculate which entry was clicked
         let relative_x = (x - bx) as u32;
         let entry_index = (relative_x / TASKBAR_BUTTON_WIDTH) as usize;
-        
+
         if entry_index < self.count {
             Some(entry_index)
         } else {
@@ -434,15 +434,15 @@ impl LauncherAppEntry {
     /// Create a new entry.
     pub fn new(identifier: &str, name: &str, category: AppCategory) -> Self {
         let mut entry = Self::empty();
-        
+
         let id_bytes = identifier.as_bytes();
         let id_len = id_bytes.len().min(63);
         entry.identifier[..id_len].copy_from_slice(&id_bytes[..id_len]);
-        
+
         let name_bytes = name.as_bytes();
         let name_len = name_bytes.len().min(31);
         entry.name[..name_len].copy_from_slice(&name_bytes[..name_len]);
-        
+
         entry.category = category;
         entry
     }
@@ -590,7 +590,7 @@ impl AppLauncherMenu {
         let name = app.name_str();
         let name_lower = name.to_ascii_lowercase();
         let filter_lower = filter.to_ascii_lowercase();
-        
+
         // Check if filter is contained in name (simplified)
         name_lower.contains(&filter_lower)
     }
@@ -688,11 +688,11 @@ impl TrayIcon {
         icon.id = id;
         icon.icon_index = icon_index;
         icon.visible = true;
-        
+
         let tooltip_bytes = tooltip.as_bytes();
         let copy_len = tooltip_bytes.len().min(31);
         icon.tooltip[..copy_len].copy_from_slice(&tooltip_bytes[..copy_len]);
-        
+
         icon
     }
 
@@ -877,15 +877,15 @@ impl NotificationToast {
         let mut toast = Self::empty();
         toast.id = id;
         toast.visible = true;
-        
+
         let title_bytes = title.as_bytes();
         let title_len = title_bytes.len().min(31);
         toast.title[..title_len].copy_from_slice(&title_bytes[..title_len]);
-        
+
         let body_bytes = body.as_bytes();
         let body_len = body_bytes.len().min(127);
         toast.body[..body_len].copy_from_slice(&body_bytes[..body_len]);
-        
+
         toast
     }
 
@@ -939,7 +939,7 @@ impl NotificationQueue {
         self.next_id += 1;
         toast.shown_at = current_time;
         toast.visible = true;
-        
+
         // Find empty slot or oldest non-critical
         let mut slot = None;
         for i in 0..MAX_NOTIFICATIONS {
@@ -948,7 +948,7 @@ impl NotificationQueue {
                 break;
             }
         }
-        
+
         // If full, replace oldest non-critical
         if slot.is_none() {
             let mut oldest_time = u64::MAX;
@@ -961,7 +961,7 @@ impl NotificationQueue {
                 }
             }
         }
-        
+
         if let Some(idx) = slot {
             self.notifications[idx] = toast;
             if idx >= self.count {
@@ -970,7 +970,7 @@ impl NotificationQueue {
             self.total_shown += 1;
             // RAYOS_SHELL:NOTIFY
         }
-        
+
         toast.id
     }
 
@@ -1074,11 +1074,11 @@ impl DesktopIcon {
         icon.x = x;
         icon.y = y;
         icon.action = action;
-        
+
         let label_bytes = label.as_bytes();
         let copy_len = label_bytes.len().min(31);
         icon.label[..copy_len].copy_from_slice(&label_bytes[..copy_len]);
-        
+
         icon
     }
 
@@ -1183,10 +1183,10 @@ impl ShellState {
     pub fn init(&mut self, width: u32, height: u32) {
         self.screen_width = width;
         self.screen_height = height;
-        
+
         // Initialize taskbar
         self.taskbar.init(width, height);
-        
+
         // Position notification area at right end of taskbar
         let taskbar_bounds = self.taskbar.bounds();
         let notif_width = 200u32;
@@ -1196,7 +1196,7 @@ impl ShellState {
             notif_width,
             TASKBAR_HEIGHT,
         ));
-        
+
         // Center launcher
         let launcher_width = 400u32;
         let launcher_height = 500u32;
@@ -1211,7 +1211,7 @@ impl ShellState {
     /// Tick the shell state.
     pub fn tick(&mut self) {
         self.timestamp += 1;
-        
+
         // Update notifications (expire old ones)
         self.notifications.update(self.timestamp);
     }
@@ -1339,11 +1339,11 @@ mod tests {
     #[test]
     fn test_taskbar_add_remove() {
         let mut taskbar = Taskbar::new();
-        
+
         assert!(taskbar.add_window(1, "Window 1"));
         assert!(taskbar.add_window(2, "Window 2"));
         assert_eq!(taskbar.count(), 2);
-        
+
         assert!(taskbar.remove_window(1));
         assert_eq!(taskbar.count(), 1);
     }
@@ -1359,12 +1359,12 @@ mod tests {
     #[test]
     fn test_launcher_menu() {
         let mut menu = AppLauncherMenu::new();
-        
+
         menu.register_app(LauncherAppEntry::new("app1", "App 1", AppCategory::System));
         menu.register_app(LauncherAppEntry::new("app2", "App 2", AppCategory::Utilities));
-        
+
         assert_eq!(menu.filtered_count(), 2);
-        
+
         menu.set_category(Some(AppCategory::System));
         assert_eq!(menu.filtered_count(), 1);
     }
@@ -1379,13 +1379,13 @@ mod tests {
     #[test]
     fn test_notification_queue() {
         let mut queue = NotificationQueue::new();
-        
+
         let toast = NotificationToast::new(0, "Alert", "Something happened");
         let id = queue.show(toast, 1000);
-        
+
         assert!(id > 0);
         assert_eq!(queue.visible_count(), 1);
-        
+
         queue.dismiss(id);
         assert_eq!(queue.visible_count(), 0);
     }
@@ -1393,15 +1393,15 @@ mod tests {
     #[test]
     fn test_notification_expiry() {
         let mut queue = NotificationQueue::new();
-        
+
         let mut toast = NotificationToast::new(0, "Alert", "Expires soon");
         toast.timeout_ms = 1000;
         queue.show(toast, 1000);
-        
+
         // Not expired yet
         queue.update(1500);
         assert_eq!(queue.visible_count(), 1);
-        
+
         // Now expired
         queue.update(2001);
         assert_eq!(queue.visible_count(), 0);
@@ -1416,11 +1416,11 @@ mod tests {
     #[test]
     fn test_notification_area() {
         let mut area = NotificationArea::new();
-        
+
         assert!(area.add_icon(TrayIcon::new(1, 0, "Icon 1")));
         assert!(area.add_icon(TrayIcon::new(2, 1, "Icon 2")));
         assert_eq!(area.icon_count(), 2);
-        
+
         area.set_badge(1, 5);
         assert!(area.remove_icon(1));
         assert_eq!(area.icon_count(), 1);
@@ -1445,7 +1445,7 @@ mod tests {
     fn test_shell_state_init() {
         let mut state = ShellState::new();
         state.init(1920, 1080);
-        
+
         assert!(state.taskbar.is_visible());
         assert!(!state.launcher.is_open());
         assert!(!state.is_locked());
