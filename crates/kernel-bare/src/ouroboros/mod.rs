@@ -127,6 +127,7 @@ pub mod web_dashboard_backend;  // Phase 34, Task 6
 pub mod evolution_integration;  // Phase 35, Task 1
 pub mod performance_metrics;    // Phase 35, Task 2
 pub mod impact_analysis;        // Phase 35, Task 3
+pub mod metrics_storage;        // Phase 35, Task 4
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -266,6 +267,14 @@ pub use impact_analysis::{
     MutationImpact, VarianceAccumulator,
     SignificanceTest,
     ImpactAnalyzer,
+};
+
+pub use metrics_storage::{
+    MetricEntry, CompressedMetric,
+    RetentionPolicy,
+    MetricsRingBuffer, CompressedStorage,
+    TimeSeriesQuery,
+    MetricsStorage,
 };
 
 // ============================================================================
