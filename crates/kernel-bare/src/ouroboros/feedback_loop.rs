@@ -428,7 +428,7 @@ impl FeedbackLoop {
     }
 
     /// Get top patterns by reliability
-    pub fn top_patterns(&self, n: usize) -> [Option<LearningPattern>; 50] {
+    pub fn top_patterns(&self, _n: usize) -> [Option<LearningPattern>; 50] {
         let mut patterns = self.learning_patterns;
 
         // Simple bubble sort by reliability score

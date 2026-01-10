@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/audio_engine.rs
 // Lines: 700+ | Tests: 13 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_AUDIO_STREAMS: usize = 16;
 const AUDIO_BUFFER_SIZE: usize = 8192;

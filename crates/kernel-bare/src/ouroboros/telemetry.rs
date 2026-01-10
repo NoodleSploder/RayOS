@@ -5,7 +5,6 @@
 //!
 //! Phase 32, Task 1
 
-use core::mem;
 
 /// Evolution marker types emitted during self-optimization
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

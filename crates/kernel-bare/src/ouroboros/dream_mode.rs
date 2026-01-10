@@ -5,7 +5,6 @@
 //!
 //! Phase 33, Task 3
 
-use core::mem;
 
 /// Dream session mutation approval mode
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

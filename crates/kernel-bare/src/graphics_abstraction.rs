@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/graphics_abstraction.rs
 // Lines: 700+ | Tests: 18 unit + 4 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_SHADERS: usize = 128;
 const MAX_PIPELINES: usize = 64;

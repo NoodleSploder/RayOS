@@ -7,10 +7,10 @@
 
 #![allow(dead_code)]
 
-use crate::{serial_write_bytes, serial_write_str, serial_write_hex_u64};
+use crate::{serial_write_str, serial_write_hex_u64};
 use core::cell::UnsafeCell;
 use core::hint;
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 const MAX_RAYAPPS: usize = 4;
 const RAYAPP_EVENT_QUEUE_SIZE: usize = 64;
@@ -170,7 +170,7 @@ impl InterAppMessage {
 
 /// Event queue entry
 #[derive(Copy, Clone)]
-enum QueuedEvent {
+pub(crate) enum QueuedEvent {
     Input(InputEvent),
     Window(WindowEventType),
     App(AppEventType),
@@ -197,7 +197,7 @@ impl AppEventQueue {
         }
     }
 
-    fn lock(&self) -> EventQueueGuard {
+    fn lock(&self) -> EventQueueGuard<'_> {
         while self
             .lock_flag
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -209,7 +209,7 @@ impl AppEventQueue {
     }
 
     pub fn push_input(&self, event: InputEvent) -> bool {
-        let mut guard = self.lock();
+        let _guard = self.lock();
         unsafe {
             let count_ptr = self.count.get();
             if *count_ptr >= RAYAPP_EVENT_QUEUE_SIZE as u8 {
@@ -226,7 +226,7 @@ impl AppEventQueue {
     }
 
     pub fn push_message(&self, msg: InterAppMessage) -> bool {
-        let mut guard = self.lock();
+        let _guard = self.lock();
         unsafe {
             let count_ptr = self.count.get();
             if *count_ptr >= RAYAPP_EVENT_QUEUE_SIZE as u8 {
@@ -243,7 +243,7 @@ impl AppEventQueue {
     }
 
     pub fn push_window_event(&self, event: WindowEventType) -> bool {
-        let mut guard = self.lock();
+        let _guard = self.lock();
         unsafe {
             let count_ptr = self.count.get();
             if *count_ptr >= RAYAPP_EVENT_QUEUE_SIZE as u8 {
@@ -260,7 +260,7 @@ impl AppEventQueue {
     }
 
     pub fn pop(&self) -> Option<QueuedEvent> {
-        let mut guard = self.lock();
+        let _guard = self.lock();
         unsafe {
             let count_ptr = self.count.get();
             if *count_ptr == 0 {
@@ -283,7 +283,7 @@ impl AppEventQueue {
     }
 
     pub fn clear(&self) {
-        let mut guard = self.lock();
+        let _guard = self.lock();
         unsafe {
             *self.head.get() = 0;
             *self.count.get() = 0;
@@ -328,7 +328,7 @@ impl EventRouter {
         }
     }
 
-    fn lock(&self) -> RouterGuard {
+    fn lock(&self) -> RouterGuard<'_> {
         while self
             .lock_flag
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)

@@ -2,7 +2,6 @@
 // Implements xdg-shell for window management
 // Provides XDG WM Base, Surface, Toplevel, Popup, and Server Decorations
 
-use core::fmt::Write;
 
 // Shell object limits
 const MAX_XDG_SURFACES: usize = 32;
@@ -306,7 +305,7 @@ impl XdgToplevel {
         Ok(())
     }
 
-    pub fn request_resize(&mut self, edges: u32) -> Result<(), &'static str> {
+    pub fn request_resize(&mut self, _edges: u32) -> Result<(), &'static str> {
         self.state_flags |= WINDOW_STATE_RESIZING;
         Ok(())
     }
@@ -584,7 +583,7 @@ impl XdgWmBase {
         Ok(decoration_id)
     }
 
-    pub fn ping(&mut self, client_id: u32) -> u32 {
+    pub fn ping(&mut self, _client_id: u32) -> u32 {
         let serial = self.ping_serial;
         self.ping_serial += 1;
         serial
@@ -647,7 +646,7 @@ impl XdgWmBase {
 struct Logger;
 
 impl core::fmt::Write for Logger {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+    fn write_str(&mut self, _s: &str) -> core::fmt::Result {
         // In a real implementation, this would write to kernel log
         Ok(())
     }

@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/content_streaming.rs
 // Lines: 700+ | Tests: 13 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_SEGMENTS: usize = 64;
 const MAX_PLAYLIST_ENTRIES: usize = 32;

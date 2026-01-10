@@ -1,9 +1,3 @@
-/// Interrupt Coalescing & Latency Optimization
-///
-/// Reduces interrupt overhead through intelligent coalescing and batching
-/// Enforces per-task latency SLAs
-
-use core::cmp::min;
 
 const MAX_INTERRUPT_SOURCES: usize = 64;
 const MAX_BATCHED_INTERRUPTS: usize = 256;

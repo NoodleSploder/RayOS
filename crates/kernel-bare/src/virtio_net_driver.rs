@@ -2,7 +2,7 @@
 // Connects socket API to VirtIO network device for packet transmission/reception
 // File: crates/kernel-bare/src/virtio_net_driver.rs
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ============================================================================
 // CONSTANTS

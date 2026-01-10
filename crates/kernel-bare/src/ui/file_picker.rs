@@ -959,7 +959,7 @@ impl FilePicker {
         // Extract info first to avoid borrow conflicts
         let is_dir = self.view.selected_entry().map(|e| e.entry_type.is_dir()).unwrap_or(false);
         let selected_idx = self.view.selected_index.unwrap_or(0);
-        
+
         if is_dir {
             // Navigate into directory
             // Copy the name into a local buffer first (no_std friendly)
@@ -1045,7 +1045,7 @@ impl FilePicker {
                         selected_count += 1;
                     }
                 }
-                
+
                 // Now add paths for each selected entry
                 for i in 0..selected_count {
                     let idx = selected_indices[i];

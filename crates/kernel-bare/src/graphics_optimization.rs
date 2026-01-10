@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/graphics_optimization.rs
 // Lines: 680+ | Tests: 14 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_FRAME_SAMPLES: usize = 256;
 const MAX_SHADER_METRICS: usize = 128;

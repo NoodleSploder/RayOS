@@ -113,7 +113,7 @@ impl RecoveryEntry {
     }
 
     /// Check if this recovery entry matches a boot entry
-    pub fn matches(&self, entry: &BootEntry) -> bool {
+    pub fn matches(&self, _entry: &BootEntry) -> bool {
         self.kernel_version > 0 && self.is_valid
     }
 }
@@ -375,7 +375,7 @@ impl BootLoader {
 
     /// Load kernel from partition
     pub fn load(&self) -> Result<u64, &'static str> {
-        if let Some(entry) = self.boot_entry {
+        if let Some(_entry) = self.boot_entry {
             // In production, this would read the kernel from the partition
             // For now, just return the load address
             Ok(self.load_address)

@@ -217,7 +217,7 @@ impl Recommendation {
         if self.effort == 0 {
             return 0;
         }
-        ((self.estimated_improvement as u32 * 100) / self.effort as u32)
+        (self.estimated_improvement as u32 * 100) / self.effort as u32
     }
 }
 

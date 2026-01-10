@@ -1,7 +1,6 @@
 // Phase 11 Task 4: Performance Optimization
 // Fast-path optimizations for <1µs latency and sub-100ns policy checks
 
-use core::fmt;
 
 /// Hash table for firewall rules (O(1) lookup)
 pub struct FirewallHashTable {

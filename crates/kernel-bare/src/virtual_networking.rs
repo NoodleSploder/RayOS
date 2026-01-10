@@ -1,9 +1,3 @@
-/// Virtual Networking
-///
-/// Manages virtual networks, bridges, and inter-VM communication.
-/// Supports multi-network isolation, VLAN support, QoS, and network packet monitoring.
-
-use core::cmp::min;
 
 const MAX_NETWORKS: usize = 8;
 const MAX_INTERFACES_PER_BRIDGE: usize = 16;
@@ -300,7 +294,7 @@ impl VirtualNetworkManager {
                 let bridge_id = self.bridge_id_counter;
                 self.bridge_id_counter += 1;
 
-                let mut bridge = NetworkBridge::new(bridge_id);
+                let bridge = NetworkBridge::new(bridge_id);
                 let idx = (network_id as usize) - 1;
                 if idx < MAX_NETWORKS {
                     if let Some(mut net) = self.networks[idx] {
@@ -430,6 +424,7 @@ impl VirtualNetworkManager {
     pub fn enable_vlan(&mut self, network_id: u32) -> bool {
         let idx = (network_id as usize) - 1;
         if idx < MAX_NETWORKS {
+            #[allow(unused_assignments)]
             if let Some(mut net) = self.networks[idx] {
                 net.vlan_count += 1;
                 if net.vlan_count > MAX_VLANS as u8 {

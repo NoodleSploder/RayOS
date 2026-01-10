@@ -3,7 +3,6 @@
 //! Multi-constraint resource allocation with intelligent bin packing.
 //! Supports 512 containers across placement groups with live migration.
 
-#![no_std]
 
 /// Container identifier
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

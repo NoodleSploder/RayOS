@@ -2,9 +2,7 @@
 //!
 //! Implement fault tolerance patterns for service calls.
 
-#![no_std]
 
-use core::cmp;
 
 /// Circuit breaker state
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,7 +173,7 @@ impl ResilienceManager {
     }
 
     /// Register a bulkhead for a service
-    pub fn register_bulkhead(&mut self, service_id: u32, max_concurrent: u16) -> Option<u32> {
+    pub fn register_bulkhead(&mut self, service_id: u32, _max_concurrent: u16) -> Option<u32> {
         if (self.bulkhead_count as usize) >= 64 {
             return None;
         }
@@ -256,7 +254,7 @@ impl ResilienceManager {
     }
 
     /// Record retry
-    pub fn record_retry(&mut self, service_id: u32) -> bool {
+    pub fn record_retry(&mut self, _service_id: u32) -> bool {
         self.retried_calls += 1;
         true
     }

@@ -5,7 +5,6 @@
 //!
 //! Phase 32, Task 6
 
-use core::mem;
 
 /// Mutation batch identifier
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]

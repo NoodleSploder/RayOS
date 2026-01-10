@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/dns_discovery.rs
 // Lines: 700+ | Tests: 13 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_DNS_CACHE_ENTRIES: usize = 256;
 const MAX_SERVICES: usize = 64;

@@ -94,6 +94,10 @@ ui_shell = []
 # Serial debug output for various subsystems.
 serial_debug = []
 
+# Debug markers for window/surface lifecycle.
+window_markers = []
+surface_markers = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"

@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/hdr_color_management.rs
 // Lines: 750+ | Tests: 15 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_COLORSPACES: usize = 32;
 const MAX_HDR_SURFACES: usize = 128;

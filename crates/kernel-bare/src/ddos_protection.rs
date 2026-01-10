@@ -2,7 +2,6 @@
 //!
 //! Rate limiting, SYN flood mitigation, anomaly detection, and traffic policing.
 
-#![no_std]
 
 use core::cmp;
 
@@ -142,7 +141,7 @@ impl DDoSProtection {
     /// Create new DDoS protection
     pub fn new() -> Self {
         // Initialize limiters array - can't use [None; 128] because RateLimiter doesn't impl Copy
-        let mut limiters: [Option<RateLimiter>; 128] = [
+        let limiters: [Option<RateLimiter>; 128] = [
             None, None, None, None, None, None, None, None,
             None, None, None, None, None, None, None, None,
             None, None, None, None, None, None, None, None,

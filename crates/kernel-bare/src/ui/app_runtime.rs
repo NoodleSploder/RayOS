@@ -1035,7 +1035,7 @@ impl AppLauncher {
         let should_suspend = self.registry.get(app_id)
             .map(|app| app.state == AppState::Running)
             .unwrap_or(false);
-        
+
         if should_suspend {
             self.fire_hooks(app_id, LifecycleHookType::PreSuspend);
             if let Some(app) = self.registry.get_mut(app_id) {
@@ -1053,7 +1053,7 @@ impl AppLauncher {
         let should_resume = self.registry.get(app_id)
             .map(|app| app.state == AppState::Suspended)
             .unwrap_or(false);
-        
+
         if should_resume {
             if let Some(app) = self.registry.get_mut(app_id) {
                 app.state = AppState::Running;
@@ -1097,7 +1097,7 @@ impl AppLauncher {
 
         // Schedule apps until budget exhausted
         while !self.scheduler.budget_exhausted() {
-            if let Some(app_id) = self.scheduler.next_app(&mut self.registry) {
+            if let Some(_app_id) = self.scheduler.next_app(&mut self.registry) {
                 // In a real implementation, this would call the app's tick function
                 // and measure actual CPU time used
                 self.scheduler.record_time(&mut self.registry, 100); // Placeholder

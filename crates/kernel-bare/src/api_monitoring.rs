@@ -2,7 +2,6 @@
 //!
 //! Collect and track API performance metrics.
 
-#![no_std]
 
 use core::cmp;
 

@@ -2,8 +2,6 @@
 // System services, service manager, process initialization
 // PID 1 (init process) - System Services & Dependencies
 
-use core::fmt::Write;
-
 // ===== Service System Constants =====
 
 const MAX_SERVICES: usize = 32;
@@ -431,7 +429,7 @@ impl InitProcess {
 pub struct InitDisplay;
 
 impl InitDisplay {
-    pub fn show_services(manager: &ServiceManager) -> &'static str {
+    pub fn show_services(_manager: &ServiceManager) -> &'static str {
         // This would be implemented with a write! macro to serial output
         // Placeholder for demonstration
         "Init System: Showing services"
@@ -441,7 +439,7 @@ impl InitDisplay {
         "Init System: Showing runlevels"
     }
 
-    pub fn show_status(init: &InitProcess) -> &'static str {
+    pub fn show_status(_init: &InitProcess) -> &'static str {
         "Init System: Showing status"
     }
 }

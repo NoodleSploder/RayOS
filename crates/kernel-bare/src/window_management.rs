@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/window_management.rs
 // Lines: 800+ | Tests: 14 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_WINDOWS: usize = 256;
 const MAX_WORKSPACES: usize = 10;
@@ -336,12 +335,15 @@ impl WindowManager {
         let (mx, my, mw, mh) = self.layout.calculate_master_area(screen_width, screen_height);
         let (sx, sy, sw, sh) = self.layout.calculate_stack_area(screen_width, screen_height);
 
+        // Count pass for stack layout calculation
+        #[allow(unused_variables, unused_assignments)]
         let mut master_count = 0;
+        #[allow(unused_variables, unused_assignments)]
         let mut stack_count = 0;
 
         // Count windows
         for i in 0..self.window_count {
-            if let Some(window) = self.windows[i] {
+            if let Some(_window) = self.windows[i] {
                 if master_count < self.layout.master_count {
                     master_count += 1;
                 } else {
@@ -350,8 +352,10 @@ impl WindowManager {
             }
         }
 
+        // Save stack_count for layout, reset counters for placement
+        let total_stack = stack_count;
         master_count = 0;
-        stack_count = 0;
+        let mut current_stack_idx = 0usize;
 
         // Arrange windows
         for i in 0..self.window_count {
@@ -363,14 +367,15 @@ impl WindowManager {
                     window.height = mh.saturating_sub(2 * self.layout.gap_size);
                     master_count += 1;
                 } else {
-                    if stack_count > 0 {
+                    if total_stack > 0 {
+                        let stack_item_height = sh / (total_stack as u32);
                         window.x = (sx + self.layout.gap_size) as i32;
-                        window.y = (sy + self.layout.gap_size) as i32;
+                        window.y = (sy + self.layout.gap_size + current_stack_idx as u32 * stack_item_height) as i32;
                         window.width = sw.saturating_sub(2 * self.layout.gap_size);
-                        window.height = (sh / (stack_count as u32 + 1))
+                        window.height = stack_item_height
                             .saturating_sub(2 * self.layout.gap_size);
                     }
-                    stack_count += 1;
+                    current_stack_idx += 1;
                 }
             }
         }

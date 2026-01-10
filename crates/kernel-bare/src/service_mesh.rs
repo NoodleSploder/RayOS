@@ -3,7 +3,6 @@
 //! Implements service discovery, load balancing, and traffic management.
 //! Supports 256 services with multi-region federation and health checking.
 
-#![no_std]
 
 /// Service instance identifier
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

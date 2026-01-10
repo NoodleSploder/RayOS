@@ -19,7 +19,6 @@
 //! - `RAYOS_OUROBOROS:DREAM_ACTIVE` - Dream scheduler running mutations
 //! - `RAYOS_OUROBOROS:DREAM_END` - Dream session completed
 
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use crate::ouroboros::{PowerState, EvolutionResult};
 
 // ============================================================================

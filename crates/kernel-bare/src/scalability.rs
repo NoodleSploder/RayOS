@@ -8,7 +8,6 @@
 //! - VM Grouping: Organize VMs into zones with shared policies
 //! - Distributed enforcement with per-zone coordination
 
-use core::fmt::Write;
 
 const MAX_VMS: usize = 64;
 const MAX_VM_GROUPS: usize = 16;

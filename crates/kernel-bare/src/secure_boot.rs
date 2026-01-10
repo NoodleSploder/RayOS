@@ -3,7 +3,6 @@
 //! Platform integrity measurement, attestation, and secure boot verification.
 //! Supports PCR (Platform Configuration Register) chains and TPM 2.0 operations.
 
-#![no_std]
 
 /// Platform Configuration Register (PCR)
 #[derive(Clone, Copy)]
@@ -232,7 +231,7 @@ impl TPM2 {
     }
 
     /// Seal data to PCR values
-    pub fn seal_to_pcrs(&mut self, data: &[u8], pcr_selection: &[u8; 3]) -> bool {
+    pub fn seal_to_pcrs(&mut self, data: &[u8], _pcr_selection: &[u8; 3]) -> bool {
         if data.len() > 512 {
             return false;
         }

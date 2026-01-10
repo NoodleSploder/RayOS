@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/integration_harness.rs
 // Lines: 850 | Tests: 15 unit + 10 integration scenarios | Markers: 4
 
-use core::fmt;
 
 const MAX_TEST_SCENARIOS: usize = 20;
 const MAX_MILESTONE_CHECKS: usize = 50;
@@ -275,7 +274,7 @@ pub struct IntegrationTestHarness {
 
 impl IntegrationTestHarness {
     pub fn new() -> Self {
-        let mut results: [Option<IntegrationTestResult>; MAX_TEST_SCENARIOS] = Default::default();
+        let results: [Option<IntegrationTestResult>; MAX_TEST_SCENARIOS] = Default::default();
         IntegrationTestHarness {
             results,
             result_count: 0,

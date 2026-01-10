@@ -2,7 +2,6 @@
 //!
 //! Implement fair rate limiting with multiple algorithms.
 
-#![no_std]
 
 use core::cmp;
 

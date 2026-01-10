@@ -3,9 +3,7 @@
 //! Secure key storage, lifecycle management, rotation, and access control.
 //! Supports 256 keys with encryption at rest and audit trails.
 
-#![no_std]
 
-use core::cmp;
 
 /// Key identifier
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

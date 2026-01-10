@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/display_drivers.rs
 // Lines: 800+ | Tests: 14 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_CONNECTORS: usize = 4;
 const MAX_MODES: usize = 32;

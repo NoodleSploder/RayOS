@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/audio_server.rs
 // Lines: 700+ | Tests: 13 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_AUDIO_CLIENTS: usize = 32;
 const PLAYBACK_QUEUE_SIZE: usize = 256;

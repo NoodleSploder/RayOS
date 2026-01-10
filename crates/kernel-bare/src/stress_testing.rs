@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/stress_testing.rs
 // Lines: 850 | Tests: 15 unit + stress scenarios | Markers: 5
 
-use core::fmt;
 
 const MAX_LOAD_SAMPLES: usize = 1000;
 const MAX_STRESS_TESTS: usize = 10;

@@ -1,7 +1,6 @@
 // ===== RayOS System Update & Atomic Deployment (Phase 9B Task 5) =====
 // A/B partition updates, compatibility checking, verification, rollback
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 // ===== Constants =====
 

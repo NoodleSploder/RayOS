@@ -5,7 +5,6 @@
 //!
 //! Phase 33, Task 1
 
-use core::mem;
 
 /// Evolution budget for a dream session
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -307,7 +306,7 @@ impl KernelOuroborosIntegration {
         self.status = IntegrationStatus::Ready;
         self.idle_accumulator_ms = 0;
 
-        if let Some(session) = self.current_session {
+        if let Some(_session) = self.current_session {
             // Log session stats
             // success_rate, cycles_per_minute, elapsed_time_ms
             // Would emit: RAYOS_OUROBOROS:DREAM_ENDED

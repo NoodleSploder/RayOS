@@ -686,7 +686,7 @@ pub fn show_system_log() -> Option<u32> {
 
     // Create a new System Log window
     // Position it at bottom-left, wide enough for log entries
-    let (screen_w, screen_h) = renderer::get_dimensions();
+    let (_screen_w, screen_h) = renderer::get_dimensions();
     let win_w = 550;
     let win_h = 350;
     let win_x = 40;

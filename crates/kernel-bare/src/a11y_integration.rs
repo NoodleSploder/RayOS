@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/a11y_integration.rs
 // Lines: 700+ | Tests: 13 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_WINDOW_A11Y_MAPPINGS: usize = 256;
 const MAX_FEEDBACK_QUEUE: usize = 64;
@@ -396,7 +395,7 @@ impl AccessibilityEventRouter {
         }
     }
 
-    pub fn route_event(&mut self, event_type: InputAccessibilityEvent) -> bool {
+    pub fn route_event(&mut self, _event_type: InputAccessibilityEvent) -> bool {
         self.events_processed += 1;
         true
     }

@@ -301,7 +301,7 @@ impl AutoTuner {
         true
     }
 
-    pub fn run_benchmark(&mut self, name: &[u8]) -> BenchmarkResult {
+    pub fn run_benchmark(&mut self, _name: &[u8]) -> BenchmarkResult {
         if (self.benchmark_count as usize) >= MAX_BENCHMARKS {
             return BenchmarkResult::new();
         }

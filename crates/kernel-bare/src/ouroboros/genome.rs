@@ -21,7 +21,7 @@
 //! - `RAYOS_OUROBOROS:HOTSPOT_DETECTED` - Performance hotspot found
 
 use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
-use crate::ouroboros::{EvolutionResult, MarkerEmitter, Checkpoint, CheckpointData, Checkpointable};
+use crate::ouroboros::{EvolutionResult, Checkpoint, CheckpointData, Checkpointable};
 
 // ============================================================================
 // CONSTANTS

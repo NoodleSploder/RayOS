@@ -2,7 +2,6 @@
 // Implements wl_data_device, wl_data_source, wl_data_offer, wl_data_device_manager
 // Provides drag-drop operations and clipboard management with RayApp integration
 
-use core::fmt::Write;
 
 // Data device limits
 const MAX_DATA_SOURCES: usize = 16;
@@ -257,7 +256,7 @@ impl DataDevice {
         self.id
     }
 
-    pub fn start_drag(&mut self, source_id: u32, origin_surface: u32, icon_surface: Option<u32>) -> Result<(), &'static str> {
+    pub fn start_drag(&mut self, source_id: u32, origin_surface: u32, _icon_surface: Option<u32>) -> Result<(), &'static str> {
         self.current_dnd_source = Some(source_id);
 
         unsafe {
@@ -387,7 +386,7 @@ impl DataDeviceManager {
         Ok(source_id)
     }
 
-    pub fn get_data_device(&mut self, seat_id: u32) -> Result<u32, &'static str> {
+    pub fn get_data_device(&mut self, _seat_id: u32) -> Result<u32, &'static str> {
         if self.device_count >= MAX_DATA_DEVICES {
             return Err("device limit exceeded");
         }
@@ -486,7 +485,7 @@ impl DataDeviceManager {
 struct Logger;
 
 impl core::fmt::Write for Logger {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+    fn write_str(&mut self, _s: &str) -> core::fmt::Result {
         // In a real implementation, this would write to kernel log
         Ok(())
     }

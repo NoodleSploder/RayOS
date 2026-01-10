@@ -3,7 +3,6 @@
 //! Fine-grained access control, role-based security model, and capability-based permissions.
 //! 64 capabilities organized in 16 roles with mandatory access control.
 
-#![no_std]
 
 /// Security capability
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -328,7 +327,7 @@ impl AccessControlManager {
     }
 
     /// Check access permission
-    pub fn check_access(&mut self, process_id: u32, resource_id: u32, cap: Capability) -> bool {
+    pub fn check_access(&mut self, process_id: u32, _resource_id: u32, cap: Capability) -> bool {
         // Find process context
         for i in 0..self.context_count as usize {
             if self.contexts[i].process_id == process_id {

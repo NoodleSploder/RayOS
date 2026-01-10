@@ -2,7 +2,6 @@
 //!
 //! Comprehensive metrics collection for governance monitoring.
 
-#![no_std]
 
 use core::cmp;
 

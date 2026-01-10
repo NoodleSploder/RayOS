@@ -2,9 +2,7 @@
 //!
 //! JWT token validation, role-based access control, and API key management.
 
-#![no_std]
 
-use core::cmp;
 
 /// Token type
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -3,9 +3,7 @@
 //! PBFT-inspired consensus tolerating f Byzantine nodes in N-node cluster.
 //! Supports N >= 3f+1 with pre-prepare, prepare, commit phases.
 
-#![no_std]
 
-use core::cmp;
 
 /// View number for consensus round (leader change epoch)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

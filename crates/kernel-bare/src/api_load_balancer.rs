@@ -2,9 +2,7 @@
 //!
 //! Distribute requests across service instances with health checking and failover.
 
-#![no_std]
 
-use core::cmp;
 
 /// Load balancing strategy
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

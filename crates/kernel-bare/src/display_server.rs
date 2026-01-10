@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/display_server.rs
 // Lines: 700+ | Tests: 13 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_CLIENTS: usize = 32;
 const MAX_SURFACES: usize = 512;

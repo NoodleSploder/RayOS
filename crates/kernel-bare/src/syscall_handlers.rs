@@ -5,8 +5,7 @@
 use crate::syscalls_extended::{
     errno, fd_flags, seek_whence, mode_bits, signals,
     FileStat, FileDescriptor, FdType, ResourceUsage, ProcessTimes, Utsname,
-    get_fd_table, get_signal_state, get_mmap_table, sysconf_value,
-    prot_flags, map_flags, SIG_DFL, SIG_IGN,
+    get_fd_table, get_signal_state, get_mmap_table, sysconf_value, map_flags,
 };
 
 use core::sync::atomic::{AtomicU64, Ordering};

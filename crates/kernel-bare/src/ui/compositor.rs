@@ -6,7 +6,7 @@
 use super::renderer::{
     self, fill_rect, fill_rect_alpha, draw_rect, draw_text,
     COLOR_BACKGROUND, COLOR_WINDOW_BG, COLOR_TITLE_BAR, COLOR_TITLE_FOCUSED,
-    COLOR_TEXT, COLOR_BORDER, COLOR_CLOSE_HOVER, COLOR_ACCENT, COLOR_TEXT_DIM,
+    COLOR_TEXT, COLOR_BORDER, COLOR_CLOSE_HOVER, COLOR_ACCENT,
     FONT_HEIGHT,
 };
 use super::window_manager::{self, Window, WindowType, WINDOW_ID_NONE};
@@ -292,7 +292,7 @@ impl Compositor {
     }
 
     /// Render a panel with animation properties.
-    fn render_panel_alpha(&self, win: &Window, props: &AnimatedProperties) {
+    fn render_panel_alpha(&self, _win: &Window, props: &AnimatedProperties) {
         let alpha = props.opacity;
         fill_rect_alpha(props.x, props.y, props.width, props.height, COLOR_TITLE_BAR, alpha);
 
@@ -304,7 +304,7 @@ impl Compositor {
     }
 
     /// Render a popup with animation properties.
-    fn render_popup_alpha(&self, win: &Window, props: &AnimatedProperties) {
+    fn render_popup_alpha(&self, _win: &Window, props: &AnimatedProperties) {
         let alpha = props.opacity;
         fill_rect_alpha(props.x, props.y, props.width, props.height, COLOR_WINDOW_BG, alpha);
 

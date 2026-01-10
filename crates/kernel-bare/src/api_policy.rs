@@ -2,9 +2,7 @@
 //!
 //! Declarative governance rules for API access control.
 
-#![no_std]
 
-use core::cmp;
 
 /// Policy type
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

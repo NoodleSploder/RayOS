@@ -2,7 +2,6 @@
 // Advanced service management, lifecycle hooks, health monitoring
 // Extends init.rs with comprehensive service infrastructure
 
-use core::fmt::Write;
 
 // ===== Service Lifecycle Constants =====
 
@@ -451,7 +450,7 @@ impl ServiceLog {
     }
 
     pub fn latest(&self, n: usize) -> impl Iterator<Item = &LogEntry> {
-        let start = if self.count >= n {
+        let _start = if self.count >= n {
             (self.write_index + MAX_LOG_ENTRIES - n) % MAX_LOG_ENTRIES
         } else {
             0

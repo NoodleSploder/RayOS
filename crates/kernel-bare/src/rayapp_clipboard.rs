@@ -9,7 +9,7 @@
 use crate::{serial_write_bytes, serial_write_str, serial_write_hex_u64};
 use core::cell::UnsafeCell;
 use core::hint;
-use core::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // Clipboard constants
 const CLIPBOARD_SIZE: usize = 16384;  // 16 KB shared clipboard
@@ -120,7 +120,7 @@ impl ClipboardManager {
         }
     }
 
-    fn lock(&self) -> ClipboardGuard {
+    fn lock(&self) -> ClipboardGuard<'_> {
         while self
             .lock_flag
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -246,7 +246,7 @@ impl FileAccessPolicy {
         }
     }
 
-    fn lock(&self) -> FileAccessGuard {
+    fn lock(&self) -> FileAccessGuard<'_> {
         while self
             .lock_flag
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -318,7 +318,7 @@ impl FileAccessPolicy {
             return Err("permission_denied");
         }
 
-        let mut guard = self.lock();
+        let _guard = self.lock();
 
         unsafe {
             let requests_ptr = self.requests.get() as *mut FileAccessRequest;

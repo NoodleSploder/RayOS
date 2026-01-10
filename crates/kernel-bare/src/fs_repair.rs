@@ -472,7 +472,7 @@ impl LostFoundManager {
         }
     }
 
-    pub fn recover_inode(&mut self, inode: u64) -> u32 {
+    pub fn recover_inode(&mut self, _inode: u64) -> u32 {
         let entry_num = self.next_entry.fetch_add(1, Ordering::SeqCst);
         // Would create entry #entry_num pointing to inode
         self.entries_recovered += 1;

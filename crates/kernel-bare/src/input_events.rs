@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/input_events.rs
 // Lines: 850+ | Tests: 15 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_DEVICES: usize = 16;
 const MAX_KEY_CODES: usize = 256;
@@ -401,7 +400,7 @@ impl EventDispatcher {
         true
     }
 
-    pub fn route_pointer_event(&mut self, mut event: PointerEvent) -> bool {
+    pub fn route_pointer_event(&mut self, event: PointerEvent) -> bool {
         self.pointer_focus.update_position(event.x, event.y);
         self.pointer_focus.buttons = event.buttons;
         true

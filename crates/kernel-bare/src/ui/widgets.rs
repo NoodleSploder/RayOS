@@ -19,10 +19,9 @@
 //! ```
 
 use super::renderer::{
-    self, COLOR_ACCENT, COLOR_BACKGROUND, COLOR_BLACK, COLOR_BORDER, COLOR_TEXT,
-    COLOR_TEXT_DIM, COLOR_WHITE, COLOR_WINDOW_BG, FONT_HEIGHT, FONT_WIDTH,
+    self, COLOR_ACCENT, COLOR_BORDER, COLOR_TEXT, COLOR_WHITE, FONT_HEIGHT, FONT_WIDTH,
 };
-use super::font::{self, FontSize, draw_text_aa, measure_text, get_metrics};
+use super::font::{FontSize, draw_text_aa, measure_text, get_metrics};
 
 // ===== Widget Trait =====
 
@@ -385,7 +384,7 @@ impl Button {
         if !self.enabled {
             return false;
         }
-        let was_hovered = self.state == WidgetState::Hovered;
+        let _was_hovered = self.state == WidgetState::Hovered;
         let is_hovered = self.contains(x, y);
 
         if is_hovered && self.state == WidgetState::Normal {

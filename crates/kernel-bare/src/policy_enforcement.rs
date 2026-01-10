@@ -3,7 +3,7 @@
 // Enforces capability-based security at I/O boundaries
 // Validates device access against per-VM capability grants
 
-use crate::security::{Capability, SecurityPolicy, AUDIT_CAPABILITY_DENIAL, AUDIT_NETWORK_ACCESS,
+use crate::security::{Capability, SecurityPolicy, AUDIT_NETWORK_ACCESS,
                        AUDIT_DISK_ACCESS, AUDIT_GPU_ACCESS, AUDIT_INPUT_ACCESS};
 
 /// Device access request types
@@ -193,7 +193,7 @@ pub mod profiles {
 // These functions are called from device handlers to enforce policies
 
 /// Check if a virtio-gpu operation is allowed
-pub fn check_gpu_access(vm_id: u32, write: bool) -> bool {
+pub fn check_gpu_access(_vm_id: u32, _write: bool) -> bool {
     // In real implementation, would call PolicyEnforcer singleton
     // For now: always allow (audit would be logged separately)
     true

@@ -3,7 +3,6 @@
 //! AES-256, SHA-256/512, HMAC, PBKDF2 with constant-time implementations.
 //! Supports authenticated encryption and secure random number generation.
 
-#![no_std]
 
 /// 256-bit AES key
 #[derive(Clone, Copy)]

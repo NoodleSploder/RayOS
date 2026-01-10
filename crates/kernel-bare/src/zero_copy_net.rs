@@ -3,7 +3,6 @@
 //! Kernel-bypass and DPDK-style ultra-high throughput I/O.
 //! Supports 1M+ packets per second with <1μs latency.
 
-#![no_std]
 
 /// Network packet identifier
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -3,7 +3,6 @@
 //! Real-time anomaly detection, behavioral analysis, and intrusion prevention.
 //! 16 detection rules with configurable thresholds and response actions.
 
-#![no_std]
 
 /// Detection rule type
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

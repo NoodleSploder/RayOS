@@ -3,7 +3,6 @@
 //! Immutable audit trail with integrity chains, forensic analysis, and tamper detection.
 //! Supports 1024 audit entries with HMAC-based integrity verification.
 
-#![no_std]
 
 /// Audit operation type
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

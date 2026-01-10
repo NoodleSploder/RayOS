@@ -584,7 +584,7 @@ impl WindowDecorationRenderer {
     pub fn draw_window(
         fb: &mut [u32],
         fb_width: u32,
-        fb_height: u32,
+        _fb_height: u32,
         window_x: u32,
         window_y: u32,
         window_width: u32,
@@ -727,9 +727,9 @@ impl SurfaceCompositor {
     /// Composite multiple surfaces with their decorations into final framebuffer
     pub fn composite_surfaces(
         &self,
-        output_fb: &mut [u32],
-        output_width: u32,
-        output_height: u32,
+        _output_fb: &mut [u32],
+        _output_width: u32,
+        _output_height: u32,
         surface_count: u8,
     ) -> u64 {
         let frame_id = self.last_frame_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
@@ -792,7 +792,7 @@ impl ScanoutOptimizer {
     }
 
     /// Emit scanout marker for next screen update
-    pub fn emit_scanout(&self, frame_id: u64) -> u64 {
+    pub fn emit_scanout(&self, _frame_id: u64) -> u64 {
         let scanout_id = self.last_scanout_id.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
         crate::serial_write_str("RAYOS_GUI_RENDER:SCANOUT:");
         crate::serial_write_hex_u64(scanout_id);

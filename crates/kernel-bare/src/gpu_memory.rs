@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/gpu_memory.rs
 // Lines: 750+ | Tests: 16 unit + 4 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_MEMORY_BLOCKS: usize = 256;
 const MAX_ALLOCATIONS: usize = 512;

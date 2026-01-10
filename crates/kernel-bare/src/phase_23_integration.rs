@@ -2,7 +2,6 @@
 // Comprehensive integration tests for complete Wayland stack
 // Tests client lifecycle, multi-client scenarios, shell protocol, input, DND, performance
 
-use core::fmt::Write;
 
 // Test scenario constants
 const TEST_SURFACE_WIDTH: u32 = 1280;
@@ -124,7 +123,7 @@ impl MockClient {
 struct Logger;
 
 impl core::fmt::Write for Logger {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+    fn write_str(&mut self, _s: &str) -> core::fmt::Result {
         Ok(())
     }
 }

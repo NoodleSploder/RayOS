@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/advanced_compositing.rs
 // Lines: 850+ | Tests: 16 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_LAYERS: usize = 32;
 const MAX_PARTICLES: usize = 1024;

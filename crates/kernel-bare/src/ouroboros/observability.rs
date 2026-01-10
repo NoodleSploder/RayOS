@@ -5,7 +5,6 @@
 //!
 //! Phase 32, Task 4
 
-use core::mem;
 
 /// Key performance indicators for evolution cycles
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

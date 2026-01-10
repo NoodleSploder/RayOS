@@ -8,7 +8,6 @@
 //! - DynamicPolicyEnforcer for runtime policy changes
 //! - Policy revocation and hotspot detection
 
-use core::fmt::Write;
 
 const MAX_TEMP_CAPABILITIES: usize = 256;
 const MAX_DELEGATIONS: usize = 128;

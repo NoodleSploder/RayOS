@@ -142,7 +142,7 @@ impl PerformanceMonitor {
         }
     }
 
-    pub fn record_time(&mut self, label: &str, elapsed_ms: u64) {
+    pub fn record_time(&mut self, _label: &str, elapsed_ms: u64) {
         if self.sample_count < self.max_samples {
             self.samples[self.sample_count] = elapsed_ms;
             self.sample_count += 1;

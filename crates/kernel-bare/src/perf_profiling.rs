@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/perf_profiling.rs
 // Lines: 850 | Tests: 18 unit + scenario tests | Markers: 5
 
-use core::fmt;
 
 const MAX_LATENCY_SAMPLES: usize = 10000;
 const HISTOGRAM_BUCKETS: usize = 100;

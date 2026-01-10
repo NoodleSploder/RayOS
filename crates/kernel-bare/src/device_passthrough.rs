@@ -1,7 +1,7 @@
 // ===== RayOS Device Pass-through & IOMMU Integration (Phase 9B Task 4) =====
 // PCI device pass-through, VFIO, IOMMU management, interrupt remapping
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 // ===== Constants =====
 

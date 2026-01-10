@@ -19,7 +19,6 @@
 //! - `RAYOS_OUROBOROS:VERIFIED` - Patch verification passed
 //! - `RAYOS_OUROBOROS:ROLLED_BACK` - Patch rollback executed
 
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use crate::ouroboros::{EvolutionResult, Checkpoint, CheckpointData, Checkpointable};
 
 // ============================================================================
@@ -581,7 +580,7 @@ impl LivePatcher {
     }
 
     /// Rollback a patch
-    pub fn rollback_patch(&mut self, bundle_id: u64, reason: RollbackReason) -> Result<(), EvolutionResult> {
+    pub fn rollback_patch(&mut self, _bundle_id: u64, _reason: RollbackReason) -> Result<(), EvolutionResult> {
         if !self.enabled {
             return Err(EvolutionResult::InternalError);
         }

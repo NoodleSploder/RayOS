@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/accessibility.rs
 // Lines: 700+ | Tests: 13 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_A11Y_OBJECTS: usize = 64;
 const MAX_SHORTCUTS: usize = 256;

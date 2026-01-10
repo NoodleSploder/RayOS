@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/http_protocol.rs
 // Lines: 700+ | Tests: 13 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_HEADER_COUNT: usize = 32;
 const MAX_HEADERS_SIZE: usize = 4096;

@@ -37,7 +37,7 @@
 
 use super::renderer::{draw_text, fill_rect, draw_rect};
 use super::window_manager::WindowId;
-use super::widgets::{Button, Label, TextInput, Rect};
+use super::widgets::{Button, Label, TextInput};
 
 // ============================================================================
 // App Descriptor

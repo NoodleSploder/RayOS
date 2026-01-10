@@ -5,7 +5,6 @@
 //!
 //! Phase 33, Task 2
 
-use core::mem;
 
 /// Integration test scenario types
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

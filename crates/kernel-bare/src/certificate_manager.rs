@@ -2,7 +2,6 @@
 //!
 //! X.509 certificate handling, CA operations, chain validation, and CRL support.
 
-#![no_std]
 
 /// Certificate format type
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,7 +255,7 @@ impl CertificateAuthority {
             return None;
         }
 
-        let mut cert = Certificate {
+        let cert = Certificate {
             serial_number: serial,
             issuer: self.ca_cert.subject,
             subject: req.subject,

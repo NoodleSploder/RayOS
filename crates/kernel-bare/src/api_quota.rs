@@ -2,7 +2,6 @@
 //!
 //! Track and enforce tenant quotas across multiple dimensions.
 
-#![no_std]
 
 use core::cmp;
 

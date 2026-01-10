@@ -2,7 +2,6 @@
 // Implements wl_output, coordinate transformation, HiDPI support
 // Provides per-surface scaling and output configuration
 
-use core::fmt::Write;
 
 // Output limits
 const MAX_OUTPUTS: usize = 4;
@@ -383,7 +382,7 @@ impl OutputManager {
 struct Logger;
 
 impl core::fmt::Write for Logger {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+    fn write_str(&mut self, _s: &str) -> core::fmt::Result {
         Ok(())
     }
 }

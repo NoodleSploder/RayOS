@@ -8,7 +8,6 @@
 //! - Lifecycle event hooks and notifications
 //! - 16 concurrent VM state tracking
 
-use core::fmt::Write;
 
 const MAX_VMS: usize = 16;
 const MAX_CHECKPOINTS: usize = 256;

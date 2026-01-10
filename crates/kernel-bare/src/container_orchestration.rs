@@ -1,9 +1,3 @@
-/// Container Orchestration
-///
-/// Manages containerized workloads with pod-based grouping, scheduling,
-/// and lifecycle management with health checks and restart policies.
-
-use core::cmp::min;
 
 const MAX_CONTAINERS: usize = 128;
 const MAX_PODS: usize = 32;
@@ -331,7 +325,7 @@ impl ContainerOrchestrator {
         false
     }
 
-    pub fn create_health_check(&mut self, container_id: u32) -> u32 {
+    pub fn create_health_check(&mut self, _container_id: u32) -> u32 {
         for i in 0..MAX_HEALTH_CHECKS {
             if self.health_checks[i].is_none() {
                 let check_id = self.health_check_counter;

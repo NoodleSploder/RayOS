@@ -1190,12 +1190,9 @@ impl InputRouter {
         }
 
         // Route to grab owner or focused window
-        let target = if let owner = self.keyboard_grab_owner() {
-            if owner != WINDOW_ID_NONE {
-                InputTarget::Window(owner)
-            } else {
-                InputTarget::Window(self.focused_window())
-            }
+        let owner = self.keyboard_grab_owner();
+        let target = if owner != WINDOW_ID_NONE {
+            InputTarget::Window(owner)
         } else {
             InputTarget::Window(self.focused_window())
         };

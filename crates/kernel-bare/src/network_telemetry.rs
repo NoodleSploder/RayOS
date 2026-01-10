@@ -2,7 +2,6 @@
 //!
 //! Real-time network statistics, flow monitoring, latency tracking, and metrics collection.
 
-#![no_std]
 
 use core::cmp;
 

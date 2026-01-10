@@ -6,7 +6,7 @@
 //! - Atomic updates with rollback support
 //! - Update verification
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Maximum update source URL length
 pub const MAX_URL_LEN: usize = 256;

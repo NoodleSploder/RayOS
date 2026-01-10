@@ -2,7 +2,7 @@
 // Complete installation wizard, filesystem formatting, and configuration
 // File: crates/kernel-bare/src/installer_workflow.rs
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ============================================================================
 // INSTALLATION STATE MACHINE

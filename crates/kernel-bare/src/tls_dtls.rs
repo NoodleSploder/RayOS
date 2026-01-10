@@ -3,7 +3,6 @@
 //! TLS 1.3 record layer with DTLS 1.3 support for UDP.
 //! Includes handshake state machine and cipher suite management.
 
-#![no_std]
 
 /// Cipher suite type
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

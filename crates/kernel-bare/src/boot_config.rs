@@ -2,7 +2,7 @@
 // UEFI boot variable management, secure boot, and chainloading support
 // File: crates/kernel-bare/src/boot_config.rs
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ============================================================================
 // UEFI BOOT VARIABLES

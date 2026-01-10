@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/network_security.rs
 // Lines: 700+ | Tests: 13 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_CERTIFICATE_CHAIN_LENGTH: usize = 4;
 const MAX_CIPHER_SUITES: usize = 16;

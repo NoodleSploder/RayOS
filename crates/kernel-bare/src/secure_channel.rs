@@ -2,9 +2,7 @@
 //!
 //! Encrypted channel creation, key agreement, perfect forward secrecy, and channel management.
 
-#![no_std]
 
-use core::cmp;
 
 /// Channel state
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

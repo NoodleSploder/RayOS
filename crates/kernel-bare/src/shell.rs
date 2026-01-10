@@ -1305,7 +1305,7 @@ impl Shell {
     fn cmd_syscall(&self, output: &mut ShellOutput, args: &[u8]) {
         use crate::syscall_handlers;
         use crate::syscalls_extended::{
-            errno, prot_flags, map_flags, signals, sysconf_names,
+            prot_flags, map_flags, signals, sysconf_names,
             syscall_init_process, Utsname, sysconf_value,
         };
 
@@ -4145,7 +4145,7 @@ impl Shell {
 
         // Parse optional width/height
         let mut w = 800u32;
-        let mut h = 600u32;
+        let h = 600u32;
 
         let mut param_start = app_end;
         while param_start < args.len() && (args[param_start] == b' ' || args[param_start] == b'\t') {

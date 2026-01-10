@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/network_stack.rs
 // Lines: 700+ | Tests: 13 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_NETWORK_INTERFACES: usize = 8;
 const MAX_ROUTING_ENTRIES: usize = 8;

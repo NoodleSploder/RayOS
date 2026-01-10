@@ -5,14 +5,7 @@
 //!
 //! Phase 32, Task 2
 
-use crate::ouroboros::{
-    SourceGenome, GenomeRegion, Mutator, MutationCandidate, MutationStatus,
-    Sandbox, SandboxStatus, FitnessScore, TournamentSelector,
-    LivePatcher, PatchOperation, PatchStatus,
-    ActivityMonitor, DreamScheduler, DreamStatus,
-    OuroborosEngine, EvolutionConfig, ApprovalMode, EvolutionResult,
-    TelemetryCollector, EvolutionMarker,
-};
+use crate::ouroboros::TelemetryCollector;
 
 /// Full end-to-end evolution loop test
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -295,7 +288,7 @@ impl ScenarioRunner {
 
             // Accept based on cycle (improving acceptance rate)
             let accept_count = cycle + 2; // 2, 3, 4
-            for i in 0..accept_count {
+            for _i in 0..accept_count {
                 let improvement = 10 + cycle as u32 * 5;
                 self.telemetry.record_fitness_evaluated(100 + improvement, improvement);
                 self.telemetry.record_selection_approved(1);

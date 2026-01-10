@@ -19,8 +19,7 @@
 //! - `RAYOS_OUROBOROS:SCORED` - Fitness score calculated
 //! - `RAYOS_OUROBOROS:SELECTED` - Mutation selected as winner
 
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
-use crate::ouroboros::{EvolutionResult, Checkpoint, CheckpointData, Checkpointable};
+use crate::ouroboros::EvolutionResult;
 
 // ============================================================================
 // CONSTANTS

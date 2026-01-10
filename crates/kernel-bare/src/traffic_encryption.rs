@@ -2,7 +2,6 @@
 //!
 //! IP packet encryption, AEAD, MAC verification, and replay attack prevention.
 
-#![no_std]
 
 /// Encryption mode
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

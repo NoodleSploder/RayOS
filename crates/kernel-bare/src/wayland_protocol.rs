@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/wayland_protocol.rs
 // Lines: 900+ | Tests: 16 unit + 5 scenario | Markers: 5
 
-use core::fmt;
 
 const MAX_OBJECTS: usize = 512;
 const MAX_CLIENTS: usize = 32;

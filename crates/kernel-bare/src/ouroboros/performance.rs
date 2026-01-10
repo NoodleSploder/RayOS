@@ -5,7 +5,6 @@
 //!
 //! Phase 32, Task 3
 
-use core::mem;
 
 /// Fast genome parser with optimized AST parsing
 pub struct FastGenomeParser {
@@ -59,7 +58,7 @@ impl FastGenomeParser {
 
             // Quick check cache first
             let cache_idx = (self.position >> 7) % 64; // every 128 bytes
-            if let Some(cached_node) = self.hotspot_cache[cache_idx] {
+            if let Some(_cached_node) = self.hotspot_cache[cache_idx] {
                 // Verify cache is still valid
                 if self.position < 128 * (cache_idx as usize + 1) {
                     nodes_found += 1;
@@ -71,7 +70,14 @@ impl FastGenomeParser {
 
             // Detect mutation points (simplified heuristics)
             match byte {
-                // Loop patterns
+                // Function definitions (check first, more specific)
+                b'f' if self.position + 3 < self.length && self.buffer[self.position + 1] == b'n' => {
+                    nodes_found += 1;
+                    self.hotspot_cache[cache_idx] = Some(self.position as u32);
+                    self.position += 4;
+                    continue;
+                }
+                // Loop patterns (for, while, loop)
                 b'f' | b'w' | b'l' => {
                     if self.position + 2 < self.length {
                         // Look for loop keywords
@@ -80,13 +86,6 @@ impl FastGenomeParser {
                         self.position += 4;
                         continue;
                     }
-                }
-                // Function definitions
-                b'f' if self.position + 3 < self.length && self.buffer[self.position + 1] == b'n' => {
-                    nodes_found += 1;
-                    self.hotspot_cache[cache_idx] = Some(self.position as u32);
-                    self.position += 4;
-                    continue;
                 }
                 _ => {}
             }
@@ -178,7 +177,7 @@ impl EfficientMutationSelection {
             }
 
             let hotspot_idx = (*hotspot as usize) % 256;
-            let type_idx = (idx % 20);
+            let type_idx = idx % 20;
             let type_effect = self.type_effectiveness[type_idx];
 
             // Combined score = hotspot_rank * type_effectiveness

@@ -578,7 +578,7 @@ impl ImpactAnalyzer {
     /// Compare two measurement sets
     pub fn compare_measurements(
         &mut self,
-        baseline_meas: &MutationMeasurement,
+        _baseline_meas: &MutationMeasurement,
         new_meas: &MutationMeasurement,
         baseline: &MutationBaseline,
     ) -> Option<u8> {

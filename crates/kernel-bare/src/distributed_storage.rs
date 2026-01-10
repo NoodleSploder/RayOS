@@ -208,7 +208,7 @@ impl DistributedStorageManager {
         0
     }
 
-    pub fn create_replica(&mut self, shard_id: u32, node_id: u32, shard_size: u64) -> u32 {
+    pub fn create_replica(&mut self, _shard_id: u32, node_id: u32, shard_size: u64) -> u32 {
         for i in 0..256 {
             if self.replicas[i].is_none() {
                 let replica_id = self.replica_id_counter;

@@ -3,7 +3,6 @@
 // Implements basic TCP/IP networking with policy-driven firewall rules
 // Supports virtio-net bridge/NAT modes and per-VM firewall policies
 
-use crate::security::Capability;
 
 /// Network protocol types
 #[repr(u32)]

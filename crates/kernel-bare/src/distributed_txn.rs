@@ -1,9 +1,3 @@
-/// Distributed Transaction Coordination
-///
-/// Consensus-based distributed transaction support with ACID guarantees
-/// and Raft-inspired leader election for coordination.
-
-use core::cmp::min;
 
 const MAX_TRANSACTIONS: usize = 128;
 const MAX_PARTICIPANTS: usize = 16;

@@ -1,9 +1,3 @@
-/// Security Enforcement
-///
-/// Enforces security policies, access control, and privilege isolation
-/// through capability-based security and fine-grained policy rules.
-
-use core::cmp::min;
 
 const MAX_SECURITY_RULES: usize = 256;
 const MAX_CAPABILITIES: usize = 64;

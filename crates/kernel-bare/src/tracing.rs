@@ -3,7 +3,6 @@
 //! End-to-end request tracing with context propagation and latency percentiles.
 //! Supports 1024 concurrent spans with sampling and telemetry export.
 
-#![no_std]
 
 /// Unique trace identifier
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

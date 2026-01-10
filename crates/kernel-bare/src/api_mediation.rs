@@ -2,7 +2,6 @@
 //!
 //! Protocol translation, schema validation, and response marshaling.
 
-#![no_std]
 
 use core::cmp;
 
@@ -212,7 +211,7 @@ impl RequestMediator {
     pub fn transform_request(&self, input_body: &[u8], transform_id: u32) -> Option<u16> {
         for i in 0..(self.transform_count as usize) {
             if self.transforms[i].transform_id == transform_id {
-                let transform = &self.transforms[i];
+                let _transform = &self.transforms[i];
 
                 // Simple transformation: just return the length as a marker
                 // Real implementation would convert between formats
@@ -242,7 +241,7 @@ impl RequestMediator {
     }
 
     /// Transform a response
-    pub fn transform_response(&self, input_body: &[u8], status: u16) -> Option<ResponseTransform> {
+    pub fn transform_response(&self, _input_body: &[u8], status: u16) -> Option<ResponseTransform> {
         // Simple transformation: select format based on status code
         let format = match status {
             200..=299 => ContentType::Json,

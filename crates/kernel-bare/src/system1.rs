@@ -8,7 +8,6 @@
 //!
 //! Designed to run as a persistent loop, eventually on GPU compute shaders.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 // ============================================================================
 // CONFIGURATION

@@ -2,7 +2,6 @@
 // Central Wayland protocol implementation
 // Provides client connection management and global registry
 
-use core::fmt::Write;
 
 // Maximum concurrent Wayland clients
 const MAX_WAYLAND_CLIENTS: usize = 4;

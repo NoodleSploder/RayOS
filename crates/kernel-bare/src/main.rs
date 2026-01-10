@@ -2,6 +2,9 @@
 #![no_main]
 #![allow(static_mut_refs)]
 #![allow(dead_code)]
+#![allow(unused_unsafe)]
+#![allow(non_camel_case_types)]
+#![allow(unused_comparisons)]
 
 mod shell;                 // Phase 9A Task 1: Shell & Utilities
 mod init;                  // Phase 9B Task 2: System Services & Init
@@ -796,8 +799,8 @@ pub fn cpuid(leaf: u32) -> CpuidOutput {
     result
 }
 
-/// Assembly helper for CPUID instruction
-/// This avoids LLVM's RBX register constraints by implementing in pure assembly
+// Assembly helper for CPUID instruction
+// This avoids LLVM's RBX register constraints by implementing in pure assembly
 extern "C" {
     fn cpuid_asm(leaf: u32, output: *mut CpuidOutput);
 }
@@ -1596,17 +1599,17 @@ impl FAT32FileSystem {
         }
 
         // Extract FAT32 parameters
-        let bytes_per_sector = ((sector_data[11] as u32) | ((sector_data[12] as u32) << 8));
+        let bytes_per_sector = (sector_data[11] as u32) | ((sector_data[12] as u32) << 8);
         let sectors_per_cluster = sector_data[13] as u32;
-        let reserved_sectors = ((sector_data[14] as u32) | ((sector_data[15] as u32) << 8));
+        let reserved_sectors = (sector_data[14] as u32) | ((sector_data[15] as u32) << 8);
         let num_fats = sector_data[16] as u32;
-        let root_entries = ((sector_data[17] as u32) | ((sector_data[18] as u32) << 8));
-        let total_sectors_16 = ((sector_data[19] as u32) | ((sector_data[20] as u32) << 8));
-        let fat_size_16 = ((sector_data[22] as u32) | ((sector_data[23] as u32) << 8));
-        let total_sectors_32 = ((sector_data[32] as u32) | ((sector_data[33] as u32) << 8) |
-                                ((sector_data[34] as u32) << 16) | ((sector_data[35] as u32) << 24));
-        let fat_size_32 = ((sector_data[36] as u32) | ((sector_data[37] as u32) << 8) |
-                           ((sector_data[38] as u32) << 16) | ((sector_data[39] as u32) << 24));
+        let root_entries = (sector_data[17] as u32) | ((sector_data[18] as u32) << 8);
+        let total_sectors_16 = (sector_data[19] as u32) | ((sector_data[20] as u32) << 8);
+        let fat_size_16 = (sector_data[22] as u32) | ((sector_data[23] as u32) << 8);
+        let total_sectors_32 = (sector_data[32] as u32) | ((sector_data[33] as u32) << 8) |
+                                ((sector_data[34] as u32) << 16) | ((sector_data[35] as u32) << 24);
+        let fat_size_32 = (sector_data[36] as u32) | ((sector_data[37] as u32) << 8) |
+                           ((sector_data[38] as u32) << 16) | ((sector_data[39] as u32) << 24);
 
         let total_sectors = if total_sectors_16 != 0 {
             total_sectors_16 as u64
@@ -1657,7 +1660,7 @@ impl FileSystem for FAT32FileSystem {
 impl FAT32FileSystem {
     /// Helper: Find file in root directory by filename
     /// Returns (cluster, size) or (0, 0) if not found
-    pub fn find_file_in_root(&self, filename: &str) -> (u32, u32) {
+    pub fn find_file_in_root(&self, _filename: &str) -> (u32, u32) {
         // FAT32 root directory is located at:
         // sector = reserved_sectors + (fat_size * num_fats)
         let _root_start_sector = self.reserved_sectors + (self.fat_size * self.num_fats);
@@ -1801,8 +1804,8 @@ impl BootConfig {
             windows_path.copy_from_slice(&data[256..512]);
         }
 
-        let boot_timeout = ((data[512] as u32) | ((data[513] as u32) << 8) |
-                            ((data[514] as u32) << 16) | ((data[515] as u32) << 24));
+        let boot_timeout = (data[512] as u32) | ((data[513] as u32) << 8) |
+                            ((data[514] as u32) << 16) | ((data[515] as u32) << 24);
         let default_vm = data[515];
 
         Some(BootConfig {
@@ -1972,23 +1975,23 @@ impl FAT32FileSystem {
             entries[i].reserved = sector_data[offset + 12];
             entries[i].creation_time_tenths = sector_data[offset + 13];
             entries[i].creation_time =
-                ((sector_data[offset + 14] as u16) | ((sector_data[offset + 15] as u16) << 8));
+                (sector_data[offset + 14] as u16) | ((sector_data[offset + 15] as u16) << 8);
             entries[i].creation_date =
-                ((sector_data[offset + 16] as u16) | ((sector_data[offset + 17] as u16) << 8));
+                (sector_data[offset + 16] as u16) | ((sector_data[offset + 17] as u16) << 8);
             entries[i].last_access_date =
-                ((sector_data[offset + 18] as u16) | ((sector_data[offset + 19] as u16) << 8));
+                (sector_data[offset + 18] as u16) | ((sector_data[offset + 19] as u16) << 8);
             entries[i].high_cluster =
-                ((sector_data[offset + 20] as u16) | ((sector_data[offset + 21] as u16) << 8));
+                (sector_data[offset + 20] as u16) | ((sector_data[offset + 21] as u16) << 8);
             entries[i].write_time =
-                ((sector_data[offset + 22] as u16) | ((sector_data[offset + 23] as u16) << 8));
+                (sector_data[offset + 22] as u16) | ((sector_data[offset + 23] as u16) << 8);
             entries[i].write_date =
-                ((sector_data[offset + 24] as u16) | ((sector_data[offset + 25] as u16) << 8));
+                (sector_data[offset + 24] as u16) | ((sector_data[offset + 25] as u16) << 8);
             entries[i].low_cluster =
-                ((sector_data[offset + 26] as u16) | ((sector_data[offset + 27] as u16) << 8));
-            entries[i].file_size = ((sector_data[offset + 28] as u32) |
+                (sector_data[offset + 26] as u16) | ((sector_data[offset + 27] as u16) << 8);
+            entries[i].file_size = (sector_data[offset + 28] as u32) |
                 ((sector_data[offset + 29] as u32) << 8) |
                 ((sector_data[offset + 30] as u32) << 16) |
-                ((sector_data[offset + 31] as u32) << 24));
+                ((sector_data[offset + 31] as u32) << 24);
         }
 
         entries
@@ -2355,10 +2358,10 @@ impl FAT32FileSystem {
             return 0;
         }
 
-        ((entry_bytes[28] as u32) |
+        (entry_bytes[28] as u32) |
          ((entry_bytes[29] as u32) << 8) |
          ((entry_bytes[30] as u32) << 16) |
-         ((entry_bytes[31] as u32) << 24))
+         ((entry_bytes[31] as u32) << 24)
     }
 
     /// Get starting cluster from directory entry bytes
@@ -2374,10 +2377,10 @@ impl FAT32FileSystem {
             return 0;
         }
 
-        let high = ((entry_bytes[20] as u32) |
-                   ((entry_bytes[21] as u32) << 8));
-        let low = ((entry_bytes[26] as u32) |
-                  ((entry_bytes[27] as u32) << 8));
+        let high = (entry_bytes[20] as u32) |
+                   ((entry_bytes[21] as u32) << 8);
+        let low = (entry_bytes[26] as u32) |
+                  ((entry_bytes[27] as u32) << 8);
 
         (high << 16) | low
     }

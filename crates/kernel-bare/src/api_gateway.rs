@@ -2,7 +2,6 @@
 //!
 //! Core gateway infrastructure with route matching, service registry, and request dispatching.
 
-#![no_std]
 
 use core::cmp;
 
@@ -200,7 +199,7 @@ impl ApiGateway {
     }
 
     /// Route a request to the appropriate service
-    pub fn route_request(&self, path: &[u8], method: u8) -> Option<u32> {
+    pub fn route_request(&self, path: &[u8], _method: u8) -> Option<u32> {
         let mut best_match_service = None;
         let mut best_match_priority = 0u8;
 
@@ -248,7 +247,7 @@ impl ApiGateway {
                 self.total_requests += 1;
 
                 // Add to request queue
-                if (((self.queue_tail as usize + 1) % 256) != (self.queue_head as usize)) {
+                if ((self.queue_tail as usize + 1) % 256) != (self.queue_head as usize) {
                     self.request_queue[self.queue_tail as usize] = request;
                     self.queue_tail = ((self.queue_tail as usize + 1) % 256) as u8;
                     return true;

@@ -2,8 +2,7 @@
 // Kernel VMM exposure via syscalls, VM registry, Linux/Windows subsystem management
 // Device pass-through, binary compatibility layers, resource isolation
 
-use core::fmt::Write;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 // ===== VMM Integration Constants =====
 
@@ -946,7 +945,7 @@ impl SubsystemManager {
         self.subsystems[idx].stop()
     }
 
-    pub fn execute_binary(&mut self, path: &str, header: &[u8]) -> Result<u32, &'static str> {
+    pub fn execute_binary(&mut self, _path: &str, header: &[u8]) -> Result<u32, &'static str> {
         let format = BinaryFormat::detect(header).ok_or("Unknown binary format")?;
 
         match format {
@@ -1069,7 +1068,7 @@ impl VmmSyscallHandler {
         }
     }
 
-    pub fn handle(&mut self, syscall: VmmSyscall, arg1: u64, arg2: u64, arg3: u64) -> VmmSyscallResult {
+    pub fn handle(&mut self, syscall: VmmSyscall, arg1: u64, arg2: u64, _arg3: u64) -> VmmSyscallResult {
         match syscall {
             VmmSyscall::CreateVm => {
                 let vcpus = arg1 as u32;

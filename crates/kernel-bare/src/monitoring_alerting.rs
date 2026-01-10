@@ -1,9 +1,3 @@
-/// Real-time Monitoring & Alerting
-///
-/// Comprehensive system monitoring with automatic alert generation
-/// and real-time metric collection for observability.
-
-use core::cmp::min;
 
 const MAX_AGENTS: usize = 64;
 const MAX_METRICS: usize = 256;
@@ -197,7 +191,7 @@ impl MonitoringSystem {
         false
     }
 
-    pub fn evaluate_rules(&mut self, metric_id: u32, value: u64) {
+    pub fn evaluate_rules(&mut self, _metric_id: u32, value: u64) {
         for i in 0..MAX_ALERT_RULES {
             if let Some(rule) = self.alert_rules[i] {
                 if rule.evaluate(value) {

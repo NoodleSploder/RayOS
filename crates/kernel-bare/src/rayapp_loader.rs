@@ -4,9 +4,8 @@
 
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::rayapp_package::{
-    PackageHeader, PackageManifest, PackageSignature, PackageError, PackageDependency,
-    AssetEntry, AssetType, crc32, parse_manifest,
-    MAX_APP_ID_LEN, MAX_APP_NAME_LEN, MAX_VERSION_LEN, MAX_ASSETS,
+    PackageHeader, PackageManifest, PackageSignature, PackageError, crc32, parse_manifest,
+    MAX_APP_ID_LEN, MAX_APP_NAME_LEN, MAX_VERSION_LEN,
 };
 
 /// Maximum number of installed packages

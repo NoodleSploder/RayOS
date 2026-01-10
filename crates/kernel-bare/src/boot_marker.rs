@@ -6,7 +6,6 @@
 //! **Design**: Boot progresses through stages (Kernel_Loaded → Subsystems_Ready → Shell_Ready → Golden).
 //! Each stage is marked. Three consecutive failures at any stage trigger recovery to the last golden state.
 
-use core::cmp::min;
 
 /// Boot marker stage
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

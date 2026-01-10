@@ -1,9 +1,3 @@
-/// System Auditing & Logging
-///
-/// Comprehensive audit trail system for compliance, security monitoring,
-/// and system event tracking with circular buffer storage and filtering.
-
-use core::cmp::min;
 
 const MAX_AUDIT_ENTRIES: usize = 8192;
 const MAX_AUDIT_FILTERS: usize = 16;

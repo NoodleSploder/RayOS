@@ -5,7 +5,6 @@
 //!
 //! Phase 32, Task 5
 
-use core::mem;
 
 /// Performance baseline for regression detection
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,7 +267,7 @@ impl AdaptiveThreshold {
         if baseline == 0 {
             return true;
         }
-        let percent_change =
+        let _percent_change =
             ((actual as u64 * 10000) / baseline as u64) as u32;
         let threshold = self.effective_threshold();
 

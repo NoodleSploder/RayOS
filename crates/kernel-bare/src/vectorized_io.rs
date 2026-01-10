@@ -113,7 +113,7 @@ impl IOStats {
         self.total_bytes_transferred = self.total_bytes_transferred.saturating_add(bytes);
     }
 
-    pub fn record_batch(&mut self, ops: u32) {
+    pub fn record_batch(&mut self, _ops: u32) {
         self.batches_created = self.batches_created.saturating_add(1);
         if self.batches_created > 0 {
             self.avg_batch_size = (self.total_operations / (self.batches_created as u64)) as u32;

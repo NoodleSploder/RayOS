@@ -6,7 +6,6 @@
 //! **Design**: Circular buffer with 4 KB entries, each with timestamp, level, and CRC32.
 //! Automatic rotation prevents log loss; oldest entries are overwritten when buffer fills.
 
-use core::cmp::min;
 
 /// Maximum log entry size (bytes)
 const LOG_ENTRY_SIZE: usize = 4096;
@@ -151,7 +150,7 @@ impl PersistentLog {
     }
 
     /// Get log entries for export (returns count read)
-    pub fn export(&mut self, buffer: &mut [u8]) -> u32 {
+    pub fn export(&mut self, _buffer: &mut [u8]) -> u32 {
         // In production, this would read entries from partition storage
         // For now, return 0 (no entries)
         0

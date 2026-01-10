@@ -2,7 +2,6 @@
 // Implements wl_compositor, wl_surface, wl_shm, and wl_buffer
 // Provides surface management, buffer attachment, and shared memory allocation
 
-use core::fmt::Write;
 
 // Surface limits
 const MAX_SURFACES: usize = 32;
@@ -274,7 +273,7 @@ impl Surface {
         if buffer_id.is_some() {
             self.pending_buffer = buffer_id;
             unsafe {
-                if let Some(output) = core::fmt::write(
+                if let Some(_output) = core::fmt::write(
                     &mut Logger,
                     format_args!("[RAYOS_SURFACE:BUFFER_ATTACHED] surface_id={} buffer_id={}\n",
                         self.id, buffer_id.unwrap_or(0))
@@ -295,7 +294,7 @@ impl Surface {
         self.state_flags |= SURFACE_STATE_MAPPED;
 
         unsafe {
-            if let Some(output) = core::fmt::write(
+            if let Some(_output) = core::fmt::write(
                 &mut Logger,
                 format_args!("[RAYOS_SURFACE:COMMIT] surface_id={} buffer_id={}\n",
                     self.id, self.current_buffer.unwrap_or(0))
@@ -314,7 +313,7 @@ impl Surface {
             self.state_flags |= SURFACE_STATE_DIRTY;
 
             unsafe {
-                if let Some(output) = core::fmt::write(
+                if let Some(_output) = core::fmt::write(
                     &mut Logger,
                     format_args!("[RAYOS_SURFACE:DAMAGE] surface_id={} x={} y={} w={} h={}\n",
                         self.id, x, y, width, height)
@@ -334,7 +333,7 @@ impl Surface {
         self.viewport.set_destination(dst_width, dst_height);
 
         unsafe {
-            if let Some(output) = core::fmt::write(
+            if let Some(_output) = core::fmt::write(
                 &mut Logger,
                 format_args!("[RAYOS_SURFACE:VIEWPORT_SET] surface_id={} scale={}\n",
                     self.id, scale)
@@ -351,7 +350,7 @@ impl Surface {
         self.pending_buffer = None;
 
         unsafe {
-            if let Some(output) = core::fmt::write(
+            if let Some(_output) = core::fmt::write(
                 &mut Logger,
                 format_args!("[RAYOS_SURFACE:DESTROY] surface_id={}\n", self.id)
             ).ok() {
@@ -400,7 +399,7 @@ pub struct WaylandCompositor {
 impl WaylandCompositor {
     pub fn new() -> Self {
         unsafe {
-            if let Some(output) = core::fmt::write(
+            if let Some(_output) = core::fmt::write(
                 &mut Logger,
                 format_args!("[RAYOS_COMPOSITOR:CREATE] compositor_id=1\n")
             ).ok() {
@@ -424,7 +423,7 @@ impl WaylandCompositor {
 
     pub fn advertise_global(&self) {
         unsafe {
-            if let Some(output) = core::fmt::write(
+            if let Some(_output) = core::fmt::write(
                 &mut Logger,
                 format_args!("[RAYOS_COMPOSITOR:GLOBAL_ADVERTISED] interface=wl_compositor version=4\n")
             ).ok() {
@@ -488,7 +487,7 @@ impl WaylandCompositor {
         self.pool_count += 1;
 
         unsafe {
-            if let Some(output) = core::fmt::write(
+            if let Some(_output) = core::fmt::write(
                 &mut Logger,
                 format_args!("[RAYOS_SHM:POOL_CREATE] pool_id={} size={}\n", pool_id, size)
             ).ok() {
@@ -552,7 +551,7 @@ impl WaylandCompositor {
         self.buffer_count += 1;
 
         unsafe {
-            if let Some(output) = core::fmt::write(
+            if let Some(_output) = core::fmt::write(
                 &mut Logger,
                 format_args!("[RAYOS_SHM:BUFFER_CREATE] buffer_id={} w={} h={} format={}\n",
                     buffer_id, width, height, format)
@@ -603,7 +602,7 @@ impl WaylandCompositor {
 struct Logger;
 
 impl core::fmt::Write for Logger {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+    fn write_str(&mut self, _s: &str) -> core::fmt::Result {
         // In a real implementation, this would write to kernel log
         // For now, it's a no-op but the format_args! call still executes
         Ok(())

@@ -602,7 +602,7 @@ fn str_contains_ignore_case(haystack: &str, needle: &str) -> bool {
     }
     let haystack_bytes = haystack.as_bytes();
     let needle_bytes = needle.as_bytes();
-    
+
     'outer: for i in 0..=(haystack_bytes.len() - needle_bytes.len()) {
         for j in 0..needle_bytes.len() {
             let h = to_ascii_lower(haystack_bytes[i + j]);

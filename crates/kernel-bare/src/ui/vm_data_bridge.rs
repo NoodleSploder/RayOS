@@ -19,8 +19,8 @@
 //! - `RAYOS_VMBRIDGE:SYNC_G2H` - Guest to host sync
 //! - `RAYOS_VMBRIDGE:TRANSFER` - Data transfer completed
 
-use super::clipboard::{ClipboardEntry, ClipboardFormat, ClipboardSelection};
-use super::drag_drop::{DragAction, DragPayload};
+use super::clipboard::{ClipboardEntry, ClipboardSelection};
+use super::drag_drop::DragAction;
 use super::data_transfer::FormatId;
 
 // ============================================================================
@@ -543,7 +543,7 @@ impl VmDataBridge {
                 return Err(BridgeError::FeatureNotSupported);
             }
         }
-        
+
         // Get sequence from guest
         let sequence = {
             let guest = self.find_guest_mut(vm_id).ok_or(BridgeError::GuestNotFound)?;
@@ -868,7 +868,7 @@ impl VmDataBridge {
     pub fn handle_message(&mut self, vm_id: u32, header: &VirtioMsgHeader, _data: &[u8]) {
         // Cache timestamp before mutable borrows
         let timestamp = self.timestamp;
-        
+
         // Update guest activity first
         if let Some(guest) = self.find_guest_mut(vm_id) {
             guest.last_activity = timestamp;
@@ -876,7 +876,7 @@ impl VmDataBridge {
         } else {
             return;
         }
-        
+
         // Extract needed data for each message type (to avoid holding borrow during emit_event)
         match header.get_type() {
             VirtioMsgType::Formats => {
@@ -906,7 +906,7 @@ impl VmDataBridge {
                 // Allocate session ID and update guest
                 let session_id = self.next_transfer_id;
                 self.next_transfer_id += 1;
-                
+
                 let (formats, count) = {
                     if let Some(guest) = self.find_guest_mut(vm_id) {
                         guest.drag_session = session_id;
@@ -979,7 +979,7 @@ impl VmDataBridge {
         // Check for timed out transfers - collect errors first to avoid borrow conflict
         let mut timeout_errors = [(0u32, 0u8); 32]; // (vm_id, code)
         let mut error_count = 0;
-        
+
         for transfer in &mut self.transfers[..self.transfer_count] {
             if transfer.is_active() && transfer.is_timed_out(timestamp) {
                 transfer.state = TransferState::Failed;
@@ -989,7 +989,7 @@ impl VmDataBridge {
                 }
             }
         }
-        
+
         // Now emit events after the mutable borrow ends
         for i in 0..error_count {
             let (vm_id, code) = timeout_errors[i];

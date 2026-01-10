@@ -2,7 +2,6 @@
 // Implements wl_keyboard, wl_pointer, wl_touch, wl_seat
 // Provides input event delivery with focus management
 
-use core::fmt::Write;
 
 // Input device limits
 const MAX_KEYBOARDS: usize = 4;
@@ -376,7 +375,10 @@ impl WaylandKeyboard {
         Ok(())
     }
 
+    #[allow(unused_assignments)]
     pub fn send_key(&self, keycode: u32, pressed: bool) -> Result<(), &'static str> {
+        // Track modifiers for future use (currently unused - will be needed for key combos)
+        #[allow(unused_variables)]
         let mut modifiers = self.modifiers;
         match keycode {
             KEY_SHIFT_L | KEY_SHIFT_R => {
@@ -612,7 +614,7 @@ impl WaylandSeat {
 struct Logger;
 
 impl core::fmt::Write for Logger {
-    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+    fn write_str(&mut self, _s: &str) -> core::fmt::Result {
         // In a real implementation, this would write to kernel log
         Ok(())
     }

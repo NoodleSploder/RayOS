@@ -18,10 +18,8 @@
 //! vstack.render(100, 100, 200);
 //! ```
 
-use super::renderer::{self, FONT_HEIGHT, FONT_WIDTH};
 use super::widgets::{
-    Alignment, Button, Label, Rect, TextInput, VAlignment, WidgetState,
-    BUTTON_PADDING_X, BUTTON_PADDING_Y, TEXT_INPUT_PADDING_X, TEXT_INPUT_PADDING_Y,
+    Alignment, Button, Label, Rect, TextInput, VAlignment,
 };
 
 // ===== Layout Constants =====
@@ -214,7 +212,9 @@ impl VStack {
 
         // First pass: calculate fixed sizes and count flex items
         let mut flex_total_weight = 0u32;
-        let mut fixed_height = 0u32;
+        // Fixed height calculation (reserved for future flex layout)
+        #[allow(unused_variables, unused_assignments)]
+        let mut _fixed_height = 0u32;
 
         for i in 0..self.item_count {
             if let Some(item) = &self.items[i] {
@@ -222,9 +222,9 @@ impl VStack {
                     LayoutItem::Flex(weight) => flex_total_weight += weight,
                     _ => {
                         let (_, h) = item.preferred_size();
-                        fixed_height += h;
+                        _fixed_height += h;
                         if i > 0 {
-                            fixed_height += self.spacing;
+                            _fixed_height += self.spacing;
                         }
                     }
                 }
@@ -485,7 +485,7 @@ impl HStack {
     }
 
     /// Calculate layout positions for all items.
-    fn calculate_layout(&self, x: i32, y: i32, width: u32) -> [(i32, i32, u32, u32); MAX_CHILDREN] {
+    fn calculate_layout(&self, x: i32, y: i32, _width: u32) -> [(i32, i32, u32, u32); MAX_CHILDREN] {
         let mut positions: [(i32, i32, u32, u32); MAX_CHILDREN] = [(0, 0, 0, 0); MAX_CHILDREN];
         let mut current_x = x + self.padding as i32;
         let inner_y = y + self.padding as i32;

@@ -20,7 +20,6 @@
 //! - `RAYOS_OUROBOROS:EVOLUTION_COMPLETE` - Evolution cycle finished
 //! - `RAYOS_OUROBOROS:EVOLUTION_APPROVED` - Mutation approved for live patching
 
-use core::sync::atomic::{AtomicU64, AtomicU32, Ordering};
 use crate::ouroboros::{EvolutionResult, ApprovalMode, MutationSeverity, PowerState};
 
 // ============================================================================

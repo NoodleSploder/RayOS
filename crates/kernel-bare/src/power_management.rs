@@ -1,9 +1,3 @@
-/// Power Management & Dynamic Frequency Scaling
-///
-/// Intelligent power management with performance awareness
-/// C-states and P-state management for efficiency
-
-use core::cmp::min;
 
 const MAX_POWER_STATES: usize = 7;  // C0-C6
 const MAX_CPUS: usize = 64;
@@ -216,7 +210,7 @@ impl PowerOptimizer {
             return true;
         }
 
-        let current_power = self.pstates[self.current_pstate_idx as usize].power_consumption_mw;
+        let _current_power = self.pstates[self.current_pstate_idx as usize].power_consumption_mw;
         let target_power = target.power_consumption_mw();
 
         if !self.budget.can_transition(target_power) {

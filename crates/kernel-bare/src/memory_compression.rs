@@ -1,9 +1,3 @@
-/// Memory Compression & Optimization
-///
-/// Intelligent memory management with page compression and decompression
-/// for improved memory efficiency in resource-constrained environments.
-
-use core::cmp::min;
 
 const MAX_COMPRESSIBLE_PAGES: usize = 1024;
 const MAX_COMPRESSED_PAGES: usize = 256;

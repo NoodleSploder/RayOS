@@ -1,9 +1,3 @@
-/// CPU Cache Optimization
-///
-/// Optimizes CPU cache usage patterns and coherency protocols
-/// Supports L1, L2, L3 with multiple replacement policies
-
-use core::cmp::min;
 
 const MAX_CACHE_LINES: usize = 512;
 const MAX_CACHE_LEVELS: usize = 3;

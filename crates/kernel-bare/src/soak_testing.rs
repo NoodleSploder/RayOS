@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/soak_testing.rs
 // Lines: 850 | Tests: 25 unit + soak scenarios | Markers: 5
 
-use core::fmt;
 
 const MAX_SOAK_CLIENTS: usize = 64;
 const MAX_METRIC_SNAPSHOTS: usize = 3600;

@@ -2,7 +2,7 @@
 // Full POSIX-like syscall interface for applications
 // File: crates/kernel-bare/src/syscalls_extended.rs
 
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // ============================================================================
 // FILE DESCRIPTOR TABLE

@@ -2,7 +2,7 @@
 //!
 //! These example apps demonstrate how to use the App SDK.
 
-use super::app_sdk::{App, AppCapabilities, AppContext, AppDescriptor, AppEvent, MouseButton};
+use super::app_sdk::{App, AppContext, AppDescriptor, AppEvent, MouseButton};
 
 // ============================================================================
 // Counter App - Simple state management example
@@ -102,7 +102,7 @@ fn format_count(n: i32, buf: &mut [u8]) -> &[u8] {
 
     let negative = n < 0;
     let mut val = if negative { -n as u32 } else { n as u32 };
-    let mut pos = 0;
+    let _pos = 0;
 
     // Count digits
     let mut temp = val;

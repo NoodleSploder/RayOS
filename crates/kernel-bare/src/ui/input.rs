@@ -4,7 +4,7 @@
 //! Implements window dragging, resizing, focus, and maximize/restore.
 
 use super::renderer::{self, CursorType};
-use super::window_manager::{self, Window, WindowId, WindowType, WINDOW_ID_NONE};
+use super::window_manager::{self, Window, WindowId, WINDOW_ID_NONE};
 use super::compositor;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 

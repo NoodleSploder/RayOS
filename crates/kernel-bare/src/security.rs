@@ -3,8 +3,6 @@
 // Implements secure boot posture with attestation logging,
 // kernel hash tracking, and tamper detection for RayOS.
 
-use core::fmt::Write;
-
 /// Boot attestation record
 #[derive(Clone, Copy, Debug)]
 pub struct BootAttestation {

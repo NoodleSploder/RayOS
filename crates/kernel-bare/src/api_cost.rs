@@ -2,9 +2,7 @@
 //!
 //! Track API usage costs and generate tenant invoices.
 
-#![no_std]
 
-use core::cmp;
 
 /// Cost metric type
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -185,7 +183,7 @@ impl CostCollector {
     pub fn get_cost_breakdown(&self, tenant_id: u32) -> (u64, u32, u32) {
         let mut total_cost = 0u64;
         let mut request_count = 0u32;
-        let mut service_count = 0u32;
+        let service_count = 0u32;
 
         for i in 0..(self.attribution_count as usize) {
             if self.attributions[i].tenant_id == tenant_id {

@@ -2,7 +2,6 @@
 //!
 //! Manage SLA-bound request scheduling with fairness.
 
-#![no_std]
 
 use core::cmp;
 

@@ -454,7 +454,7 @@ impl DashboardBackend {
             EndpointType::HealthCheck => HttpStatus::Ok,
         };
 
-        let mut response = HttpResponse::new(request.id, status);
+        let response = HttpResponse::new(request.id, status);
 
         // Store response
         for slot in &mut self.response_history {
@@ -495,7 +495,7 @@ impl DashboardBackend {
     }
 
     /// Broadcast WebSocket message to all clients
-    pub fn broadcast_message(&mut self, message: WebSocketMessage) -> u16 {
+    pub fn broadcast_message(&mut self, _message: WebSocketMessage) -> u16 {
         let mut count = 0;
         for slot in &self.websocket_clients {
             if slot.is_some() {

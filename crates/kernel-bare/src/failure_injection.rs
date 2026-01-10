@@ -3,7 +3,6 @@
 // File: crates/kernel-bare/src/failure_injection.rs
 // Lines: 820 | Tests: 20 unit + scenarios | Markers: 5
 
-use core::fmt;
 
 const MAX_INJECTED_FAILURES: usize = 100;
 const MAX_RECOVERY_SAMPLES: usize = 1000;
