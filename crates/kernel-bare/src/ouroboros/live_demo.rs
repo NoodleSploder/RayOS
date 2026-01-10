@@ -246,9 +246,9 @@ impl LiveEvolutionDemo {
     pub fn record_event(&mut self, event: MutationEvent) {
         self.events[self.event_index] = Some(event);
         self.event_index = (self.event_index + 1) % 100;
-        
+
         self.metrics.total_events += 1;
-        
+
         match event.event_type {
             MutationEventType::Attempted => {
                 if let Some(ref mut cycle) = self.current_cycle {
@@ -283,7 +283,7 @@ impl LiveEvolutionDemo {
         if let Some(prev_cycle) = self.current_cycle {
             self.cycle_history[cycle as usize % 10] = Some(prev_cycle);
         }
-        
+
         self.current_cycle = Some(CycleSummary::new(cycle, current_time_ms));
         self.metrics.current_cycle = cycle;
     }
@@ -296,14 +296,14 @@ impl LiveEvolutionDemo {
             } else {
                 0
             };
-            
+
             // Update average cycle duration
             if self.metrics.current_cycle > 0 {
                 self.metrics.avg_cycle_duration_ms = ((self.metrics.avg_cycle_duration_ms as u64 * (self.metrics.current_cycle - 1) as u64 + cycle.duration_ms as u64) / self.metrics.current_cycle as u64) as u32;
             } else {
                 self.metrics.avg_cycle_duration_ms = cycle.duration_ms;
             }
-            
+
             return Some(cycle);
         }
         None
@@ -329,11 +329,11 @@ impl LiveEvolutionDemo {
     pub fn dashboard_metrics(&self) -> DashboardMetrics {
         let mut metrics = self.metrics;
         metrics.elapsed_time_ms = (self.event_index as u64 * 1000) / 100; // Approximate based on events
-        
+
         if metrics.elapsed_time_ms > 0 {
             metrics.mutations_per_sec = ((metrics.total_mutations as u64 * 1000) / metrics.elapsed_time_ms) as u32;
         }
-        
+
         metrics
     }
 
@@ -450,10 +450,10 @@ mod tests {
     fn test_live_evolution_demo_record_event() {
         let mut demo = LiveEvolutionDemo::new(1000);
         demo.start_cycle(1, 1000);
-        
+
         let event = MutationEvent::attempted(1001, 1, 1);
         demo.record_event(event);
-        
+
         assert_eq!(demo.metrics.total_events, 1);
         assert_eq!(demo.metrics.total_mutations, 1);
     }
@@ -462,7 +462,7 @@ mod tests {
     fn test_live_evolution_demo_start_cycle() {
         let mut demo = LiveEvolutionDemo::new(1000);
         demo.start_cycle(1, 1000);
-        
+
         assert!(demo.current_cycle.is_some());
         assert_eq!(demo.metrics.current_cycle, 1);
     }
@@ -476,7 +476,7 @@ mod tests {
         evt.event_type = MutationEventType::Success;
         evt.perf_delta = 500;
         demo.record_event(evt);
-        
+
         let cycle = demo.end_cycle(2000);
         assert!(cycle.is_some());
         assert_eq!(cycle.unwrap().duration_ms, 1000);
@@ -485,12 +485,12 @@ mod tests {
     #[test]
     fn test_live_evolution_demo_cycle_history() {
         let mut demo = LiveEvolutionDemo::new(1000);
-        
+
         for i in 1..=5 {
             demo.start_cycle(i, 1000);
             demo.end_cycle(2000);
         }
-        
+
         let history = demo.cycle_history();
         assert!(history[0].is_some()); // First cycle stored
     }
@@ -499,13 +499,13 @@ mod tests {
     fn test_live_evolution_demo_metrics_update() {
         let mut demo = LiveEvolutionDemo::new(1000);
         demo.start_cycle(1, 1000);
-        
+
         let event1 = MutationEvent::attempted(1001, 1, 1);
         let event2 = MutationEvent::success(1002, 1, 1, 500, 10);
-        
+
         demo.record_event(event1);
         demo.record_event(event2);
-        
+
         assert_eq!(demo.metrics.total_mutations, 1);
         assert_eq!(demo.metrics.total_successes, 1);
         assert_eq!(demo.metrics.cumulative_perf_delta, 500);
@@ -515,12 +515,12 @@ mod tests {
     fn test_live_evolution_demo_recent_events() {
         let mut demo = LiveEvolutionDemo::new(1000);
         demo.start_cycle(1, 1000);
-        
+
         for i in 0..5 {
             let event = MutationEvent::attempted(1000 + i, i, 1);
             demo.record_event(event);
         }
-        
+
         let events = demo.recent_events(5);
         assert!(events[0].is_some());
     }
@@ -529,13 +529,13 @@ mod tests {
     fn test_live_evolution_demo_event_buffer_wraparound() {
         let mut demo = LiveEvolutionDemo::new(1000);
         demo.start_cycle(1, 1000);
-        
+
         // Add 150 events to force wraparound
         for i in 0..150 {
             let event = MutationEvent::attempted(1000 + i as u64, i as u32, 1);
             demo.record_event(event);
         }
-        
+
         // Should have 150 events recorded but only 100 in buffer
         assert_eq!(demo.metrics.total_events, 150);
     }
@@ -543,18 +543,18 @@ mod tests {
     #[test]
     fn test_live_evolution_demo_multiple_cycles() {
         let mut demo = LiveEvolutionDemo::new(1000);
-        
+
         for cycle_num in 1..=3 {
             demo.start_cycle(cycle_num, 1000);
-            
+
             for j in 0..4 {
                 let event = MutationEvent::success(1100, j, cycle_num, 100, 5);
                 demo.record_event(event);
             }
-            
+
             demo.end_cycle(2000);
         }
-        
+
         assert_eq!(demo.metrics.total_events, 12);
         assert_eq!(demo.metrics.total_successes, 12);
     }
@@ -563,13 +563,13 @@ mod tests {
     fn test_live_evolution_demo_dashboard_throughput() {
         let mut demo = LiveEvolutionDemo::new(1000);
         demo.start_cycle(1, 1000);
-        
+
         // Record 10 events
         for i in 0..10 {
             let event = MutationEvent::attempted(1000 + i, i, 1);
             demo.record_event(event);
         }
-        
+
         let metrics = demo.dashboard_metrics();
         assert!(metrics.throughput_per_sec() > 0);
     }
@@ -578,7 +578,7 @@ mod tests {
     fn test_live_evolution_demo_current_cycle() {
         let mut demo = LiveEvolutionDemo::new(1000);
         demo.start_cycle(1, 1000);
-        
+
         assert!(demo.current_cycle_summary().is_some());
         assert_eq!(demo.current_cycle_summary().unwrap().cycle, 1);
     }
