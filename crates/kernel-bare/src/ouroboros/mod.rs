@@ -106,6 +106,7 @@ pub mod selection;  // Phase 31, Task 3
 pub mod patcher;    // Phase 31, Task 4
 pub mod scheduler;  // Phase 31, Task 5
 pub mod coordinator;  // Phase 31, Task 6
+pub mod telemetry;  // Phase 32, Task 1
 
 pub use genome::{
     SourceGenome, GenomeRegion, AstNode, AstNodeType, DependencyGraph, HotspotTracker, Hotspot,
@@ -135,6 +136,10 @@ pub use coordinator::{
     Winner, WinnerRegistry,
     PendingApproval, ApprovalQueue,
     EvolutionConfig, OuroborosEngine, EvolutionStatistics,
+};
+pub use telemetry::{
+    EvolutionMarker, MarkerData, MarkerEntry,
+    CycleHistory, TelemetryStats, TelemetryCollector,
 };
 
 // ============================================================================
