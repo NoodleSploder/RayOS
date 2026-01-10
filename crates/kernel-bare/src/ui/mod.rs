@@ -27,6 +27,10 @@ pub mod example_apps;
 pub mod font;
 pub mod animation;
 pub mod surface_manager;
+pub mod window_manager_ext;
+pub mod input_router;
+pub mod app_runtime;
+pub mod shell_integration;
 
 // Re-export key types
 pub use renderer::{COLOR_ACCENT, COLOR_BACKGROUND, COLOR_TEXT, COLOR_WINDOW_BG, CursorType};
